@@ -147,18 +147,46 @@ curl -s http://127.0.0.1:8643/health -H "Authorization: Bearer $API_KEY"
 
 ### Profile memory notes
 
-Hermes has built-in profile memory through local files:
+Hermes ships with built-in persistent memory and we rely on it directly — no
+external provider yet.
 
-- `MEMORY.md` and `USER.md` hold learned/user-specific context.
-- `SOUL.md` holds assistant persona/profile instructions.
-- External memory providers are managed with `hermes memory setup/status/off/reset`;
-  built-in memory stays active even when no external provider is configured.
+- `~/.hermes/profiles/<profile>/memories/USER.md` — user profile (preferences,
+  identity, communication style). Default cap ~1,375 chars.
+- `~/.hermes/profiles/<profile>/memories/MEMORY.md` — agent notes
+  (environment facts, project conventions, lessons learned). Default cap
+  ~2,200 chars.
+- `~/.hermes/profiles/<profile>/SOUL.md` — assistant persona/profile
+  instructions (does not change between sessions).
+- Both memory files are loaded as a frozen snapshot into the system prompt at
+  every session start. The agent curates them with the `memory` tool
+  (`add`/`replace`/`remove`).
+- The agent can also call `session_search` to find content from prior
+  conversations (FTS5 over `state.db`).
 
-The mobile app's Settings > Memory screen uses Supabase `memories` as the
-user-visible memory source. The runner passes those memories into each task so
-the agent can use facts the user explicitly manages in the app. A later sync
-step can mirror this table into Hermes' native `MEMORY.md`/`USER.md` files or
-an external Hermes memory provider.
+Verify built-in memory is enabled after creating the profile:
+
+```bash
+hermes -p <profile> memory status
+# Expect: built-in MEMORY.md + USER.md active, no external provider required.
+```
+
+The template `config.yaml` in this repo sets `memory.memory_enabled: true` and
+`memory.user_profile_enabled: true` explicitly so the behavior is obvious to
+anyone reading the profile.
+
+How this lines up with the app:
+
+- The Doit runner uses a stable per-user Hermes `session_id` (`doit-user-<uuid>`)
+  for every `/v1/runs` call, so the agent's memory files and session search
+  span all of the user's todos instead of resetting per task.
+- The runner mirrors `memories/USER.md` and `memories/MEMORY.md` into the
+  Supabase `memories` table after every run, so Settings > Memory shows what
+  Hermes has actually learned.
+- When the user adds or edits a memory in the app, the runner writes that
+  entry into the matching Hermes file before the next run so it lands in the
+  next frozen snapshot.
+- We are not enabling an external memory provider (Mem0, Honcho, etc.) in
+  this phase; built-in memory + session search is the source of truth.
 
 ## 6. Insert the user_hermes mapping into Supabase
 
@@ -206,6 +234,15 @@ cd /path/to/repo/runner
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env  # fill in SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, APNS_*
+# Also set HERMES_PROFILES_DIR to the profile directory owner, for example:
+# HERMES_PROFILES_DIR=/home/doit/.hermes/profiles
+# Add Doit's global provider keys here too:
+# OPENAI_API_KEY=sk-proj-...
+# ANTHROPIC_API_KEY=sk-ant-...
+#
+# If the runner user needs sudo to restart per-user Hermes services, allow only
+# the hermes-* restart command in sudoers, then keep:
+# HERMES_RESTART_COMMAND_TEMPLATE=sudo systemctl restart hermes-{profile}
 sudo tee /etc/systemd/system/doit-runner.service >/dev/null <<EOF
 [Unit]
 Description=doit runner

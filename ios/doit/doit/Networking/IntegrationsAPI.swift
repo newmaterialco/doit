@@ -6,6 +6,7 @@ struct Toolkit: Codable, Identifiable, Hashable, Sendable {
     let slug: String
     let name: String
     let description: String
+    let logo_url: String?
     let connected: Bool
     let connection_id: String?
     let status: String?
@@ -18,11 +19,14 @@ struct ConnectResult: Codable, Sendable {
 
 @MainActor
 enum IntegrationsAPI {
+    private(set) static var cachedToolkits: [Toolkit]?
+
     static func list() async throws -> [Toolkit] {
         struct Body: Codable { let action: String }
         struct Resp: Codable { let toolkits: [Toolkit] }
         let resp: Resp = try await Supa.client.functions
             .invoke("integrations", options: .init(body: Body(action: "list")))
+        cachedToolkits = resp.toolkits
         return resp.toolkits
     }
 

@@ -27,6 +27,10 @@ def _bool(name: str, default: bool = False) -> bool:
 class Config:
     supabase_url: str
     supabase_service_role_key: str
+    hermes_profiles_dir: str
+    hermes_restart_command_template: str
+    openai_api_key: str
+    anthropic_api_key: str
     apns_key_path: str
     apns_key_id: str
     apns_team_id: str
@@ -40,6 +44,16 @@ def load() -> Config:
     return Config(
         supabase_url=_required("SUPABASE_URL"),
         supabase_service_role_key=_required("SUPABASE_SERVICE_ROLE_KEY"),
+        hermes_profiles_dir=os.environ.get(
+            "HERMES_PROFILES_DIR",
+            os.path.expanduser("~/.hermes/profiles"),
+        ),
+        hermes_restart_command_template=os.environ.get(
+            "HERMES_RESTART_COMMAND_TEMPLATE",
+            "sudo systemctl restart hermes-{profile}",
+        ),
+        openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         apns_key_path=os.environ.get("APNS_KEY_PATH", ""),
         apns_key_id=os.environ.get("APNS_KEY_ID", ""),
         apns_team_id=os.environ.get("APNS_TEAM_ID", ""),

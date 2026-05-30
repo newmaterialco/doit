@@ -18,6 +18,8 @@ runner/*.pyc
 runner/.venv/
 runner/venv/
 runner/.env
+.pycache/
+**/__pycache__/
 
 # Secrets / local config
 **/.env
@@ -33,3 +35,4 @@ hermes/profiles/*/mcp-tokens/
 # Supabase CLI
 supabase/.temp/
 supabase/.branches/
+supabase/supabase/

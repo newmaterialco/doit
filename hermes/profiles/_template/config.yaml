@@ -3,7 +3,7 @@
 # the matching .env from .env.example.
 #
 # Each user runs as a separate Hermes profile for isolation:
-#   - Own memory (MEMORY.md, USER.md)
+#   - Own memory (memories/MEMORY.md, memories/USER.md)
 #   - Own Composio OAuth connections (entity = user_id)
 #   - Own API server port + bearer key
 
@@ -16,9 +16,22 @@ mcp_servers:
     headers:
       x-api-key: "replace-with-session-mcp-header-value"
 
+# --- Native persistent memory (Hermes built-in) ---
+# Hermes injects MEMORY.md and USER.md into the system prompt at session start
+# and lets the agent curate them via the `memory` tool. We rely on this layer
+# for cross-todo recall instead of re-injecting facts from Supabase on every
+# run. Doit's runner mirrors these files into Supabase so the app's Settings >
+# Memory screen can show what the agent has learned and let the user pin facts.
+memory:
+  memory_enabled: true        # MEMORY.md (~2,200 chars, agent notes)
+  user_profile_enabled: true  # USER.md (~1,375 chars, user profile)
+  memory_char_limit: 2200
+  user_char_limit: 1375
+
 # Keep the agent focused — no terminal/filesystem on the cloud box.
 # Composio is the only tool surface for real-world actions; Hermes' built-in
-# web / vision / image / TTS tools are available via the Nous Portal.
+# web / vision / image / TTS tools (and `memory`, `session_search`) remain
+# available via the Nous Portal.
 disabled_toolsets:
   - terminal
   - browser

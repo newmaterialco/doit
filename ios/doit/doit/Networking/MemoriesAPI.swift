@@ -16,13 +16,15 @@ enum MemoriesAPI {
         title: String,
         body: String,
         category: String?,
+        target: MemoryTarget,
         userID: UUID
     ) async throws -> AgentMemory {
         let row = NewAgentMemory(
             user_id: userID,
             title: title,
             body: body,
-            category: category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            category: category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            target: target.rawValue
         )
         let result: [AgentMemory] = try await Supa.client
             .from("memories")
@@ -34,11 +36,17 @@ enum MemoriesAPI {
         return memory
     }
 
+    /// Updates a user-authored memory. Any edit re-queues the row for sync
+    /// into the matching Hermes file before the next todo run.
     static func update(_ memory: AgentMemory) async throws {
         struct Patch: Encodable {
             let title: String
             let body: String
             let category: String?
+            let target: String
+            let sync_status: String
+            let hermes_fingerprint: String?
+            let sync_error: String?
         }
 
         _ = try await Supa.client
@@ -47,7 +55,11 @@ enum MemoriesAPI {
                 Patch(
                     title: memory.title,
                     body: memory.body,
-                    category: memory.category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                    category: memory.category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+                    target: memory.effectiveTarget.rawValue,
+                    sync_status: MemorySyncStatus.pending.rawValue,
+                    hermes_fingerprint: nil,
+                    sync_error: nil
                 )
             )
             .eq("id", value: memory.id)

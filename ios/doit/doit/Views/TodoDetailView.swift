@@ -9,9 +9,12 @@ struct TodoDetailView: View {
 
     @State private var current: Todo
     @State private var steps: [TodoStep] = []
+    @State private var interaction: TodoInteraction?
+    @State private var submittingOptionID: String?
     @State private var error: String?
     @State private var stepsRealtimeTask: Task<Void, Never>?
     @State private var todoRealtimeTask: Task<Void, Never>?
+    @State private var interactionsRealtimeTask: Task<Void, Never>?
     @State private var oauthSession: ASWebAuthenticationSession?
 
     init(todo: Todo) {
@@ -34,11 +37,21 @@ struct TodoDetailView: View {
                     }
                 }
                 .padding(.vertical, 4)
-                ActionButtons(
-                    status: current.status,
-                    onDoIt: doIt,
-                    onStop: stop
-                )
+                if current.status.isCancellable {
+                    ActionButtons(
+                        status: current.status,
+                        onStop: stop
+                    )
+                }
+            }
+
+            if let originalTitle, originalTitle != current.title {
+                Section("Original request") {
+                    Text(originalTitle)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
 
             if current.status == .needs_auth, let url = mostRecentOAuthURL() {
@@ -51,9 +64,25 @@ struct TodoDetailView: View {
                 }
             }
 
-            if !steps.isEmpty {
+            if let interaction, interaction.status == .open {
+                Section("Needs your input") {
+                    InteractionCard(
+                        interaction: interaction,
+                        submittingOptionID: submittingOptionID,
+                        onRespond: { optionID, text in
+                            await respond(
+                                interaction: interaction,
+                                optionID: optionID,
+                                text: text
+                            )
+                        }
+                    )
+                }
+            }
+
+            if !visibleSteps.isEmpty {
                 Section("Activity") {
-                    ForEach(steps) { step in
+                    ForEach(visibleSteps) { step in
                         StepRow(step: step) { url in
                             startOAuth(url: url)
                         }
@@ -69,13 +98,25 @@ struct TodoDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await loadSteps()
+            await loadInteraction()
             startStepsRealtime()
             startTodoRealtime()
+            startInteractionsRealtime()
         }
         .onDisappear {
             stepsRealtimeTask?.cancel()
             todoRealtimeTask?.cancel()
+            interactionsRealtimeTask?.cancel()
         }
+    }
+
+    private var visibleSteps: [TodoStep] {
+        steps.filter { !$0.containsInteractionMarker }
+    }
+
+    private var originalTitle: String? {
+        let trimmed = current.original_title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty ?? true) ? nil : trimmed
     }
 
     // MARK: - Actions
@@ -102,6 +143,36 @@ struct TodoDetailView: View {
             } catch {
                 self.error = error.localizedDescription
             }
+        }
+    }
+
+    private func respond(
+        interaction: TodoInteraction,
+        optionID: String?,
+        text: String?
+    ) async {
+        submittingOptionID = optionID ?? "__freeform"
+        defer { submittingOptionID = nil }
+        let phase: InteractionPhase = interaction.isPreparationPhase ? .prepare : .execute
+        do {
+            try await TodosAPI.respond(
+                to: interaction.id,
+                todoID: current.id,
+                optionID: optionID,
+                text: text,
+                phase: phase
+            )
+            // Optimistic: hide the card immediately. Realtime will refresh
+            // shortly.
+            self.interaction = nil
+            if optionID?.lowercased() == "cancel" {
+                current.status = .cancelled
+            } else {
+                current.status = phase.nextStatus
+            }
+        } catch {
+            print("[interaction] respond failed: \(error)")
+            self.error = "Couldn't send your response: \(error.localizedDescription)"
         }
     }
 
@@ -134,9 +205,21 @@ struct TodoDetailView: View {
         do {
             steps = try await TodosAPI.steps(for: current.id)
             print("[realtime][steps] loaded count=\(steps.count) todo=\(current.id)")
+            if steps.contains(where: \.containsInteractionMarker) {
+                await loadInteractionWithRetry()
+            }
         } catch {
             print("[realtime][steps] load failed todo=\(current.id): \(error)")
             self.error = "Couldn't load steps: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadInteraction() async {
+        do {
+            interaction = try await TodosAPI.openInteraction(for: current.id)
+            print("[interaction] loaded id=\(interaction?.id.uuidString ?? "nil") todo=\(current.id)")
+        } catch {
+            print("[interaction] load failed todo=\(current.id): \(error)")
         }
     }
 
@@ -182,6 +265,27 @@ struct TodoDetailView: View {
         }
     }
 
+    private func startInteractionsRealtime() {
+        guard interactionsRealtimeTask == nil else { return }
+        print("[realtime][interactions] starting todo=\(current.id)")
+        interactionsRealtimeTask = Task {
+            let channel = Supa.client.channel("interactions:\(current.id.uuidString)")
+            let stream = channel.postgresChange(
+                AnyAction.self,
+                schema: "public",
+                table: "todo_interactions",
+                filter: "todo_id=eq.\(current.id.uuidString)"
+            )
+            await channel.subscribe()
+            print("[realtime][interactions] subscribed todo=\(current.id)")
+            for await change in stream {
+                print("[realtime][interactions] change received todo=\(current.id): \(change)")
+                await loadInteraction()
+            }
+            print("[realtime][interactions] stream ended todo=\(current.id)")
+        }
+    }
+
     private func refreshTodo() async {
         do {
             let rows: [Todo] = try await Supa.client
@@ -194,6 +298,9 @@ struct TodoDetailView: View {
             if let first = rows.first {
                 self.current = first
                 print("[realtime][todo] refreshed id=\(first.id) status=\(first.status)")
+                if first.status == .needs_input {
+                    await loadInteractionWithRetry()
+                }
             } else {
                 print("[realtime][todo] refresh returned no rows id=\(current.id)")
             }
@@ -201,30 +308,27 @@ struct TodoDetailView: View {
             print("[realtime][todo] refresh failed id=\(current.id): \(error)")
         }
     }
+
+    private func loadInteractionWithRetry() async {
+        await loadInteraction()
+        if interaction == nil {
+            try? await Task.sleep(for: .milliseconds(500))
+            await loadInteraction()
+        }
+    }
 }
 
 private struct ActionButtons: View {
     let status: TodoStatus
-    let onDoIt: () -> Void
     let onStop: () -> Void
 
     var body: some View {
         HStack {
-            if status.isActive {
+            if status.isCancellable {
                 Button(role: .destructive, action: onStop) {
                     Label("Stop", systemImage: "stop.fill")
                 }
                 .buttonStyle(.bordered)
-            } else if status == .done || status == .failed || status == .cancelled {
-                Button(action: onDoIt) {
-                    Label("Run again", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderedProminent)
-            } else {
-                Button(action: onDoIt) {
-                    Label("Do it", systemImage: "sparkles")
-                }
-                .buttonStyle(.borderedProminent)
             }
         }
     }
@@ -272,6 +376,7 @@ private struct StepRow: View {
         case .tool_started: return "gearshape.2"
         case .tool_result: return "checkmark"
         case .oauth_needed: return "key.fill"
+        case .input_needed: return "hand.raised.fill"
         case .final: return "checkmark.seal.fill"
         case .error: return "exclamationmark.triangle.fill"
         }
@@ -283,6 +388,7 @@ private struct StepRow: View {
         case .tool_started: return .blue
         case .tool_result: return .green
         case .oauth_needed: return .orange
+        case .input_needed: return .orange
         case .final: return .green
         case .error: return .red
         }
@@ -293,6 +399,176 @@ private struct StepRow: View {
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "mcp ", with: "")
             .capitalized
+    }
+}
+
+// MARK: - Interaction card
+
+private struct InteractionCard: View {
+    let interaction: TodoInteraction
+    let submittingOptionID: String?
+    let onRespond: (_ optionID: String?, _ text: String?) async -> Void
+
+    @State private var freeform: String = ""
+    @FocusState private var freeformFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(interaction.prompt)
+                .font(.body.weight(.semibold))
+
+            if let summary = interaction.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let draft = interaction.emailDraft {
+                EmailDraftPreview(draft: draft)
+            } else if let content = interaction.content {
+                JSONPreview(value: content)
+            }
+
+            if interaction.allowsFreeform {
+                TextField(
+                    interaction.freeformPlaceholder ?? "Add a note or instructions",
+                    text: $freeform,
+                    axis: .vertical
+                )
+                .lineLimit(1...6)
+                .textFieldStyle(.roundedBorder)
+                .focused($freeformFocused)
+                .disabled(submittingOptionID != nil)
+            }
+
+            optionButtons
+
+            Text("Tap a button or type below to reply. The agent picks up automatically.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var optionButtons: some View {
+        let opts = interaction.options
+        VStack(spacing: 8) {
+            ForEach(opts) { opt in
+                OptionButton(
+                    option: opt,
+                    isSubmitting: submittingOptionID == opt.id,
+                    disabled: submittingOptionID != nil
+                ) {
+                    Task { await onRespond(opt.id, freeform) }
+                }
+            }
+
+            if opts.isEmpty && interaction.allowsFreeform {
+                Button {
+                    Task { await onRespond(nil, freeform) }
+                } label: {
+                    HStack {
+                        if submittingOptionID == "__freeform" {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text("Reply")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(submittingOptionID != nil
+                          || freeform.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+}
+
+private struct OptionButton: View {
+    let option: InteractionOption
+    let isSubmitting: Bool
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let label = HStack {
+            if isSubmitting {
+                ProgressView().controlSize(.small)
+            }
+            Text(option.label)
+                .frame(maxWidth: .infinity)
+        }
+        Group {
+            switch option.style {
+            case .destructive:
+                Button(role: .destructive, action: action) { label }
+                    .buttonStyle(.bordered)
+            case .secondary:
+                Button(action: action) { label }
+                    .buttonStyle(.bordered)
+            case .primary, .none:
+                Button(action: action) { label }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .disabled(disabled)
+    }
+}
+
+private struct EmailDraftPreview: View {
+    let draft: (subject: String, body: String, to: [String])
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !draft.to.isEmpty {
+                Text("To: \(draft.to.joined(separator: ", "))")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(draft.subject)
+                .font(.subheadline.weight(.semibold))
+            Text(draft.body)
+                .font(.callout)
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.orange.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
+
+private struct JSONPreview: View {
+    let value: JSONValue
+
+    var body: some View {
+        Text(prettyPrint(value))
+            .font(.footnote.monospaced())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+            .textSelection(.enabled)
+    }
+
+    private func prettyPrint(_ value: JSONValue) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(value),
+              let s = String(data: data, encoding: .utf8) else {
+            return "(unparseable)"
+        }
+        return s
     }
 }
 

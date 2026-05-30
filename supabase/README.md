@@ -26,8 +26,9 @@ Auth, database, Realtime, and Edge Functions for doit.
 
    Or paste `migrations/0001_init.sql` into the SQL editor.
 
-4. **Realtime** is enabled by the migration (publishes `todos` and `todo_steps`).
-   In Dashboard -> Database -> Replication, verify they are listed.
+4. **Realtime** is enabled by the migration (publishes `todos`, `todo_steps`,
+   and `todo_interactions`). In Dashboard -> Database -> Replication, verify
+   they are listed.
 
 ## Per-user onboarding
 
@@ -56,12 +57,18 @@ Deployed from `functions/integrations/`. Proxies Composio's REST API so the
 Composio API key never reaches the iOS app.
 
 ```bash
-supabase functions deploy integrations
-supabase secrets set COMPOSIO_API_KEY=ck_...
+   supabase functions deploy integrations
+   supabase functions deploy agent-settings
+   supabase secrets set COMPOSIO_API_KEY=ck_...
+   supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service_role>
 ```
 
 The function reads the caller's `auth.uid()` from the JWT and uses it as the
 Composio `entity_id`, so each user only sees their own connections.
+
+The `agent-settings` function also uses the caller's JWT, but writes through
+`service_role` so users can only choose from Doit's supported provider/model
+catalog. Provider API keys are global runner secrets, not app input.
 
 ## Keys cheat sheet
 
@@ -69,5 +76,8 @@ Composio `entity_id`, so each user only sees their own connections.
 | --- | --- | --- |
 | `anon` | iOS app | RLS-scoped reads/writes |
 | `service_role` | Runner (VM env) | bypass RLS to update other users' todos |
+| `service_role` | Edge Function secret | save supported model settings server-side |
 | `COMPOSIO_API_KEY` | Edge Function secret + VM `.env` for Hermes | OAuth proxy |
+| `OPENAI_API_KEY` | Runner (VM env) | global Doit-paid OpenAI models |
+| `ANTHROPIC_API_KEY` | Runner (VM env) | global Doit-paid Claude models |
 | Apple `.p8` (APNs) | Runner (VM env) | push notifications |

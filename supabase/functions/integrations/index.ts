@@ -6,7 +6,7 @@
 //
 // Endpoints (all POST, body { action, ... }):
 //   { action: "list" }
-//     -> { toolkits: [{ slug, name, description, connected, connection_id? }] }
+//     -> { toolkits: [{ slug, name, description, logo_url, connected, connection_id? }] }
 //   { action: "connect", toolkit: "gmail" }
 //     -> { redirect_url: "https://...", connection_id: "..." }
 //   { action: "disconnect", connection_id: "..." }
@@ -22,7 +22,11 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
 // Catalog of services we surface in the iOS Integrations page.
 // `slug` is the Composio toolkit slug (lowercase canonical app name).
-const CATALOG: Array<{ slug: string; name: string; description: string }> = [
+const CATALOG: Array<{
+    slug: string;
+    name: string;
+    description: string;
+}> = [
     {
         slug: "gmail",
         name: "Gmail",
@@ -85,11 +89,27 @@ interface ComposioSession {
 
 interface ComposioToolkit {
     slug: string;
+    logo?: string;
+    meta?: {
+        logo?: string;
+        app_url?: string | null;
+        description?: string;
+    } | null;
     connected_account?: ComposioConnectedAccount | null;
     connection?: {
         is_active?: boolean;
         connected_account?: ComposioConnectedAccount | null;
     } | null;
+}
+
+async function listAvailableToolkits(): Promise<ComposioToolkit[]> {
+    const res = await composio("/api/v3.1/toolkits?limit=1000");
+    if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`composio available toolkits failed: ${res.status} ${t}`);
+    }
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.items ?? data.data ?? []);
 }
 
 function corsHeaders(): HeadersInit {
@@ -257,8 +277,13 @@ serve(async (req) => {
             case "list": {
                 const sessionId = await createSession(userId);
                 const sessionToolkits = await listSessionToolkits(sessionId);
+                const availableToolkits = await listAvailableToolkits();
                 const conns = await listConnections(userId);
                 const bySlug = new Map<string, ComposioConnectedAccount>();
+                const toolkitMetadataBySlug = new Map<string, ComposioToolkit>();
+                for (const tk of availableToolkits) {
+                    toolkitMetadataBySlug.set(tk.slug.toLowerCase(), tk);
+                }
                 for (const tk of sessionToolkits) {
                     const conn = tk.connected_account ??
                         tk.connection?.connected_account ?? null;
@@ -277,11 +302,20 @@ serve(async (req) => {
                     }
                 }
                 const toolkits = CATALOG.map((t) => {
+                    const sessionToolkit = sessionToolkits.find((tk) =>
+                        tk.slug.toLowerCase() === t.slug
+                    );
+                    const metadataToolkit = toolkitMetadataBySlug.get(t.slug);
                     const conn = bySlug.get(t.slug);
                     return {
                         slug: t.slug,
                         name: t.name,
                         description: t.description,
+                        logo_url: metadataToolkit?.meta?.logo ??
+                            metadataToolkit?.logo ??
+                            sessionToolkit?.meta?.logo ??
+                            sessionToolkit?.logo ??
+                            null,
                         connected: conn?.status === "ACTIVE",
                         connection_id: conn?.id ?? null,
                         status: conn?.status ?? null,

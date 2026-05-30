@@ -9,6 +9,16 @@ struct SettingsView: View {
             List {
                 Section {
                     NavigationLink {
+                        ModelSettingsView()
+                    } label: {
+                        SettingsRow(
+                            icon: "cpu",
+                            title: "Model",
+                            subtitle: "Choose the provider and model Hermes should use"
+                        )
+                    }
+
+                    NavigationLink {
                         IntegrationsView()
                     } label: {
                         SettingsRow(
@@ -24,7 +34,7 @@ struct SettingsView: View {
                         SettingsRow(
                             icon: "brain.head.profile",
                             title: "Memory",
-                            subtitle: "Facts the agent should remember about you"
+                            subtitle: "What the agent remembers across your todos"
                         )
                     }
                 } header: {

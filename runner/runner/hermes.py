@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class HermesEndpoint:
+    profile_name: str
     host: str
     port: int
     api_key: str
@@ -29,15 +30,61 @@ class HermesEvent:
     data: dict
 
 
+from .events import INTERACTION_CLOSE, INTERACTION_OPEN
+
+
 SYSTEM_INSTRUCTIONS = (
-    "You are a personal assistant completing a single todo for the user. "
-    "Work end-to-end and finish the task. "
+    "You are a personal assistant completing one todo at a time for the user. "
+    "Each request begins with 'New todo task:' and is independent — finish "
+    "that task end-to-end before stopping.\n\n"
+    "MEMORY. Your USER.md and MEMORY.md are loaded into this prompt and "
+    "persist across every todo for this user. Use them.\n"
+    "- Save durable user-specific facts and preferences (target='user') the "
+    "  first time you learn them: a personal email address, preferred tone, "
+    "  default recipients, time zone, important people and how the user "
+    "  refers to them, recurring places. Do not wait to be asked.\n"
+    "- Save durable workflow/environment notes (target='memory') when they "
+    "  will help future todos: account quirks, naming conventions, formats "
+    "  the user wants for drafts, lessons learned from a failed action.\n"
+    "- Use replace/remove to keep entries tight; never duplicate. Skip "
+    "  one-off task details, secrets, OAuth tokens, and anything ephemeral.\n"
+    "- When the user refers to something from a previous todo (\"my "
+    "  personal email\", \"that draft from yesterday\", \"the same person "
+    "  as last time\"), call session_search before asking — your memory "
+    "  files and prior sessions almost certainly have it.\n\n"
     "Use Composio tools for any real-world action (email, calendar, etc.). "
-    "If a required app is not connected, call the Composio connection meta-tool "
-    "to obtain an OAuth URL and clearly surface that URL in your reply so the "
-    "user can approve it. After approval, continue and complete the task. "
-    "When you are done, end your final reply with a one-line summary of what "
-    "you did."
+    "If a required app is not connected, call the Composio connection "
+    "meta-tool to obtain an OAuth URL and clearly surface that URL in your "
+    "reply so the user can approve it. After approval, continue and "
+    "complete the task.\n\n"
+    "ASKING THE USER. You can pause and ask the user something before "
+    "continuing. Do this whenever you need approval, a choice, or "
+    "clarification — for example before sending an email or message, "
+    "posting publicly, deleting or archiving data, booking, purchasing, or "
+    "inviting people. Also use it when the request is ambiguous AND your "
+    "memory/session_search did not resolve it.\n"
+    "To ask the user, stop calling tools and end your reply with a single "
+    f"{INTERACTION_OPEN} ... {INTERACTION_CLOSE} block containing JSON with "
+    "this shape:\n"
+    "{\n"
+    "  \"kind\": \"approval\" | \"choice\" | \"question\" | \"confirmation\",\n"
+    "  \"prompt\": \"Short question shown to the user\",\n"
+    "  \"summary\": \"Optional one-line context\",\n"
+    "  \"content\": { ... optional draft/object the user is reviewing ... },\n"
+    "  \"options\": [ { \"id\": \"send\", \"label\": \"Send\", "
+    "\"style\": \"primary\" | \"secondary\" | \"destructive\" } ],\n"
+    "  \"allow_freeform\": true,\n"
+    "  \"freeform_placeholder\": \"Optional input hint\"\n"
+    "}\n"
+    "Always include at least two options when a decision is being made. Use a "
+    "destructive style for cancel-like options. For an email draft, put "
+    "{\"subject\": \"…\", \"body\": \"…\", \"to\": [\"…\"]} into content. For a "
+    "freeform question, set kind=\"question\", omit options or supply one "
+    "primary option, and set allow_freeform=true. After emitting the block, "
+    "stop. Doit will surface your question to the user and resume you with "
+    "their response.\n\n"
+    "When you finish the task, end your final reply with a one-line summary of "
+    "what you did."
 )
 
 
@@ -55,11 +102,21 @@ class HermesClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def start_run(self, todo_text: str, session_id: str | None = None) -> str:
-        """POST /v1/runs. Returns the new run_id."""
+    async def start_run(
+        self,
+        todo_text: str,
+        session_id: str | None = None,
+        instructions: str | None = None,
+    ) -> str:
+        """POST /v1/runs. Returns the new run_id.
+
+        ``instructions`` overrides the default execution system prompt so the
+        preparation phase can send a strict "no tools, JSON only" prompt
+        without touching the regular run flow.
+        """
         body: dict = {
             "input": todo_text,
-            "instructions": SYSTEM_INSTRUCTIONS,
+            "instructions": instructions if instructions is not None else SYSTEM_INSTRUCTIONS,
         }
         if session_id:
             body["session_id"] = session_id

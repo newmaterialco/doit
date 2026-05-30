@@ -82,6 +82,61 @@ If you skipped step 3 (connecting Gmail proactively):
 7. Tap into the todo -> hit "Connect your account" -> Google OAuth -> approve.
 8. Tap **Do it** again -> the agent picks up where it left off and finishes.
 
+## The "needs your input" path (approval / choice / question)
+
+For todos that involve sending, posting, deleting, booking, or anything else
+that's externally visible or irreversible, the agent pauses and asks before
+acting. Walk through it like this:
+
+1. Create a todo like "Email my landlord rent will be 3 days late." Tap
+   **Do it**.
+2. The agent researches, drafts the email, and stops. The todo flips to
+   **Needs you** (orange) in the Doing column and a push appears.
+3. Tap into the todo. The detail view shows a "Needs your input" card with
+   the draft (To / Subject / Body) plus the agent's buttons — typically
+   **Send**, **Rewrite**, and **Cancel**.
+4. Tap **Send** to approve. The todo goes back to **Queued** and the runner
+   resumes the same Hermes session to actually send the email.
+5. Or, type something like "Make it shorter and ask if they accept partial
+   payment" into the field and tap **Rewrite**. The agent comes back with a
+   new draft for another round of approval.
+6. **Cancel** drops the todo into the Cancelled state and stops the agent.
+
+The same loop generalizes to any "agent needs the user" moment — multiple
+choice questions, clarifications, destructive confirmations. Each ask shows
+up as its own card; only one open card is ever live per todo.
+
+## Cross-todo memory check
+
+This is the demo that proves Hermes' built-in memory is actually doing the
+work — not a prompt workaround on our side.
+
+1. Create a todo "Send a test email to my personal email
+   gabemitchell93@gmail.com." Tap **Do it**. Approve the draft when prompted.
+2. Wait for the run to finish, then open **Settings > Memory**. Within a
+   few seconds you should see a new "Learned by agent" entry under
+   **About you** like "Personal email: gabemitchell93@gmail.com" — that's
+   the agent writing to `USER.md` and the runner mirroring it back into
+   Supabase.
+3. Create a second todo, "Send something short to my personal email about
+   coffee." Tap **Do it**, do *not* include the address.
+4. The agent should reach the draft step without asking what your personal
+   email is. Confirm in the run's activity that it either pulled the
+   address from memory directly, or called `session_search` against the
+   earlier todo's session.
+
+If step 4 fails:
+
+- Check `hermes -p <profile> memory status` on the VM — built-in MEMORY +
+  USER files should be active.
+- Inspect `~/.hermes/profiles/<profile>/memories/USER.md`. The personal
+  email entry should be there after step 1; if it isn't, the agent decided
+  it wasn't durable enough — try a third "remember my personal email is …"
+  todo to force a save, then retry step 3.
+- Pin the fact manually in Settings > Memory ("About you" target). On the
+  next "Do it" the runner will stage it into `USER.md` before calling
+  `/v1/runs`, and the entry will show up tagged **Pinned**.
+
 ## What to check if it doesn't work
 
 | Symptom | Where to look |
@@ -94,3 +149,5 @@ If you skipped step 3 (connecting Gmail proactively):
 | "Couldn't load integrations" | Edge Function not deployed or `COMPOSIO_API_KEY` secret not set. |
 | Hermes logs `401 Unauthorized` for Composio MCP | The profile is probably using the static `connect.composio.dev/mcp` URL. Generate a Composio v3 session with `Composio().create(user_id=...)` and paste `session.mcp.url` + `session.mcp.headers` into the profile config. |
 | OAuth screen errors out | Verify in `hermes mcp` that Composio is connected for the profile; try the manual sanity check in `hermes/setup.md` step 7. |
+| Memory tag shows "Sync failed" in Settings > Memory | The profile's `USER.md` or `MEMORY.md` is full or unreachable. Shorten existing entries from the app, or run `hermes -p <profile> memory status` on the VM to confirm built-in memory is enabled. |
+| Agent keeps re-asking facts you already taught it | Confirm the runner is on the new build (stable `session_id`), check `~/.hermes/profiles/<profile>/memories/USER.md` for the fact, and pin it manually in Settings > Memory if Hermes didn't save it on its own. |
