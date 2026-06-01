@@ -1,7 +1,6 @@
 import AuthenticationServices
 import PhotosUI
 import PostgREST
-import Realtime
 import Supabase
 import SwiftUI
 
@@ -16,14 +15,13 @@ struct TodoDetailView: View {
 
     @State private var current: Todo
     @State private var steps: [TodoStep] = []
-    @State private var interaction: TodoInteraction?
+    /// Full interaction history for this todo (open + closed). Stored as
+    /// an array so the chat keeps every Q&A turn visible like a real
+    /// chat app; `openInteraction` derives the currently-actionable one.
+    @State private var interactions: [TodoInteraction] = []
     @State private var artifacts: [TodoArtifact] = []
     @State private var submittingOptionID: String?
     @State private var error: String?
-    @State private var stepsRealtimeTask: Task<Void, Never>?
-    @State private var todoRealtimeTask: Task<Void, Never>?
-    @State private var interactionsRealtimeTask: Task<Void, Never>?
-    @State private var artifactsRealtimeTask: Task<Void, Never>?
     @State private var oauthSession: ASWebAuthenticationSession?
     @State private var attachments: [TodoAttachment] = []
     @State private var attachmentURLs: [UUID: URL] = [:]
@@ -39,6 +37,12 @@ struct TodoDetailView: View {
     /// either side via the split's drag pill.
     @State private var splitDetent: SplitDetent = .fraction(0.3)
 
+    /// Detent the user was sitting on when they tapped the composer. We
+    /// auto-snap to `.bottomFull` while the chat field is focused so the
+    /// composer has the whole screen to work with above the keyboard,
+    /// and roll back to whatever they had before once they dismiss.
+    @State private var detentBeforeFocus: SplitDetent?
+
     init(todo: Todo) {
         self.todo = todo
         self._current = State(initialValue: todo)
@@ -53,6 +57,7 @@ struct TodoDetailView: View {
                 TaskHeaderView(
                     todo: current,
                     artifacts: artifacts,
+                    agentStatus: openInteractionStatus,
                     onBack: { dismiss() },
                     onDelete: deleteTask
                 )
@@ -77,7 +82,8 @@ struct TodoDetailView: View {
                         }
                     },
                     onOpenOAuth: { url in startOAuth(url: url) },
-                    onRespondInteraction: { interaction, optionID, text in
+                    onRespondInteraction: { envelope, optionID, text in
+                        guard case .todo(let interaction) = envelope else { return }
                         Task {
                             await respond(
                                 interaction: interaction,
@@ -88,13 +94,42 @@ struct TodoDetailView: View {
                     },
                     onSend: { text in
                         Task { await send(text) }
-                    }
+                    },
+                    onFocusChange: handleComposerFocusChange,
+                    onConfirmRun: confirmRun,
+                    composerReplyHint: openInteractionReplyHint
                 )
             }
         )
         .handleTrailingText(formattedTokens(current.total_tokens))
+        // The vendor split positions everything (handle pill, mini
+        // overlay, wrappers) with absolute offsets and `.ignoresSafeArea()`
+        // on the wrappers — but the *root* ZStack still participates in
+        // SwiftUI's automatic keyboard avoidance, so showing the keyboard
+        // shoves the whole thing (including the `.topMini` pill at the
+        // top of `.bottomFull`) up by the keyboard height and clips it
+        // off-screen. We do the keyboard lift ourselves inside
+        // `TodoChatThread`, so explicitly opt the entire split out of
+        // the keyboard region here. Must come *after* the
+        // `VerticalSplit`-specific `.handleTrailingText` modifier,
+        // since that one only exists on the concrete split type and
+        // erasing to `some View` first would hide it.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .toolbar(.hidden, for: .navigationBar)
-        .task {
+        .task(id: current.id) {
+            // Realtime lives in `TodoRealtimeHub` so `onDisappear` /
+            // split-layout churn does not cancel in-flight channel joins.
+            // The list calls `endTodoWatch()` when `navigationPath` pops.
+            TodoRealtimeHub.beginTodoWatch(
+                todoID: current.id,
+                handlers: .init(
+                    onTodo: { await refreshTodo() },
+                    onSteps: { await loadSteps() },
+                    onInteractions: { await loadInteractions() },
+                    onArtifacts: { await loadArtifacts() },
+                    onMessages: { await loadMessages() }
+                )
+            )
             // Refetch the row on every appearance so columns that mutate
             // mid-run (status, total_tokens, error_message) are fresh —
             // the list view's cached `Todo` can lag, especially after the
@@ -102,35 +137,29 @@ struct TodoDetailView: View {
             // already incremented tokens.
             await refreshTodo()
             await loadSteps()
-            await loadInteraction()
+            await loadInteractions()
             await loadAttachments()
             await loadArtifacts()
             await loadMessages()
-            startStepsRealtime()
-            startTodoRealtime()
-            startInteractionsRealtime()
-            startArtifactsRealtime()
-        }
-        .onDisappear {
-            print("[detail] onDisappear todo=\(current.id)")
-            stopRealtime()
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
             print("[detail] scenePhase \(oldPhase)→\(newPhase) todo=\(current.id)")
-            // Backgrounding the app can drop the websocket; on
-            // foreground, force-rebuild every realtime subscription and
-            // refetch state so the detail sheet doesn't sit on stale
-            // status / steps / interactions from before the switch.
             guard newPhase == .active else { return }
-            stopRealtime()
-            startStepsRealtime()
-            startTodoRealtime()
-            startInteractionsRealtime()
-            startArtifactsRealtime()
             Task {
                 await refreshTodo()
                 await loadSteps()
-                await loadInteraction()
+                await loadInteractions()
+                await loadArtifacts()
+                await loadMessages()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .todoRemoteUpdate)) { note in
+            guard TodoRemoteUpdate.todoID(from: note) == current.id else { return }
+            print("[detail] push refresh todo=\(current.id)")
+            Task {
+                await refreshTodo()
+                await loadSteps()
+                await loadInteractions()
                 await loadArtifacts()
                 await loadMessages()
             }
@@ -164,7 +193,7 @@ struct TodoDetailView: View {
         ConversationBuilder.build(
             todo: current,
             steps: steps,
-            interaction: interaction,
+            interactions: interactions,
             attachments: attachments,
             messages: messages,
             error: current.error_message ?? error
@@ -173,6 +202,39 @@ struct TodoDetailView: View {
 
     private var canAddMoreAttachments: Bool {
         attachments.count < TodoDetailView.maxAttachments
+    }
+
+    /// Latest `.open` interaction (if any) — the one the user is
+    /// actively answering. Older closed turns live in `interactions`
+    /// alongside it and render as static history bubbles.
+    private var openInteraction: TodoInteraction? {
+        interactions.last(where: { $0.status == .open })
+    }
+
+    /// Summary blurb from the agent's currently-open interaction, shown
+    /// in the task header as a "what I'm waiting on" status. `nil`
+    /// while there's nothing open so the header doesn't grow a
+    /// placeholder slot.
+    private var openInteractionStatus: String? {
+        guard let summary = openInteraction?.summary?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !summary.isEmpty
+        else { return nil }
+        return summary
+    }
+
+    /// Placeholder the chat composer should display when the agent
+    /// has an open interaction expecting a typed reply. We fall back
+    /// to a generic hint so the user always knows the composer is the
+    /// way to reply.
+    private var openInteractionReplyHint: String? {
+        guard let open = openInteraction, open.allowsFreeform else { return nil }
+        if let hint = open.freeformPlaceholder?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !hint.isEmpty {
+            return hint
+        }
+        return "Reply to Hermes"
     }
 
     /// Compact token count rendered in the drag pill. Hides while the todo
@@ -232,18 +294,55 @@ struct TodoDetailView: View {
                 text: text,
                 phase: phase
             )
-            // Optimistic: hide the card immediately. Realtime will refresh
-            // shortly.
-            self.interaction = nil
+            // Optimistic: flip the local row to `.responded` with the
+            // submitted answer so the chat keeps showing the question
+            // *and* the user's reply, instead of the card vanishing.
+            // Realtime will reconcile with the persisted row shortly.
+            applyOptimisticResponse(
+                interactionID: interaction.id,
+                optionID: optionID,
+                text: text
+            )
             if optionID?.lowercased() == "cancel" {
                 current.status = .cancelled
             } else {
+                // Keep the status in an "active" bucket so the header
+                // reads "Doing" while the runner re-claims; without
+                // this it briefly flashes through `needs_input` again
+                // before realtime catches up.
                 current.status = phase.nextStatus
             }
         } catch {
             print("[interaction] respond failed: \(error)")
             self.error = "Couldn't send your response: \(error.localizedDescription)"
         }
+    }
+
+    /// Mutate the local `interactions` row in place so the chat
+    /// transcript reflects the new `.responded` state immediately. We
+    /// build a synthetic JSON payload that mirrors what the server
+    /// will end up storing (`{option_id, text}`) so the same helpers
+    /// (`respondedBubbleText`, `respondedOptionID`, …) work whether
+    /// we're displaying optimistic local state or a freshly-loaded
+    /// realtime row.
+    private func applyOptimisticResponse(
+        interactionID: UUID,
+        optionID: String?,
+        text: String?
+    ) {
+        guard let idx = interactions.firstIndex(where: { $0.id == interactionID }) else { return }
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var responseObj: [String: JSONValue] = [:]
+        if let id = optionID, !id.isEmpty {
+            responseObj["option_id"] = .string(id)
+        }
+        if let body = trimmed, !body.isEmpty {
+            responseObj["text"] = .string(body)
+        }
+        let now = Date()
+        interactions[idx].status = (optionID?.lowercased() == "cancel") ? .cancelled : .responded
+        interactions[idx].response = responseObj.isEmpty ? nil : .object(responseObj)
+        interactions[idx].responded_at = now
     }
 
     /// Free-form chat send from the composer. If there's an open
@@ -259,7 +358,7 @@ struct TodoDetailView: View {
         sending = true
         defer { sending = false }
 
-        if let open = interaction, open.status == .open {
+        if let open = openInteraction {
             await respond(interaction: open, optionID: nil, text: trimmed)
             return
         }
@@ -299,6 +398,50 @@ struct TodoDetailView: View {
         }
     }
 
+    /// React to the composer field gaining / losing focus. On focus we
+    /// record whatever detent the user had set and force `.bottomFull`
+    /// so the chat panel claims the full screen above the keyboard. On
+    /// blur we restore the saved detent — but only if the user hasn't
+    /// dragged the split themselves in the meantime (in which case the
+    /// current value won't be `.bottomFull` anymore and we trust the
+    /// manual change). The animation here matches the split's own.
+    private func handleComposerFocusChange(_ isFocused: Bool) {
+        if isFocused {
+            if detentBeforeFocus == nil {
+                detentBeforeFocus = splitDetent
+            }
+            withAnimation(.smooth(duration: 0.4)) {
+                splitDetent = .bottomFull
+            }
+        } else {
+            guard let prior = detentBeforeFocus else { return }
+            detentBeforeFocus = nil
+            if splitDetent == .bottomFull {
+                withAnimation(.smooth(duration: 0.4)) {
+                    splitDetent = prior
+                }
+            }
+        }
+    }
+
+    /// Inline "Do it" confirmation from the chat thread's
+    /// `.agentReadyToRun` bubble. Mirrors the list-view's pillbutton:
+    /// flip the row to `.requested` optimistically (so the chat shows
+    /// "Doing" instantly) and let realtime reconcile.
+    private func confirmRun() {
+        let prior = current.status
+        current.status = .requested
+        Task {
+            do {
+                try await TodosAPI.setStatus(current.id, .requested)
+            } catch {
+                print("[detail] confirmRun failed: \(error)")
+                current.status = prior
+                self.error = "Couldn't start the task: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func startOAuth(url: URL) {
         let session = ASWebAuthenticationSession(
             url: url,
@@ -334,185 +477,28 @@ struct TodoDetailView: View {
         }
     }
 
-    private func loadInteraction() async {
-        let prevID = interaction?.id
+    private func loadInteractions() async {
+        let prevCount = interactions.count
+        let prevOpenID = openInteraction?.id
         do {
-            interaction = try await TodosAPI.openInteraction(for: current.id)
-            let newID = interaction?.id
-            let changed = prevID != newID
-            print("[interaction] loaded id=\(newID?.uuidString ?? "nil") prev=\(prevID?.uuidString ?? "nil") changed=\(changed) todo=\(current.id)")
+            let fresh = try await TodosAPI.interactions(for: current.id)
+            // Preserve optimistic local mutations: if we already flipped
+            // a row to `.responded` and the server hasn't caught up yet,
+            // keep our local copy until realtime confirms.
+            let merged: [TodoInteraction] = fresh.map { remote in
+                if let local = interactions.first(where: { $0.id == remote.id }),
+                   remote.status == .open,
+                   local.status != .open {
+                    return local
+                }
+                return remote
+            }
+            interactions = merged
+            let newOpenID = openInteraction?.id
+            print("[interaction] loaded count=\(interactions.count) (Δ=\(interactions.count - prevCount)) open=\(newOpenID?.uuidString ?? "nil") prevOpen=\(prevOpenID?.uuidString ?? "nil") todo=\(current.id)")
         } catch {
             print("[interaction] load failed todo=\(current.id): \(error)")
         }
-    }
-
-    private func startStepsRealtime() {
-        guard stepsRealtimeTask == nil else { return }
-        print("[realtime][steps] starting todo=\(current.id)")
-        let todoID = current.id
-        stepsRealtimeTask = Task {
-            var attempt = 0
-            // Retry loop so a websocket drop (background, network blip)
-            // doesn't permanently kill the live step stream.
-            while !Task.isCancelled {
-                attempt += 1
-                let channel = Supa.client.channel("steps:\(todoID.uuidString)")
-                let stream = channel.postgresChange(
-                    AnyAction.self,
-                    schema: "public",
-                    table: "todo_steps",
-                    filter: "todo_id=eq.\(todoID.uuidString)"
-                )
-                do {
-                    try await channel.subscribeWithError()
-                    print("[realtime][steps] subscribe ok status=\(channel.status) todo=\(todoID) attempt=\(attempt)")
-                } catch {
-                    print("[realtime][steps] subscribe FAILED status=\(channel.status) error=\(error) todo=\(todoID) attempt=\(attempt)")
-                }
-                var eventCount = 0
-                for await change in stream {
-                    if Task.isCancelled { break }
-                    eventCount += 1
-                    print("[realtime][steps] event #\(eventCount) todo=\(todoID): \(change)")
-                    await loadSteps()
-                }
-                // `removeChannel` (not `unsubscribe`) evicts the channel
-                // from the realtime client's topic cache so the next
-                // retry-loop iteration can create a fresh subscription.
-                await Supa.client.removeChannel(channel)
-                print("[realtime][steps] stream ended todo=\(todoID) events=\(eventCount) cancelled=\(Task.isCancelled)")
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .seconds(1))
-            }
-            print("[realtime][steps] task exit todo=\(todoID)")
-        }
-    }
-
-    private func startTodoRealtime() {
-        guard todoRealtimeTask == nil else { return }
-        print("[realtime][todo] starting todo=\(current.id)")
-        let todoID = current.id
-        todoRealtimeTask = Task {
-            var attempt = 0
-            while !Task.isCancelled {
-                attempt += 1
-                let channel = Supa.client.channel("todo:\(todoID.uuidString)")
-                let stream = channel.postgresChange(
-                    AnyAction.self,
-                    schema: "public",
-                    table: "todos",
-                    filter: "id=eq.\(todoID.uuidString)"
-                )
-                do {
-                    try await channel.subscribeWithError()
-                    print("[realtime][todo] subscribe ok status=\(channel.status) todo=\(todoID) attempt=\(attempt)")
-                } catch {
-                    print("[realtime][todo] subscribe FAILED status=\(channel.status) error=\(error) todo=\(todoID) attempt=\(attempt)")
-                }
-                var eventCount = 0
-                for await change in stream {
-                    if Task.isCancelled { break }
-                    eventCount += 1
-                    print("[realtime][todo] event #\(eventCount) todo=\(todoID): \(change)")
-                    await refreshTodo()
-                }
-                await Supa.client.removeChannel(channel)
-                print("[realtime][todo] stream ended todo=\(todoID) events=\(eventCount) cancelled=\(Task.isCancelled)")
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .seconds(1))
-            }
-            print("[realtime][todo] task exit todo=\(todoID)")
-        }
-    }
-
-    private func startInteractionsRealtime() {
-        guard interactionsRealtimeTask == nil else { return }
-        print("[realtime][interactions] starting todo=\(current.id)")
-        let todoID = current.id
-        interactionsRealtimeTask = Task {
-            var attempt = 0
-            while !Task.isCancelled {
-                attempt += 1
-                let channel = Supa.client.channel("interactions:\(todoID.uuidString)")
-                let stream = channel.postgresChange(
-                    AnyAction.self,
-                    schema: "public",
-                    table: "todo_interactions",
-                    filter: "todo_id=eq.\(todoID.uuidString)"
-                )
-                do {
-                    try await channel.subscribeWithError()
-                    print("[realtime][interactions] subscribe ok status=\(channel.status) todo=\(todoID) attempt=\(attempt)")
-                } catch {
-                    print("[realtime][interactions] subscribe FAILED status=\(channel.status) error=\(error) todo=\(todoID) attempt=\(attempt)")
-                }
-                var eventCount = 0
-                for await change in stream {
-                    if Task.isCancelled { break }
-                    eventCount += 1
-                    print("[realtime][interactions] event #\(eventCount) todo=\(todoID): \(change)")
-                    await loadInteraction()
-                }
-                await Supa.client.removeChannel(channel)
-                print("[realtime][interactions] stream ended todo=\(todoID) events=\(eventCount) cancelled=\(Task.isCancelled)")
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .seconds(1))
-            }
-            print("[realtime][interactions] task exit todo=\(todoID)")
-        }
-    }
-
-    private func startArtifactsRealtime() {
-        guard artifactsRealtimeTask == nil else { return }
-        print("[realtime][artifacts] starting todo=\(current.id)")
-        let todoID = current.id
-        artifactsRealtimeTask = Task {
-            var attempt = 0
-            while !Task.isCancelled {
-                attempt += 1
-                let channel = Supa.client.channel("artifacts:\(todoID.uuidString)")
-                let stream = channel.postgresChange(
-                    AnyAction.self,
-                    schema: "public",
-                    table: "todo_artifacts",
-                    filter: "todo_id=eq.\(todoID.uuidString)"
-                )
-                do {
-                    try await channel.subscribeWithError()
-                    print("[realtime][artifacts] subscribe ok status=\(channel.status) todo=\(todoID) attempt=\(attempt)")
-                } catch {
-                    print("[realtime][artifacts] subscribe FAILED status=\(channel.status) error=\(error) todo=\(todoID) attempt=\(attempt)")
-                }
-                var eventCount = 0
-                for await change in stream {
-                    if Task.isCancelled { break }
-                    eventCount += 1
-                    print("[realtime][artifacts] event #\(eventCount) todo=\(todoID): \(change)")
-                    await loadArtifacts()
-                }
-                await Supa.client.removeChannel(channel)
-                print("[realtime][artifacts] stream ended todo=\(todoID) events=\(eventCount) cancelled=\(Task.isCancelled)")
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .seconds(1))
-            }
-            print("[realtime][artifacts] task exit todo=\(todoID)")
-        }
-    }
-
-    /// Cancel every realtime task and clear its handle. Without nil-ing
-    /// out the State the `guard … == nil` short-circuits next time
-    /// `start…Realtime()` is called (e.g. when the user comes back to
-    /// foreground), and the detail view sits without live updates until
-    /// it's torn down and re-created.
-    private func stopRealtime() {
-        stepsRealtimeTask?.cancel()
-        stepsRealtimeTask = nil
-        todoRealtimeTask?.cancel()
-        todoRealtimeTask = nil
-        interactionsRealtimeTask?.cancel()
-        interactionsRealtimeTask = nil
-        artifactsRealtimeTask?.cancel()
-        artifactsRealtimeTask = nil
     }
 
     private func refreshTodo() async {
@@ -543,10 +529,13 @@ struct TodoDetailView: View {
     }
 
     private func loadInteractionWithRetry() async {
-        await loadInteraction()
-        if interaction == nil {
+        await loadInteractions()
+        if openInteraction == nil {
+            // The interaction row sometimes lags a beat behind the
+            // status flip on Postgres' commit ordering; a single
+            // half-second retry covers that race without spamming.
             try? await Task.sleep(for: .milliseconds(500))
-            await loadInteraction()
+            await loadInteractions()
         }
     }
 

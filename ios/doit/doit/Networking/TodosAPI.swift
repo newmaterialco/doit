@@ -86,6 +86,23 @@ enum TodosAPI {
             .value
     }
 
+    /// Batched artifact fetch for the list view connection icons.
+    static func artifacts(for todoIDs: [UUID]) async throws -> [UUID: [TodoArtifact]] {
+        guard !todoIDs.isEmpty else { return [:] }
+        let rows: [TodoArtifact] = try await Supa.client
+            .from("todo_artifacts")
+            .select()
+            .in("todo_id", values: todoIDs)
+            .order("created_at", ascending: true)
+            .execute()
+            .value
+        var byTodo: [UUID: [TodoArtifact]] = [:]
+        for row in rows where row.hasContent {
+            byTodo[row.todo_id, default: []].append(row)
+        }
+        return byTodo
+    }
+
     // MARK: - Messages (free-form user chat)
 
     /// All user-authored chat messages for a todo, oldest first. The
@@ -138,6 +155,22 @@ enum TodosAPI {
             .execute()
             .value
         return rows.first
+    }
+
+    /// Full history of interactions for a single todo, oldest first. The
+    /// detail view uses this so closed (responded/cancelled) interactions
+    /// stay visible in the chat transcript instead of vanishing the moment
+    /// the user answers — which lines the UX up with how every other chat
+    /// app on the planet behaves.
+    static func interactions(for todoID: UUID) async throws -> [TodoInteraction] {
+        let rows: [TodoInteraction] = try await Supa.client
+            .from("todo_interactions")
+            .select()
+            .eq("todo_id", value: todoID)
+            .order("created_at", ascending: true)
+            .execute()
+            .value
+        return rows
     }
 
     /// Batched fetch for the open interactions of a set of todos. Used by

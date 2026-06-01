@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -70,6 +70,14 @@ PREP_INSTRUCTIONS = (
     "  \"connection_slug\": \"<one of the allowed slugs from the prompt, "
     "or null if no external connection is needed / you cannot pick one>\",\n"
     "  \"summary\": \"One short sentence describing the planned action.\",\n"
+    "  \"kind\": \"task\" | \"cron\",\n"
+    "  \"schedule\": \"Required when kind=cron. Hermes-style schedule string "
+    "(e.g. '0 9 * * *', 'every 2h', '30m').\",\n"
+    "  \"schedule_display\": \"Human-readable schedule for the UI when kind=cron "
+    "(e.g. 'Every day at 9:00 AM').\",\n"
+    "  \"tasks\": [\n"
+    "    {\"title\": \"...\", \"connection_slug\": null, \"summary\": \"...\"}\n"
+    "  ],\n"
     "  \"ready\": true | false,\n"
     "  \"clarification\": {\n"
     "    \"prompt\": \"The single question to ask the user (required if "
@@ -99,8 +107,35 @@ PREP_INSTRUCTIONS = (
     "target of the action just to make the title shorter.\n"
     "- Pick connection_slug only from the list of allowed slugs supplied "
     "in the prompt. If unsure, use null.\n"
+    "- Set kind=\"cron\" when the user wants a RECURRING automation on a "
+    "schedule (daily email check, hourly monitoring, weekly reports). "
+    "One-off tasks are kind=\"task\" (default). Cron jobs must include "
+    "schedule and schedule_display; set ready=true unless the recurrence "
+    "pattern itself is ambiguous.\n"
+    "- CRITICAL kind examples (follow exactly):\n"
+    "  * \"Every morning at 9am check email and create tasks\" → "
+    "kind=cron, schedule=\"0 9 * * *\", schedule_display=\"Every day at 9:00 AM\"\n"
+    "  * \"Check my inbox every 2 hours\" → kind=cron, schedule=\"every 2h\", "
+    "schedule_display=\"Every 2 hours\"\n"
+    "  * \"Send an email to John\" → kind=task (no schedule fields)\n"
+    "  If the input mentions daily/hourly/weekly/every/each/recurring, "
+    "kind MUST be cron — never kind=task for those.\n"
+    "- Use \"tasks\" ONLY when the user's single input clearly contains "
+    "multiple independent todos that should each get their own card. "
+    "The first task stays on the original row; extras become separate "
+    "already-prepared todos. Omit \"tasks\" or use a one-element array "
+    "for a single task. Do not split a single coherent action.\n"
     "- Do NOT call tools. Do NOT write anything outside the JSON block.\n"
 )
+
+
+@dataclass
+class PrepTask:
+    """One task in a multi-task split."""
+
+    title: str
+    connection_slug: str | None = None
+    summary: str | None = None
 
 
 @dataclass
@@ -108,13 +143,21 @@ class PrepResult:
     """Parsed output of the preparation phase."""
 
     ready: bool
+    kind: str = "task"
     title: str | None = None
     connection_slug: str | None = None
     summary: str | None = None
+    schedule: str | None = None
+    schedule_display: str | None = None
+    additional_tasks: list[PrepTask] = field(default_factory=list)
     clarification_prompt: str | None = None
     clarification_options: list[dict[str, Any]] = field(default_factory=list)
     clarification_allow_freeform: bool = True
     clarification_placeholder: str | None = None
+
+    @property
+    def is_cron(self) -> bool:
+        return self.kind == "cron"
 
     @property
     def needs_clarification(self) -> bool:
@@ -154,6 +197,29 @@ def parse_prepare(
     ready_raw = data.get("ready")
     ready = True if ready_raw is None else bool(ready_raw)
 
+    kind_raw = _clean_str(data.get("kind"), max_len=16)
+    kind = "cron" if kind_raw == "cron" else "task"
+
+    schedule = _clean_str(data.get("schedule"), max_len=120)
+    schedule_display = _clean_str(data.get("schedule_display"), max_len=200)
+
+    additional_tasks: list[PrepTask] = []
+    raw_tasks = data.get("tasks")
+    if isinstance(raw_tasks, list):
+        for item in raw_tasks:
+            if not isinstance(item, dict):
+                continue
+            t_title = _clean_str(item.get("title"), max_len=200)
+            if not t_title:
+                continue
+            t_slug = _clean_str(item.get("connection_slug"), max_len=64)
+            if t_slug:
+                t_slug = t_slug.lower() if t_slug.lower() in allowed_slugs else None
+            t_summary = _clean_str(item.get("summary"), max_len=400)
+            additional_tasks.append(
+                PrepTask(title=t_title, connection_slug=t_slug, summary=t_summary)
+            )
+
     clarification = data.get("clarification")
     c_prompt: str | None = None
     c_options: list[dict[str, Any]] = []
@@ -181,9 +247,13 @@ def parse_prepare(
 
     return PrepResult(
         ready=ready,
+        kind=kind,
         title=title,
         connection_slug=slug,
         summary=summary,
+        schedule=schedule,
+        schedule_display=schedule_display,
+        additional_tasks=additional_tasks,
         clarification_prompt=c_prompt,
         clarification_options=c_options,
         clarification_allow_freeform=c_allow_freeform,
@@ -243,6 +313,137 @@ def build_prepare_prompt(
     from .prompt import _append_attachments
 
     return _append_attachments(base, attachment_urls)
+
+
+# Recurrence hints the model sometimes misses — used as a safety net.
+_RECURRING_HINT = re.compile(
+    r"\b("
+    r"every|each|daily|hourly|weekly|monthly|recurring|"
+    r"every\s+(?:morning|evening|night|week|day|hour)|"
+    r"(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_EVERY_N_UNIT = re.compile(
+    r"every\s+(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|"
+    r"d|day|days)\b",
+    re.IGNORECASE,
+)
+
+_AT_TIME = re.compile(
+    r"(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b",
+    re.IGNORECASE,
+)
+
+
+def infer_recurring_schedule(raw_text: str) -> tuple[str, str] | None:
+    """Best-effort schedule inference from the user's raw input.
+
+    Returns ``(schedule, schedule_display)`` or ``None`` if the text does not
+    look recurring. Used when the prep model returns kind=task for an input
+    that clearly asks for automation.
+    """
+    text = (raw_text or "").strip()
+    if not text or not _RECURRING_HINT.search(text):
+        return None
+    lower = text.lower()
+
+    m = _EVERY_N_UNIT.search(lower)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit.startswith("m"):
+            return (f"every {n}m", f"Every {n} minutes")
+        if unit.startswith("h"):
+            return (f"every {n}h", f"Every {n} hours")
+        if unit.startswith("d"):
+            return (f"every {n}d", f"Every {n} days")
+
+    if re.search(r"\b(hourly|every hour)\b", lower):
+        return ("every 1h", "Every hour")
+
+    if re.search(r"\bweekly|every week\b", lower):
+        return ("0 9 * * 1", "Every week on Monday at 9:00 AM")
+
+    if "every morning" in lower or "each morning" in lower:
+        return ("0 9 * * *", "Every day at 9:00 AM")
+
+    if "every evening" in lower or "each evening" in lower:
+        return ("0 18 * * *", "Every day at 6:00 PM")
+
+    if re.search(r"\b(daily|every day)\b", lower):
+        tm = _AT_TIME.search(lower)
+        if tm:
+            hour, minute, meridiem = _parse_clock(tm)
+            return (
+                f"{minute} {hour} * * *",
+                f"Every day at {_format_clock(hour, minute, meridiem)}",
+            )
+        return ("0 9 * * *", "Every day at 9:00 AM")
+
+    tm = _AT_TIME.search(lower)
+    if tm and re.search(r"\bevery\b", lower):
+        hour, minute, meridiem = _parse_clock(tm)
+        return (
+            f"{minute} {hour} * * *",
+            f"Every day at {_format_clock(hour, minute, meridiem)}",
+        )
+
+    # Generic recurrence without a parseable time — default to daily 9am.
+    if _RECURRING_HINT.search(text):
+        return ("0 9 * * *", "Every day at 9:00 AM")
+
+    return None
+
+
+def augment_cron_from_text(result: PrepResult, raw_text: str) -> PrepResult:
+    """Promote to cron when user text is recurring but the model missed it."""
+    inferred = infer_recurring_schedule(raw_text)
+    if inferred is None:
+        return result
+
+    schedule, display = inferred
+
+    if result.is_cron and result.schedule:
+        return result
+
+    log.info(
+        "prep cron heuristic: promoting kind=%s schedule=%r from text=%r",
+        result.kind,
+        schedule,
+        raw_text[:120],
+    )
+
+    updates: dict[str, Any] = {
+        "kind": "cron",
+        "schedule": result.schedule or schedule,
+        "schedule_display": result.schedule_display or display,
+        "ready": True,
+    }
+    return replace(result, **updates)
+
+
+def _parse_clock(match: re.Match[str]) -> tuple[int, int, str | None]:
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = (match.group(3) or "").lower() or None
+    if meridiem == "pm" and hour < 12:
+        hour += 12
+    if meridiem == "am" and hour == 12:
+        hour = 0
+    return hour, minute, meridiem
+
+
+def _format_clock(hour: int, minute: int, meridiem: str | None) -> str:
+    if meridiem:
+        display_hour = int(hour)
+        if display_hour == 0:
+            display_hour = 12
+        elif display_hour > 12:
+            display_hour -= 12
+        return f"{display_hour}:{minute:02d} {meridiem.upper()}"
+    return f"{hour:02d}:{minute:02d}"
 
 
 # ----------------------------------------------------------------------

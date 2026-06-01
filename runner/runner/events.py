@@ -21,6 +21,11 @@ INTERACTION_CLOSE = "[[/DOIT_INTERACTION]]"
 ARTIFACT_OPEN = "[[DOIT_ARTIFACT]]"
 ARTIFACT_CLOSE = "[[/DOIT_ARTIFACT]]"
 
+# Marker for todos the agent wants the app to create after discovering work
+# (e.g. inbox scan). Distinct from prep-time [[DOIT_PREP]] tasks[] splitting.
+TASKS_OPEN = "[[DOIT_TASKS]]"
+TASKS_CLOSE = "[[/DOIT_TASKS]]"
+
 # Kinds we know how to render on iOS. Anything else is dropped on the floor
 # rather than persisted with an unknown kind, since the UI has no fallback.
 _ARTIFACT_KINDS = {"link", "email", "calendar", "text"}
@@ -41,6 +46,11 @@ _INTERACTION_RE = re.compile(
 # stripped and JSON-parsed separately in ``parse_artifacts``.
 _ARTIFACT_RE = re.compile(
     re.escape(ARTIFACT_OPEN) + r"(.*?)" + re.escape(ARTIFACT_CLOSE),
+    re.DOTALL,
+)
+
+_TASKS_RE = re.compile(
+    re.escape(TASKS_OPEN) + r"\s*(\{.*?\})\s*" + re.escape(TASKS_CLOSE),
     re.DOTALL,
 )
 
@@ -69,6 +79,17 @@ class ArtifactRequest:
 
 
 @dataclass
+class SpawnedTaskRequest:
+    """One todo row the agent asks the runner to create."""
+
+    title: str
+    source_key: str
+    detail: str | None = None
+    connection_slug: str | None = None
+    summary: str | None = None
+
+
+@dataclass
 class Translated:
     """Effect of one Hermes event on our DB."""
     step_kind: Literal[
@@ -89,6 +110,7 @@ class Translated:
     final_text: str | None = None  # accumulated assistant final text
     interaction: InteractionRequest | None = None
     artifacts: list[ArtifactRequest] = field(default_factory=list)
+    spawned_tasks: list[SpawnedTaskRequest] = field(default_factory=list)
     # Cumulative token total reported by this event for the *current* turn /
     # run. The runner derives a delta from successive values and increments
     # `todos.total_tokens` atomically. Zero means "no usage info on this
@@ -297,16 +319,17 @@ def _final_or_interaction(text: str) -> Translated:
             final_text=text,
             interaction=interaction,
         )
-    # Real final: parse out any artifact blocks and remove them from the
-    # rendered step text so the user doesn't see the raw JSON in chat.
+    # Real final: parse artifacts and spawn-task blocks out of the reply.
     artifacts = parse_artifacts(text)
-    visible = strip_artifacts(text).strip()
+    spawned_tasks = parse_spawned_tasks(text)
+    visible = strip_tasks(strip_artifacts(text)).strip()
     return Translated(
         step_kind="final",
         text=_truncate(visible, 2000) if visible else "Done.",
         new_status="done",
         final_text=text,
         artifacts=artifacts,
+        spawned_tasks=spawned_tasks,
     )
 
 
@@ -417,6 +440,62 @@ def strip_artifacts(text: str) -> str:
     if not text:
         return text
     return _ARTIFACT_RE.sub("", text)
+
+
+def parse_spawned_tasks(text: str) -> list[SpawnedTaskRequest]:
+    """Extract ``[[DOIT_TASKS]]`` blocks from the model's final reply."""
+    if not text:
+        return []
+    match = _TASKS_RE.search(text)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError as e:
+        log.warning("spawned tasks JSON parse failed: %s", e)
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw_tasks = data.get("tasks")
+    if not isinstance(raw_tasks, list):
+        return []
+
+    out: list[SpawnedTaskRequest] = []
+    seen_keys: set[str] = set()
+    for item in raw_tasks:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        source_key = str(item.get("source_key") or "").strip()
+        if not title or not source_key:
+            log.warning("spawned task missing title or source_key; skipping")
+            continue
+        if source_key in seen_keys:
+            continue
+        seen_keys.add(source_key)
+        detail_raw = item.get("detail")
+        detail = str(detail_raw).strip()[:4000] if detail_raw else None
+        summary_raw = item.get("summary")
+        summary = str(summary_raw).strip()[:400] if summary_raw else None
+        slug_raw = item.get("connection_slug")
+        slug = str(slug_raw).strip().lower()[:64] if slug_raw else None
+        out.append(
+            SpawnedTaskRequest(
+                title=title[:200],
+                source_key=source_key[:120],
+                detail=detail,
+                connection_slug=slug,
+                summary=summary,
+            )
+        )
+    return out
+
+
+def strip_tasks(text: str) -> str:
+    """Remove ``[[DOIT_TASKS]]`` blocks from visible final text."""
+    if not text:
+        return text
+    return _TASKS_RE.sub("", text)
 
 
 def _clean_option(option: Any) -> dict[str, Any] | None:

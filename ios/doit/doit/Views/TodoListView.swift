@@ -1,4 +1,3 @@
-import Realtime
 import Supabase
 import SwiftUI
 import UIKit
@@ -7,16 +6,17 @@ struct TodoListView: View {
     let userID: UUID
 
     @State private var todos: [Todo] = []
+    @State private var cronJobs: [CronJob] = []
     @State private var openInteractions: [UUID: TodoInteraction] = [:]
+    @State private var artifactsByTodoID: [UUID: [TodoArtifact]] = [:]
     @State private var respondingInteractionID: UUID?
     @State private var showAddSheet = false
     @State private var showSettings = false
     @State private var selectedSectionID: Int? = TodoListSection.todo.index
     @State private var scrubbedSectionID: Int?
+    @State private var pendingNewTodoID: UUID?
     @State private var navigationPath = NavigationPath()
     @State private var loadError: String?
-    @State private var realtimeTask: Task<Void, Never>?
-    @State private var interactionsRealtimeTask: Task<Void, Never>?
 
     @Environment(AuthModel.self) private var auth
     @Environment(\.scenePhase) private var scenePhase
@@ -33,9 +33,9 @@ struct TodoListView: View {
                             sectionPage(.todo)
                                 .frame(width: proxy.size.width, height: proxy.size.height)
                                 .id(TodoListSection.todo.index)
-                            sectionPage(.doing)
+                            sectionPage(.scheduled)
                                 .frame(width: proxy.size.width, height: proxy.size.height)
-                                .id(TodoListSection.doing.index)
+                                .id(TodoListSection.scheduled.index)
                             sectionPage(.done)
                                 .frame(width: proxy.size.width, height: proxy.size.height)
                                 .id(TodoListSection.done.index)
@@ -58,6 +58,7 @@ struct TodoListView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: Todo.self) { TodoDetailView(todo: $0) }
+            .navigationDestination(for: CronJob.self) { CronJobDetailView(job: $0) }
             .toolbar(.hidden, for: .navigationBar)
             .onChange(of: selectedSectionID) { _, newValue in
                 guard newValue != nil else { return }
@@ -65,6 +66,7 @@ struct TodoListView: View {
             }
             .sheet(isPresented: $showAddSheet) {
                 AddTodoView(userID: userID) { newTodo in
+                    pendingNewTodoID = newTodo.id
                     todos.insert(newTodo, at: 0)
                     selectedSectionID = TodoListSection.todo.index
                 }
@@ -73,22 +75,28 @@ struct TodoListView: View {
                 SettingsView()
             }
             .task { await load() }
-            .onAppear {
-                print("[list] onAppear user=\(userID.uuidString)")
-                startRealtime()
+            .task(id: userID) {
+                // Keep the user-wide realtime feed alive for the whole signed-in
+                // session. Do NOT tie this to `onAppear`/`onDisappear` — pushing
+                // a detail view fires `onDisappear` on the list and was cancelling
+                // in-flight channel joins (`CancellationError`).
+                TodoRealtimeHub.startUserFeed(userID: userID) {
+                    await load()
+                }
             }
-            .onDisappear {
-                print("[list] onDisappear user=\(userID.uuidString)")
-                stopRealtime()
+            .onChange(of: navigationPath.count) { _, count in
+                if count == 0 {
+                    TodoRealtimeHub.endTodoWatch()
+                    TodoRealtimeHub.endCronJobWatch()
+                }
             }
             .onChange(of: scenePhase) { oldPhase, newPhase in
                 print("[list] scenePhase \(oldPhase)→\(newPhase)")
-                // Backgrounding can drop the websocket; on foreground we
-                // refetch once and force-rebuild the realtime subscriptions
-                // so we never sit on stale UI.
                 guard newPhase == .active else { return }
-                stopRealtime()
-                startRealtime()
+                Task { await load() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .todoRemoteUpdate)) { _ in
+                print("[list] push refresh")
                 Task { await load() }
             }
         }
@@ -144,6 +152,15 @@ struct TodoListView: View {
 
     @ViewBuilder
     private func sectionPage(_ section: TodoListSection) -> some View {
+        if section == .scheduled {
+            scheduledSectionPage
+        } else {
+            todoSectionPage(section)
+        }
+    }
+
+    @ViewBuilder
+    private func todoSectionPage(_ section: TodoListSection) -> some View {
         let items = todos.filter { section.contains($0.status) }
         Group {
             if items.isEmpty && loadError == nil {
@@ -160,6 +177,7 @@ struct TodoListView: View {
                     ForEach(items) { todo in
                         TodoCard(
                             todo: todo,
+                            connectionSlugs: connectionSlugs(for: todo),
                             interaction: openInteractions[todo.id],
                             isResponding: respondingInteractionID != nil
                                 && respondingInteractionID == openInteractions[todo.id]?.id,
@@ -176,6 +194,45 @@ struct TodoListView: View {
                             todoContextMenuAction(for: todo)
                         }
                     }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 130)
+                    .padding(.bottom, 96)
+                }
+                .refreshable { await load() }
+            }
+        }
+    }
+
+    private var scheduledSectionPage: some View {
+        Group {
+            if cronJobs.isEmpty && loadError == nil {
+                EmptyState(section: .scheduled)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        if let loadError {
+                            Text(loadError)
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        ForEach(cronJobs) { job in
+                            CronJobCard(
+                                job: job,
+                                onOpen: { navigationPath.append(job) },
+                                onTogglePause: { toggleCronPause(job) },
+                                onDelete: { deleteCronJob(job) }
+                            )
+                            .id(cronJobRefreshID(for: job))
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    deleteCronJob(job)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 130)
@@ -212,13 +269,19 @@ struct TodoListView: View {
         .padding(.bottom, 0)
     }
 
+    private enum DockStyle {
+        static let buttonWidth: CGFloat = 34
+        static let buttonHeight: CGFloat = 38
+        static let capsulePadding: CGFloat = 6
+    }
+
     private var dockControls: some View {
         HStack(spacing: 0) {
             ForEach(TodoListSection.allCases) { section in
                 dockButton(section)
             }
         }
-        .padding(3)
+        .padding(DockStyle.capsulePadding)
         .glassEffect(.regular, in: Capsule())
         .contentShape(Capsule())
         .simultaneousGesture(
@@ -241,9 +304,9 @@ struct TodoListView: View {
             }
         } label: {
             Image(systemName: section.symbolName)
-                .font(.body.weight(.semibold))
-                .scaleEffect(isSelected ? 1.25 : 0.85)
-                .frame(width: 40, height: 40)
+                .font(.title3.weight(.semibold))
+                .scaleEffect(isSelected ? 1.15 : 0.9)
+                .frame(width: DockStyle.buttonWidth, height: DockStyle.buttonHeight)
                 .foregroundStyle(isSelected ? .primary : .secondary)
                 .opacity(isSelected ? 1 : 0.55)
         }
@@ -255,7 +318,8 @@ struct TodoListView: View {
 
     private func scrubDock(at xPosition: CGFloat) {
         let sectionCount = TodoListSection.allCases.count
-        let dockWidth = CGFloat(sectionCount * 40 + 6)
+        let dockWidth = CGFloat(sectionCount) * DockStyle.buttonWidth
+            + DockStyle.capsulePadding * 2
         let sectionWidth = dockWidth / CGFloat(sectionCount)
         let clampedX = min(max(xPosition, 0), dockWidth - 0.1)
         let sectionIndex = Int(clampedX / sectionWidth)
@@ -294,11 +358,22 @@ struct TodoListView: View {
         do {
             let latest = try await TodosAPI.list()
             todos = latest
+            cronJobs = (try? await CronJobsAPI.list()) ?? []
             let newSig = todos.map { "\($0.id.uuidString.prefix(8)):\($0.status.rawValue)" }.joined(separator: ",")
             let changed = prevSig != newSig
             print("[todos] list loaded count=\(todos.count) (Δ=\(todos.count - prevCount)) changed=\(changed)")
             loadError = nil
             await loadOpenInteractions()
+            await loadArtifacts()
+            if let pendingID = pendingNewTodoID {
+                let todoConvertedToCron =
+                    !todos.contains(where: { $0.id == pendingID })
+                    && !cronJobs.isEmpty
+                pendingNewTodoID = nil
+                if todoConvertedToCron {
+                    selectedSectionID = TodoListSection.scheduled.index
+                }
+            }
         } catch {
             print("[todos] list load failed: \(error)")
             loadError = "Couldn't load todos: \(error.localizedDescription)"
@@ -319,114 +394,48 @@ struct TodoListView: View {
         }
     }
 
-    private func startRealtime() {
-        if realtimeTask == nil {
-            print("[realtime][todos] starting for user=\(userID.uuidString)")
-            realtimeTask = Task {
-                var attempt = 0
-                // Retry loop so that a websocket drop (background, network
-                // blip, server restart) doesn't permanently kill realtime —
-                // we keep trying to resubscribe until the surrounding view
-                // disappears and cancels this task.
-                while !Task.isCancelled {
-                    attempt += 1
-                    let channel = Supa.client.channel(
-                        "public:todos:user=\(userID.uuidString)"
-                    )
-                    let inserts = channel.postgresChange(
-                        AnyAction.self,
-                        schema: "public",
-                        table: "todos"
-                    )
-                    do {
-                        try await channel.subscribeWithError()
-                        print("[realtime][todos] subscribe ok status=\(channel.status) attempt=\(attempt)")
-                    } catch {
-                        print("[realtime][todos] subscribe FAILED status=\(channel.status) error=\(error) attempt=\(attempt)")
-                    }
-                    var eventCount = 0
-                    for await change in inserts {
-                        if Task.isCancelled { break }
-                        eventCount += 1
-                        print("[realtime][todos] event #\(eventCount): \(change)")
-                        await handle(change)
-                    }
-                    // `removeChannel` (not `unsubscribe`) is what evicts
-                    // the channel from the realtime client's internal
-                    // topic cache. Without this, the next iteration's
-                    // `Supa.client.channel(name)` returns the same
-                    // already-subscribed channel and `postgresChange`
-                    // throws "Cannot add callbacks after subscribe()".
-                    await Supa.client.removeChannel(channel)
-                    print("[realtime][todos] stream ended events=\(eventCount) cancelled=\(Task.isCancelled)")
-                    if Task.isCancelled { break }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-                print("[realtime][todos] task exit")
-            }
-        }
-
-        if interactionsRealtimeTask == nil {
-            print("[realtime][todo_interactions] starting for user=\(userID.uuidString)")
-            interactionsRealtimeTask = Task {
-                var attempt = 0
-                while !Task.isCancelled {
-                    attempt += 1
-                    let channel = Supa.client.channel(
-                        "public:todo_interactions:user=\(userID.uuidString)"
-                    )
-                    let stream = channel.postgresChange(
-                        AnyAction.self,
-                        schema: "public",
-                        table: "todo_interactions"
-                    )
-                    do {
-                        try await channel.subscribeWithError()
-                        print("[realtime][todo_interactions] subscribe ok status=\(channel.status) attempt=\(attempt)")
-                    } catch {
-                        print("[realtime][todo_interactions] subscribe FAILED status=\(channel.status) error=\(error) attempt=\(attempt)")
-                    }
-                    var eventCount = 0
-                    for await change in stream {
-                        if Task.isCancelled { break }
-                        eventCount += 1
-                        print("[realtime][todo_interactions] event #\(eventCount): \(change)")
-                        await loadOpenInteractions()
-                    }
-                    await Supa.client.removeChannel(channel)
-                    print("[realtime][todo_interactions] stream ended events=\(eventCount) cancelled=\(Task.isCancelled)")
-                    if Task.isCancelled { break }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-                print("[realtime][todo_interactions] task exit")
-            }
-        }
-    }
-
-    /// Cancel the realtime tasks and clear their handles so the next
-    /// `startRealtime()` call (e.g. on `.onAppear` after returning from
-    /// a pushed detail view) actually re-subscribes. Without nil-ing out
-    /// the State the `guard … == nil` short-circuits and live updates
-    /// stay dead until the view is re-created from scratch.
-    private func stopRealtime() {
-        realtimeTask?.cancel()
-        realtimeTask = nil
-        interactionsRealtimeTask?.cancel()
-        interactionsRealtimeTask = nil
-    }
-
     @MainActor
-    private func handle(_ change: AnyAction) async {
-        // Cheapest correct thing: refetch.
-        await load()
+    private func loadArtifacts() async {
+        let ids = todos.map(\.id)
+        guard !ids.isEmpty else {
+            artifactsByTodoID = [:]
+            return
+        }
+        do {
+            artifactsByTodoID = try await TodosAPI.artifacts(for: ids)
+        } catch {
+            print("[artifacts] batch load failed: \(error)")
+        }
+    }
+
+    private func connectionSlugs(for todo: Todo) -> [String] {
+        TodoArtifact.connectionSlugs(
+            todoSlug: todo.connection_slug,
+            artifacts: artifactsByTodoID[todo.id] ?? []
+        )
+    }
+
+    private func cronJobRefreshID(for job: CronJob) -> String {
+        [
+            job.id.uuidString,
+            job.state.rawValue,
+            job.name,
+            job.schedule,
+            job.next_run_at?.ISO8601Format() ?? "",
+            job.updated_at.ISO8601Format()
+        ].joined(separator: "|")
     }
 
     private func cardRefreshID(for todo: Todo) -> String {
-        [
+        let artifactSig = (artifactsByTodoID[todo.id] ?? [])
+            .map { "\($0.artifact_key):\($0.kind.rawValue):\($0.updated_at.ISO8601Format())" }
+            .joined(separator: ",")
+        return [
             todo.id.uuidString,
             todo.status.rawValue,
             todo.title,
             todo.connection_slug ?? "",
+            artifactSig,
             todo.preparation_summary ?? "",
             todo.updated_at.ISO8601Format()
         ].joined(separator: "|")
@@ -471,7 +480,6 @@ struct TodoListView: View {
     private func request(_ todo: Todo) {
         guard let index = todos.firstIndex(where: { $0.id == todo.id }) else { return }
         todos[index].status = .requested
-        selectedSectionID = TodoListSection.doing.index
         Task {
             do {
                 try await TodosAPI.setStatus(todo.id, .requested)
@@ -551,11 +559,39 @@ struct TodoListView: View {
             }
         }
     }
+
+    private func toggleCronPause(_ job: CronJob) {
+        guard let index = cronJobs.firstIndex(where: { $0.id == job.id }) else { return }
+        let pausing = job.state != .paused
+        cronJobs[index].state = pausing ? .paused : .scheduled
+        cronJobs[index].enabled = !pausing
+        Task {
+            do {
+                if pausing {
+                    try await CronJobsAPI.setState(job.id, .paused)
+                    try await CronJobsAPI.setEnabled(job.id, false)
+                } else {
+                    try await CronJobsAPI.setEnabled(job.id, true)
+                    try await CronJobsAPI.setState(job.id, .scheduled)
+                }
+            } catch {
+                print("[cron] pause toggle failed id=\(job.id): \(error)")
+                await load()
+            }
+        }
+    }
+
+    private func deleteCronJob(_ job: CronJob) {
+        cronJobs.removeAll { $0.id == job.id }
+        Task {
+            try? await CronJobsAPI.delete(job.id)
+        }
+    }
 }
 
 private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     case todo
-    case doing
+    case scheduled
     case done
 
     var id: String { rawValue }
@@ -563,15 +599,15 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     var index: Int {
         switch self {
         case .todo: return 0
-        case .doing: return 1
+        case .scheduled: return 1
         case .done: return 2
         }
     }
 
     var title: String {
         switch self {
-        case .todo: return "Todo"
-        case .doing: return "Doing"
+        case .todo: return "Tasks"
+        case .scheduled: return "Scheduled"
         case .done: return "Done"
         }
     }
@@ -579,7 +615,7 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     var symbolName: String {
         switch self {
         case .todo: return "circle"
-        case .doing: return "progress.indicator"
+        case .scheduled: return "clock.arrow.trianglehead.counterclockwise.rotate.90"
         case .done: return "checkmark.circle.fill"
         }
     }
@@ -587,19 +623,110 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     func contains(_ status: TodoStatus) -> Bool {
         switch self {
         case .todo:
-            // Newly-created todos enter `preparing` while the runner does the
-            // AI prep pass. We keep them in the Todo section so the spinner
-            // sits where the user just added them.
-            return status == .todo || status == .preparing
-        case .doing:
-            return status == .requested
-                || status == .running
-                || status == .needs_auth
-                || status == .needs_input
-                || status == .failed
-                || status == .cancelled
+            // All non-done tasks live in one list — preparing, ready, in-flight,
+            // waiting on the user, failed, and cancelled.
+            return status != .done
+        case .scheduled:
+            return false
         case .done:
             return status == .done
+        }
+    }
+}
+
+private struct CronJobCard: View {
+    let job: CronJob
+    let onOpen: () -> Void
+    let onTogglePause: () -> Void
+    let onDelete: () -> Void
+
+    private static let scheduleSymbol =
+        "clock.arrow.trianglehead.counterclockwise.rotate.90"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
+            HStack(spacing: 8) {
+                Image(systemName: Self.scheduleSymbol)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(TodoCardStyle.muted)
+                    .frame(width: 20, height: 20)
+                HStack(spacing: 8) {
+                    Text("Scheduled")
+                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                        .foregroundStyle(TodoCardStyle.muted)
+                    Spacer(minLength: 8)
+                    topRowTrailing
+                        .frame(width: 20, height: 20)
+                }
+            }
+
+            Button(action: onOpen) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(job.name)
+                        .font(.system(size: 20, weight: .regular, design: .rounded))
+                        .foregroundStyle(Color.black)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Text(job.schedulePillText)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color(white: 0.35))
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(Capsule().fill(Color(white: 0.92)))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let next = job.nextRunLabel, job.state == .scheduled {
+                        Text("Next: \(next)")
+                            .font(.system(size: 13, weight: .regular, design: .rounded))
+                            .foregroundStyle(TodoCardStyle.muted.opacity(0.85))
+                    } else {
+                        Text(job.state.label)
+                            .font(.system(size: 13, weight: .regular, design: .rounded))
+                            .foregroundStyle(TodoCardStyle.muted.opacity(0.85))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if job.state != .completed {
+                    PillButton(
+                        label: job.state == .paused ? "Resume" : "Pause",
+                        style: .neutral,
+                        action: onTogglePause
+                    )
+                }
+            }
+        }
+        .padding(TodoCardStyle.cardPadding)
+        .frame(maxWidth: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var topRowTrailing: some View {
+        if job.state.isActive {
+            ProgressView()
+                .controlSize(.small)
+                .tint(TodoCardStyle.muted)
+        } else if let slug = job.connection_slug, !slug.isEmpty {
+            ConnectionLogo(slug: slug)
+        } else {
+            Image(systemName: Self.scheduleSymbol)
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(TodoCardStyle.muted)
         }
     }
 }
@@ -611,6 +738,8 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
 ///   Row 3: status text + primary action (Do it, Cancel, or inline option)
 private struct TodoCard: View {
     let todo: Todo
+    /// Toolkit logos for the top row (prep slug + artifact providers).
+    let connectionSlugs: [String]
     /// Open interaction for this todo, if the agent is waiting on a reply.
     /// Loaded by the parent in a single batched query so the card stays
     /// pure-presentational.
@@ -688,8 +817,8 @@ private struct TodoCard: View {
             ProgressView()
                 .controlSize(.small)
                 .tint(TodoCardStyle.muted)
-        } else if let slug = todo.connection_slug, !slug.isEmpty {
-            ConnectionLogo(slug: slug)
+        } else if !connectionSlugs.isEmpty {
+            ConnectionLogosRow(slugs: connectionSlugs, iconSize: 18, spacing: 4)
         } else {
             Image(systemName: trailingSymbol)
                 .font(.system(size: 14, weight: .regular))
@@ -905,6 +1034,26 @@ struct PillButton: View {
     }
 }
 
+/// Stacked Composio toolkit logos (e.g. Sheets + Gmail on one task).
+struct ConnectionLogosRow: View {
+    let slugs: [String]
+    var iconSize: CGFloat = 18
+    var spacing: CGFloat = 6
+
+    var body: some View {
+        if !slugs.isEmpty {
+            HStack(spacing: spacing) {
+                ForEach(slugs, id: \.self) { slug in
+                    ConnectionLogo(slug: slug)
+                        .frame(width: iconSize, height: iconSize)
+                        .accessibilityLabel("Connection: \(slug)")
+                }
+            }
+            .animation(.smooth(duration: 0.25), value: slugs)
+        }
+    }
+}
+
 /// Renders a Composio toolkit logo from the asset catalog (e.g. "gmail",
 /// "googlecalendar"). Falls back to a generic SF Symbol when the asset is
 /// missing so we never crash on an unknown slug.
@@ -973,15 +1122,15 @@ private struct EmptyState: View {
     private var iconName: String {
         switch section {
         case .todo: return "checklist"
-        case .doing: return "progress.indicator"
+        case .scheduled: return "clock.arrow.trianglehead.counterclockwise.rotate.90"
         case .done: return "checkmark.seal"
         }
     }
 
     private var title: String {
         switch section {
-        case .todo: return "No todos yet"
-        case .doing: return "Nothing in progress"
+        case .todo: return "No tasks yet"
+        case .scheduled: return "No scheduled tasks"
         case .done: return "Nothing done yet"
         }
     }
@@ -989,11 +1138,11 @@ private struct EmptyState: View {
     private var subtitle: String {
         switch section {
         case .todo:
-            return "Tap + to add something. Then swipe to Doing and tap \u{201C}Do it\u{201D} so the agent can take it from there."
-        case .doing:
-            return "Tasks the agent is working on, queued, or that need your input will appear here."
+            return "Tap + to add something. Tasks stay here until you mark them done — the agent handles them when you tap \u{201C}Do it\u{201D}."
+        case .scheduled:
+            return "Recurring automations like daily email checks will appear here when the agent sets them up."
         case .done:
-            return "Completed todos will show up here."
+            return "Completed tasks will show up here."
         }
     }
 }

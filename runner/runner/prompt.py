@@ -153,15 +153,22 @@ Format (one JSON object per block, wrapped exactly like this):
 
 Payload shapes by type:
 - link:     {"url":"https://...","provider":"googlesheets|googledocs|gmail|..."}
-- email:    {"to":["a@b.com"],"subject":"...","body":"..."}
+- email:    {"to":["a@b.com"],"subject":"...","body":"...",
+             "provider":"gmail"}
 - calendar: {"title":"...","start":"<ISO8601>","end":"<ISO8601>",
              "location":"...","attendees":["a@b.com"],"url":"https://..."}
 - text:     {"text":"..."}
 
 Rules:
-- Use a stable ``key`` per artifact (e.g. "sheet", "email", "invite") and
-  reuse the same key in a later turn to update the same card rather than
-  creating a new one.
+- Use a stable ``key`` per artifact and reuse the same key in a later turn
+  to update that card rather than creating a new one.
+- Multi-step tasks should drill down in the UI: emit the primary deliverable
+  first (e.g. key ``sheet`` with type ``link`` and provider ``googlesheets``),
+  then emit one ``email`` artifact per draft with distinct keys such as
+  ``email-acme``, ``email-beta``, … each with provider ``gmail``. On later
+  turns, re-emit earlier artifacts plus any new ones so the header keeps
+  the sheet and accumulates draft cards underneath.
+- Do not collapse many drafts into one artifact or one long text block.
 - Only emit artifacts for things the user actually wants to revisit. Skip
   intermediate search results, scratch notes, or tool diagnostics.
 - The block must be valid JSON on its own. Do not wrap it in a code fence.

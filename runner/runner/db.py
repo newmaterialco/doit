@@ -600,3 +600,268 @@ class DB:
                 "upsert_artifact(todo=%s, key=%s) failed: %s",
                 todo_id, key, e,
             )
+
+    # ------------------------------------------------------------------
+    # Cron jobs (scheduled automations)
+    # ------------------------------------------------------------------
+
+    def insert_cron_job(self, fields: dict[str, Any]) -> dict | None:
+        try:
+            resp = self._client.table("cron_jobs").insert(fields).execute()
+            rows = resp.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            log.error("insert_cron_job failed: %s", e)
+            return None
+
+    def update_cron_job(self, job_id: str, fields: dict[str, Any]) -> None:
+        try:
+            self._client.table("cron_jobs").update(fields).eq("id", job_id).execute()
+        except Exception as e:
+            log.error("update_cron_job(%s) failed: %s", job_id, e)
+
+    def delete_todo(self, todo_id: str) -> None:
+        try:
+            self._client.table("todos").delete().eq("id", todo_id).execute()
+        except Exception as e:
+            log.error("delete_todo(%s) failed: %s", todo_id, e)
+
+    def insert_prepared_todo(
+        self,
+        *,
+        user_id: str,
+        title: str,
+        original_title: str,
+        detail: str | None = None,
+        connection_slug: str | None = None,
+        preparation_summary: str | None = None,
+    ) -> dict | None:
+        """Insert an already-prepared todo (status=todo) for multi-task splits."""
+        return self.insert_spawned_todo(
+            user_id=user_id,
+            title=title,
+            original_title=original_title,
+            detail=detail,
+            connection_slug=connection_slug,
+            preparation_summary=preparation_summary,
+            spawn_key=None,
+            spawned_by_todo_id=None,
+            spawned_by_cron_job_id=None,
+        )
+
+    def spawn_key_exists(self, user_id: str, spawn_key: str) -> bool:
+        if not spawn_key:
+            return False
+        try:
+            resp = (
+                self._client.table("todos")
+                .select("id")
+                .eq("user_id", user_id)
+                .eq("spawn_key", spawn_key)
+                .limit(1)
+                .execute()
+            )
+            return bool(resp.data)
+        except Exception as e:
+            log.error("spawn_key_exists(%s) failed: %s", spawn_key, e)
+            return False
+
+    def insert_spawned_todo(
+        self,
+        *,
+        user_id: str,
+        title: str,
+        original_title: str,
+        detail: str | None = None,
+        connection_slug: str | None = None,
+        preparation_summary: str | None = None,
+        spawn_key: str | None = None,
+        spawned_by_todo_id: str | None = None,
+        spawned_by_cron_job_id: str | None = None,
+    ) -> dict | None:
+        """Insert a ready todo (status=todo), optionally with spawn provenance."""
+        row: dict[str, Any] = {
+            "user_id": user_id,
+            "title": title,
+            "original_title": original_title,
+            "detail": detail,
+            "status": "todo",
+        }
+        if connection_slug:
+            row["connection_slug"] = connection_slug
+        if preparation_summary:
+            row["preparation_summary"] = preparation_summary
+        if spawn_key:
+            row["spawn_key"] = spawn_key
+        if spawned_by_todo_id:
+            row["spawned_by_todo_id"] = spawned_by_todo_id
+        if spawned_by_cron_job_id:
+            row["spawned_by_cron_job_id"] = spawned_by_cron_job_id
+        try:
+            resp = self._client.table("todos").insert(row).execute()
+            rows = resp.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            log.error("insert_spawned_todo failed: %s", e)
+            return None
+
+    def claim_due_cron_jobs(self, *, limit: int = 3) -> list[dict]:
+        """Return due cron jobs and mark them running (best-effort claim)."""
+        now_iso = datetime.now(UTC).isoformat()
+        try:
+            resp = (
+                self._client.table("cron_jobs")
+                .select("*")
+                .eq("enabled", True)
+                .eq("state", "scheduled")
+                .lte("next_run_at", now_iso)
+                .order("next_run_at")
+                .limit(limit)
+                .execute()
+            )
+        except Exception as e:
+            log.error("claim_due_cron_jobs select failed: %s", e)
+            return []
+        claimed: list[dict] = []
+        for row in resp.data or []:
+            job_id = row["id"]
+            upd = (
+                self._client.table("cron_jobs")
+                .update({"state": "running"})
+                .eq("id", job_id)
+                .eq("state", "scheduled")
+                .execute()
+            )
+            if upd.data:
+                claimed.append(upd.data[0])
+        return claimed
+
+    def get_cron_job(self, job_id: str) -> dict | None:
+        try:
+            resp = (
+                self._client.table("cron_jobs")
+                .select("*")
+                .eq("id", job_id)
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            log.error("get_cron_job(%s) failed: %s", job_id, e)
+            return None
+
+    def claim_next_configuring_cron_job(self) -> dict | None:
+        """Return the oldest cron job needing configuration."""
+        try:
+            resp = (
+                self._client.table("cron_jobs")
+                .select("*")
+                .eq("state", "configuring")
+                .order("updated_at")
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            log.error("claim_next_configuring_cron_job failed: %s", e)
+            return None
+
+    def get_unconsumed_cron_messages(self, cron_job_id: str) -> list[dict]:
+        try:
+            resp = (
+                self._client.table("cron_job_messages")
+                .select("*")
+                .eq("cron_job_id", cron_job_id)
+                .is_("consumed_at", "null")
+                .order("created_at")
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            log.error("get_unconsumed_cron_messages(%s) failed: %s", cron_job_id, e)
+            return []
+
+    def mark_cron_messages_consumed(self, message_ids: list[str]) -> None:
+        if not message_ids:
+            return
+        now = datetime.now(UTC).isoformat()
+        try:
+            self._client.table("cron_job_messages").update(
+                {"consumed_at": now}
+            ).in_("id", message_ids).execute()
+        except Exception as e:
+            log.error("mark_cron_messages_consumed failed: %s", e)
+
+    def supersede_open_cron_interactions(self, cron_job_id: str) -> None:
+        try:
+            self._client.table("cron_job_interactions").update(
+                {"status": "superseded"}
+            ).eq("cron_job_id", cron_job_id).eq("status", "open").execute()
+        except Exception as e:
+            log.error("supersede_open_cron_interactions(%s) failed: %s", cron_job_id, e)
+
+    def insert_cron_interaction(
+        self,
+        *,
+        cron_job_id: str,
+        user_id: str,
+        kind: str,
+        prompt: str,
+        payload: dict[str, Any] | None = None,
+        hermes_run_id: str | None = None,
+    ) -> dict | None:
+        try:
+            resp = (
+                self._client.table("cron_job_interactions")
+                .insert(
+                    {
+                        "cron_job_id": cron_job_id,
+                        "user_id": user_id,
+                        "kind": kind,
+                        "prompt": prompt,
+                        "payload": payload or {},
+                        "hermes_run_id": hermes_run_id,
+                    }
+                )
+                .execute()
+            )
+            rows = resp.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            log.error("insert_cron_interaction(%s) failed: %s", cron_job_id, e)
+            return None
+
+    def mark_cron_interaction(self, interaction_id: str, *, status: str) -> None:
+        fields: dict[str, Any] = {"status": status}
+        if status in ("responded", "cancelled", "superseded"):
+            fields["responded_at"] = datetime.now(UTC).isoformat()
+        try:
+            self._client.table("cron_job_interactions").update(fields).eq(
+                "id", interaction_id
+            ).execute()
+        except Exception as e:
+            log.error("mark_cron_interaction(%s) failed: %s", interaction_id, e)
+
+    def get_latest_responded_cron_interaction(self, cron_job_id: str) -> dict | None:
+        try:
+            resp = (
+                self._client.table("cron_job_interactions")
+                .select("*")
+                .eq("cron_job_id", cron_job_id)
+                .eq("status", "responded")
+                .order("responded_at", desc=True)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            log.error(
+                "get_latest_responded_cron_interaction(%s) failed: %s",
+                cron_job_id,
+                e,
+            )
+            return None

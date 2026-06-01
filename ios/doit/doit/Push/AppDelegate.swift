@@ -37,7 +37,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        print("[push] willPresent notification userInfo=\(notification.request.content.userInfo)")
+        let userInfo = notification.request.content.userInfo
+        print("[push] willPresent notification userInfo=\(userInfo)")
+        if let s = userInfo["todo_id"] as? String, let id = UUID(uuidString: s) {
+            Task { @MainActor in
+                TodoRemoteUpdate.post(todoID: id)
+            }
+        }
         completionHandler([.banner, .sound, .badge])
     }
 

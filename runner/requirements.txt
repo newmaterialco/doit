@@ -2,3 +2,4 @@ httpx==0.27.2
 supabase==2.7.4
 aioapns==3.3
 python-dotenv==1.0.1
+croniter==2.0.5

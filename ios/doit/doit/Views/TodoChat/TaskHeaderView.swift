@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// Shared layout constants for the title column, checkmark gutter, and
+/// metadata row inset so the date and downstream cards line up with the
+/// task title instead of the leading checkmark circle.
+private enum TaskHeaderLayout {
+    static let statusIconSize: CGFloat = 28
+    static let statusIconSpacing: CGFloat = 12
+    static var titleLeadingInset: CGFloat { statusIconSize + statusIconSpacing }
+    /// Extra trailing inset on the date / connection row beyond the
+    /// container's horizontal padding so the logo doesn't hug the edge.
+    static let metadataExtraTrailingPadding: CGFloat = 8
+    static let connectorCornerRadius: CGFloat = 8
+    /// Space between the horizontal connector stub and the component edge.
+    static let connectorComponentGap: CGFloat = 8
+}
+
 /// Top panel of the split-screen detail view: a back chevron pinned to the
 /// top-left (so navigation mirrors the system nav bar), a more-actions
 /// (`ellipsis`) menu on the right that exposes "Stop task" while the agent
@@ -11,9 +26,39 @@ struct TaskHeaderView: View {
     /// Google Sheet link, a sent email summary, a calendar invite). Each
     /// renders as a compact card under the title. Empty by default so
     /// older callers and previews don't need to plumb anything through.
-    var artifacts: [TodoArtifact] = []
+    let artifacts: [TodoArtifact]
+    /// Short blurb describing what the agent is currently working on or
+    /// waiting on — sourced from the open interaction's `summary`.
+    /// Rendered under the title in a dashed-border card so it reads as
+    /// a status note (not as part of the chat). `nil` when there's
+    /// nothing to surface.
+    let agentStatus: String?
     let onBack: () -> Void
     let onDelete: () -> Void
+
+    /// Vertical position (in `TaskHeaderTitleBlock` space) where the
+    /// connector bends into the first attached component — measured from
+    /// the component's midline via `ConnectorBendYKey`.
+    @State private var connectorBendY: CGFloat = 0
+
+    /// Explicit memberwise init so Xcode's incremental compiler can't
+    /// keep a stale synthesized signature around when this view's
+    /// surface changes — once bit me with "Extra argument 'agentStatus'
+    /// in call" after editing the property list. Defaults keep older
+    /// call sites and previews terse.
+    init(
+        todo: Todo,
+        artifacts: [TodoArtifact] = [],
+        agentStatus: String? = nil,
+        onBack: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.todo = todo
+        self.artifacts = artifacts
+        self.agentStatus = agentStatus
+        self.onBack = onBack
+        self.onDelete = onDelete
+    }
 
     var body: some View {
         ScrollView {
@@ -58,10 +103,8 @@ struct TaskHeaderView: View {
                     .accessibilityLabel("More options")
                 }
 
-                // Metadata row: human-formatted creation time on the leading
-                // side, connection logo on the trailing side. Mirrors the
-                // top-row treatment on the home-feed task tile so the detail
-                // view feels like a continuation of that card.
+                // Metadata row: date aligns with the title column; connection
+                // logo sits further in from the trailing edge.
                 HStack(alignment: .center, spacing: 8) {
                     Text(humanizedDate(todo.created_at))
                         .font(.system(size: 13, weight: .regular, design: .rounded))
@@ -70,38 +113,122 @@ struct TaskHeaderView: View {
 
                     Spacer(minLength: 8)
 
-                    if let slug = todo.connection_slug, !slug.isEmpty {
-                        ConnectionLogo(slug: slug)
-                            .frame(width: 18, height: 18)
-                            .accessibilityLabel("Connection: \(slug)")
-                    }
+                    connectionLogosRow
                 }
+                .padding(.leading, TaskHeaderLayout.titleLeadingInset)
+                .padding(.trailing, TaskHeaderLayout.metadataExtraTrailingPadding)
                 .padding(.top, 12)
 
-                HStack(alignment: .top, spacing: 12) {
-                    StatusIndicatorIcon(status: todo.status)
-                        .frame(width: 28, height: 28)
-
-                    Text(todo.title)
-                        .font(.system(size: 20, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.primary)
-                        .multilineTextAlignment(.leading)
-                        .lineLimit(3)
-
-                    Spacer(minLength: 0)
-                }
-
-                if !artifacts.isEmpty {
-                    artifactsSection
-                }
+                taskTitleBlock
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(.smooth(duration: 0.3), value: agentStatus)
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var connectionSlugs: [String] {
+        TodoArtifact.connectionSlugs(todoSlug: todo.connection_slug, artifacts: artifacts)
+    }
+
+    @ViewBuilder
+    private var connectionLogosRow: some View {
+        ConnectionLogosRow(slugs: connectionSlugs)
+    }
+
+    private var hasContentBelowTitle: Bool {
+        if let status = agentStatus, !status.isEmpty { return true }
+        return !artifacts.isEmpty
+    }
+
+    /// Checkmark, title, and any agent-status / artifact cards share one
+    /// row so a timeline connector can descend from the icon and curve into
+    /// the title-aligned content below.
+    @ViewBuilder
+    private var taskTitleBlock: some View {
+        HStack(alignment: .top, spacing: TaskHeaderLayout.statusIconSpacing) {
+            StatusIndicatorIcon(status: todo.status)
+                .frame(
+                    width: TaskHeaderLayout.statusIconSize,
+                    height: TaskHeaderLayout.statusIconSize
+                )
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text(todo.title)
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
+
+                if let status = agentStatus, !status.isEmpty {
+                    agentStatusBox(text: status)
+                        .connectorAnchor()
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                if !artifacts.isEmpty {
+                    artifactsSection(anchorFirst: agentStatus?.isEmpty != false)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .coordinateSpace(name: "TaskHeaderTitleBlock")
+        .onPreferenceChange(ConnectorBendYKey.self) { bendY in
+            connectorBendY = bendY
+        }
+        .background {
+            if hasContentBelowTitle,
+               connectorBendY > TaskHeaderLayout.statusIconSize {
+                GeometryReader { proxy in
+                    TaskHeaderConnectorShape(
+                        iconCenterX: TaskHeaderLayout.statusIconSize / 2,
+                        contentLeadingX: TaskHeaderLayout.titleLeadingInset,
+                        iconBottomY: TaskHeaderLayout.statusIconSize,
+                        bendY: connectorBendY,
+                        cornerRadius: TaskHeaderLayout.connectorCornerRadius,
+                        componentGap: TaskHeaderLayout.connectorComponentGap
+                    )
+                    .stroke(
+                        Color.secondary.opacity(0.28),
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+                    )
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+            }
+        }
+    }
+
+    /// "Waiting on you" status card: dashed rounded border, a small
+    /// leading sparkle icon to signal that this is the agent's current
+    /// thought, and the summary text wrapping as many lines as needed.
+    /// Designed to fade in when the interaction opens and out when the
+    /// user answers — the parent animates on `agentStatus` changes.
+    @ViewBuilder
+    private func agentStatusBox(text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+            Text(text)
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    Color.secondary.opacity(0.45),
+                    style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                )
+        )
     }
 
     /// One card per artifact stacked vertically. Lives just below the
@@ -109,15 +236,55 @@ struct TaskHeaderView: View {
     /// surrounding `ScrollView` lets the header expand when there are
     /// multiple artifacts without squeezing the chat panel.
     @ViewBuilder
-    private var artifactsSection: some View {
+    private func artifactsSection(anchorFirst: Bool) -> some View {
+        let grouped = TodoArtifact.groupedForDisplay(artifacts)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(artifacts) { artifact in
+            ForEach(Array(grouped.primary.enumerated()), id: \.element.id) { index, artifact in
                 TaskArtifactView(artifact: artifact)
+                    .modifier(ConditionalConnectorAnchor(isActive: anchorFirst && index == 0))
                     .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            if !grouped.emailDrafts.isEmpty {
+                emailDraftsSection(
+                    drafts: grouped.emailDrafts,
+                    anchorFirst: anchorFirst && grouped.primary.isEmpty
+                )
             }
         }
         .animation(.smooth(duration: 0.25), value: artifacts.map(\.id))
         .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private func emailDraftsSection(
+        drafts: [TodoArtifact],
+        anchorFirst: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ConnectionLogo(slug: drafts.first?.emailProvider ?? "gmail")
+                    .frame(width: 16, height: 16)
+                Text(drafts.count == 1 ? "Draft email" : "Draft emails (\(drafts.count))")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(drafts.enumerated()), id: \.element.id) { index, artifact in
+                    TaskArtifactView(artifact: artifact)
+                        .modifier(ConditionalConnectorAnchor(isActive: anchorFirst && index == 0))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .padding(.leading, 12)
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(Color.secondary.opacity(0.22))
+                    .frame(width: 2)
+            }
+        }
     }
 
     /// Formats a creation timestamp the way iOS apps usually do — anchored
@@ -163,6 +330,80 @@ struct StatusIndicatorIcon: View {
             .font(.system(size: 22, weight: .regular))
             .foregroundStyle(status == .done ? Color.green : Color.secondary)
             .symbolEffect(.pulse, isActive: status.isActive)
+    }
+}
+
+/// Timeline stroke from the checkmark column toward attached content:
+/// vertical under the icon, a rounded 90° corner, then a straight
+/// horizontal stub that stops short of the component.
+private struct TaskHeaderConnectorShape: Shape {
+    var iconCenterX: CGFloat
+    var contentLeadingX: CGFloat
+    var iconBottomY: CGFloat
+    var bendY: CGFloat
+    var cornerRadius: CGFloat
+    var componentGap: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let r = cornerRadius
+        let y = min(max(bendY, iconBottomY + r + 1), rect.maxY)
+        let horizontalEndX = contentLeadingX - componentGap
+
+        path.move(to: CGPoint(x: iconCenterX, y: iconBottomY))
+        path.addLine(to: CGPoint(x: iconCenterX, y: y - r))
+        path.addArc(
+            center: CGPoint(x: iconCenterX + r, y: y - r),
+            radius: r,
+            startAngle: .radians(.pi),
+            endAngle: .radians(.pi / 2),
+            clockwise: true
+        )
+        if horizontalEndX > iconCenterX + r {
+            path.addLine(to: CGPoint(x: horizontalEndX, y: y))
+        }
+        return path
+    }
+}
+
+/// Reports the vertical midpoint of the first attached component so the
+/// connector knows where to bend into it.
+private struct ConnectorBendYKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
+
+private struct ConnectorAnchorModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.background {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: ConnectorBendYKey.self,
+                    value: geo.frame(in: .named("TaskHeaderTitleBlock")).midY
+                )
+            }
+        }
+    }
+}
+
+private struct ConditionalConnectorAnchor: ViewModifier {
+    let isActive: Bool
+
+    func body(content: Content) -> some View {
+        if isActive {
+            content.modifier(ConnectorAnchorModifier())
+        } else {
+            content
+        }
+    }
+}
+
+private extension View {
+    func connectorAnchor() -> some View {
+        modifier(ConnectorAnchorModifier())
     }
 }
 
@@ -228,7 +469,6 @@ private struct ArtifactCardShell<Content: View>: View {
             content()
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.primary.opacity(0.06))
@@ -289,20 +529,16 @@ private struct LinkArtifactCard: View {
     }
 }
 
-/// Renders an email artifact as a "sent message" preview: To/Subject in
-/// the header, body truncated below. Not tappable — the email already
-/// lives in the user's outbox/Sent folder, so we just summarize.
+/// Email draft preview: To/Subject in the header, body truncated below.
 private struct EmailArtifactCard: View {
     let artifact: TodoArtifact
 
     var body: some View {
         let draft = artifact.emailDraft
-        let title = artifact.title ?? draft?.subject ?? "Email"
+        let title = artifact.title ?? draft?.subject ?? "Email draft"
         ArtifactCardShell(
             icon: AnyView(
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(.secondary)
+                ConnectionLogo(slug: artifact.emailProvider)
             ),
             title: title
         ) {

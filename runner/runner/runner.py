@@ -22,6 +22,7 @@ from .model_settings import AgentModelApplier
 from .prepare import (
     CONNECTION_SLUGS,
     PREP_INSTRUCTIONS,
+    augment_cron_from_text,
     build_prepare_prompt,
     parse_prepare,
 )
@@ -33,6 +34,9 @@ from .prompt import (
     session_id_for_user as _session_id_for_user,
 )
 from .push import Pusher, PushPayload
+from .spawn import apply_spawned_tasks
+from .cron import configure_one_cron_job, run_due_cron_jobs
+from .schedule import compute_next_run
 
 log = logging.getLogger(__name__)
 
@@ -475,6 +479,18 @@ async def prepare_one_todo(
         db.update_todo(todo_id, {"status": "todo"})
         return
 
+    # Safety net: if the user asked for recurrence but the model returned
+    # kind=task (or cron without a schedule), infer from the raw input.
+    combined_input = f"{raw_title}\n{detail}".strip()
+    result = augment_cron_from_text(result, combined_input)
+    log.info(
+        "prep result todo=%s kind=%s schedule=%r ready=%s",
+        todo_id,
+        result.kind,
+        result.schedule,
+        result.ready,
+    )
+
     updates: dict[str, Any] = {}
     if result.title:
         updates["title"] = result.title
@@ -521,9 +537,62 @@ async def prepare_one_todo(
         )
         return
 
-    # Ready to execute — flip to 'todo' so the card shows the Do it button.
+    # Recurring automation — convert to a cron job and remove the placeholder todo.
+    if result.is_cron and result.schedule:
+        from datetime import UTC, datetime
+
+        nxt = compute_next_run(result.schedule)
+        name = result.title or raw_title
+        prompt_text = detail.strip() or raw_title
+        if result.summary and result.summary not in prompt_text:
+            prompt_text = f"{prompt_text}\n\n{result.summary}".strip()
+
+        job_fields: dict[str, Any] = {
+            "user_id": user_id,
+            "name": name[:200],
+            "prompt": prompt_text[:4000],
+            "original_prompt": raw_title[:4000],
+            "schedule": result.schedule,
+            "schedule_display": result.schedule_display,
+            "connection_slug": result.connection_slug,
+            "state": "configuring",
+            "enabled": False,
+            "next_run_at": (nxt or datetime.now(UTC)).isoformat(),
+        }
+        inserted = db.insert_cron_job(job_fields)
+        if inserted:
+            log.info(
+                "prep converted todo %s to cron job %s schedule=%r",
+                todo_id,
+                inserted.get("id"),
+                result.schedule,
+            )
+            db.delete_todo(todo_id)
+            await configure_one_cron_job(cfg, db, pusher, inserted)
+        else:
+            log.error(
+                "cron insert failed for todo %s — is migration "
+                "20240601000011_cron_jobs applied? Leaving as task.",
+                todo_id,
+            )
+            updates["status"] = "todo"
+            db.update_todo(todo_id, updates)
+        return
+
+    # Ready — flip to 'todo' so the card shows the Do it button.
     updates["status"] = "todo"
     db.update_todo(todo_id, updates)
+
+    # Multi-task split: insert extras as already-prepared todos.
+    for extra in result.additional_tasks:
+        db.insert_prepared_todo(
+            user_id=user_id,
+            title=extra.title,
+            original_title=extra.title,
+            detail=None,
+            connection_slug=extra.connection_slug,
+            preparation_summary=extra.summary,
+        )
 
 
 async def _collect_final_text(hermes: HermesClient, run_id: str) -> str:
@@ -583,6 +652,23 @@ async def _consume_run(
                 payload=artifact.payload,
                 hermes_run_id=run_id,
             )
+        if effect.spawned_tasks and effect.new_status == "done":
+            spawned_count = apply_spawned_tasks(
+                db,
+                user_id,
+                effect.spawned_tasks,
+                source_todo_id=todo_id,
+            )
+            if spawned_count > 0:
+                await pusher.send(
+                    db.list_apns_tokens(user_id),
+                    PushPayload(
+                        title="New tasks ready",
+                        body=f"{spawned_count} task(s) from your agent run",
+                        todo_id=todo_id,
+                        kind="tasks_spawned",
+                    ),
+                )
         # Mid-stream `response.completed` events carry per-turn usage; we
         # increment as they arrive so the iOS pill counter ticks upward
         # while the agent is still working. We deliberately skip events
@@ -859,6 +945,27 @@ async def main_loop() -> None:
                 await prepare_one_todo(cfg, db, pusher, prep_todo)
             except Exception:
                 log.exception("prepare_one_todo crashed for %s", prep_todo.get("id"))
+            continue
+
+        try:
+            cfg_job = db.claim_next_configuring_cron_job()
+        except Exception:
+            log.exception("cron configure claim failed")
+            cfg_job = None
+
+        if cfg_job is not None:
+            try:
+                await configure_one_cron_job(cfg, db, pusher, cfg_job)
+            except Exception:
+                log.exception("configure_one_cron_job crashed for %s", cfg_job.get("id"))
+            continue
+
+        try:
+            cron_ran = await run_due_cron_jobs(cfg, db, pusher)
+        except Exception:
+            log.exception("cron tick failed")
+            cron_ran = 0
+        if cron_ran:
             continue
 
         try:

@@ -14,7 +14,9 @@ from runner.prepare import (
     CONNECTION_SLUGS,
     PREP_CLOSE,
     PREP_OPEN,
+    augment_cron_from_text,
     build_prepare_prompt,
+    infer_recurring_schedule,
     parse_prepare,
 )
 
@@ -108,6 +110,64 @@ class ParsePrepareTests(unittest.TestCase):
         # would mean the card icon silently goes missing for popular apps.
         for expected in ("gmail", "googlecalendar", "slack", "notion"):
             self.assertIn(expected, CONNECTION_SLUGS)
+
+    def test_cron_kind_roundtrips(self) -> None:
+        text = wrap(
+            '{"title":"Daily email check","connection_slug":"gmail",'
+            '"summary":"Scan inbox and create tasks.",'
+            '"kind":"cron","schedule":"0 9 * * *",'
+            '"schedule_display":"Every day at 9:00 AM","ready":true}'
+        )
+        result = parse_prepare(text)
+        assert result is not None
+        self.assertTrue(result.is_cron)
+        self.assertEqual(result.schedule, "0 9 * * *")
+        self.assertEqual(result.schedule_display, "Every day at 9:00 AM")
+
+    def test_additional_tasks_roundtrip(self) -> None:
+        text = wrap(
+            '{"title":"Send rent email","connection_slug":"gmail",'
+            '"summary":"Email landlord.","ready":true,'
+            '"tasks":[{"title":"Book calendar hold","connection_slug":'
+            '"googlecalendar","summary":"Block time to review lease."}]}'
+        )
+        result = parse_prepare(text)
+        assert result is not None
+        self.assertEqual(len(result.additional_tasks), 1)
+        self.assertEqual(result.additional_tasks[0].title, "Book calendar hold")
+        self.assertEqual(result.additional_tasks[0].connection_slug, "googlecalendar")
+
+
+class CronHeuristicTests(unittest.TestCase):
+    def test_infer_daily_morning(self) -> None:
+        got = infer_recurring_schedule(
+            "Every morning at 9am check email and create tasks"
+        )
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertEqual(got[0], "0 9 * * *")
+
+    def test_infer_every_two_hours(self) -> None:
+        got = infer_recurring_schedule("Check inbox every 2 hours")
+        self.assertIsNotNone(got)
+        assert got is not None
+        self.assertEqual(got[0], "every 2h")
+
+    def test_one_off_returns_none(self) -> None:
+        self.assertIsNone(infer_recurring_schedule("Send email to John"))
+
+    def test_augment_promotes_task_to_cron(self) -> None:
+        base = parse_prepare(
+            wrap('{"title":"Check email","connection_slug":"gmail","ready":true}')
+        )
+        assert base is not None
+        self.assertFalse(base.is_cron)
+        promoted = augment_cron_from_text(
+            base,
+            "Every morning at 9am check email and create tasks",
+        )
+        self.assertTrue(promoted.is_cron)
+        self.assertEqual(promoted.schedule, "0 9 * * *")
 
 
 class BuildPreparePromptTests(unittest.TestCase):

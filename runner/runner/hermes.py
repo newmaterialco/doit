@@ -30,7 +30,7 @@ class HermesEvent:
     data: dict
 
 
-from .events import INTERACTION_CLOSE, INTERACTION_OPEN
+from .events import INTERACTION_CLOSE, INTERACTION_OPEN, TASKS_CLOSE, TASKS_OPEN
 
 
 SYSTEM_INSTRUCTIONS = (
@@ -91,8 +91,29 @@ SYSTEM_INSTRUCTIONS = (
     "\"Caption these photos\"), call vision_analyze on those URLs directly. "
     "If the task doesn't actually depend on the images, ignore the block "
     "rather than wasting a tool call on it.\n\n"
+    "SPAWNING TASKS. When one run surfaces multiple independent actions "
+    "(inbox scans, triage, digests), create separate todos for the user by "
+    "ending your final reply with one "
+    f"{TASKS_OPEN} ... {TASKS_CLOSE} block containing JSON:\n"
+    "{\n"
+    "  \"tasks\": [\n"
+    "    {\n"
+    "      \"title\": \"Short task title\",\n"
+    "      \"detail\": \"Optional longer context\",\n"
+    "      \"summary\": \"Optional one-line prep hint\",\n"
+    "      \"source_key\": \"stable dedupe id (e.g. gmail:message:ID)\",\n"
+    "      \"connection_slug\": \"gmail\"\n"
+    "    }\n"
+    "  ]\n"
+    "}\n"
+    "Every task needs title and source_key. Reuse the same source_key for "
+    "the same email/thread on later runs so duplicates are skipped. Use "
+    "connection_slug when a specific Composio app is required. Do not emit "
+    "this block when the user asked for a single coordinated action — use "
+    "multiple [[DOIT_ARTIFACT]] blocks (sheet link first, then one email "
+    "artifact per draft with distinct keys) instead.\n\n"
     "When you finish the task, end your final reply with a one-line summary of "
-    "what you did."
+    "what you did (outside the tasks block)."
 )
 
 

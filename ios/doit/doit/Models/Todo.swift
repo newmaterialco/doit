@@ -198,13 +198,17 @@ struct TodoInteraction: Codable, Identifiable, Hashable, Sendable {
     let user_id: UUID
     let hermes_run_id: String?
     let kind: InteractionKind
-    let status: InteractionStatus
+    /// `var` so the detail view can flip an interaction from `.open` →
+    /// `.responded` optimistically the instant the user taps a quick
+    /// reply or sends a freeform answer; realtime then reconciles with
+    /// the row the server persisted.
+    var status: InteractionStatus
     let prompt: String
     let payload: JSONValue?
-    let response: JSONValue?
+    var response: JSONValue?
     let created_at: Date
     let updated_at: Date
-    let responded_at: Date?
+    var responded_at: Date?
 
     var summary: String? {
         payload?.objectValue?["summary"]?.stringValue
@@ -239,6 +243,35 @@ struct TodoInteraction: Codable, Identifiable, Hashable, Sendable {
             let style = obj["style"]?.stringValue.flatMap(InteractionStyle.init(rawValue:))
             return InteractionOption(id: id, label: label, style: style)
         }
+    }
+
+    /// The option id the user selected (if any). Available once
+    /// `status != .open`; comes back as `nil` for pure freeform replies.
+    var respondedOptionID: String? {
+        response?.objectValue?["option_id"]?.stringValue
+    }
+
+    /// Freeform text the user typed (if any). Available once
+    /// `status != .open` and the response carried text.
+    var respondedText: String? {
+        let raw = response?.objectValue?["text"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (raw?.isEmpty == false) ? raw : nil
+    }
+
+    /// Human-readable summary of the user's reply, ready to drop into a
+    /// chat bubble: the matching option's label when they picked one,
+    /// otherwise the freeform text, otherwise `nil` (e.g. cancelled
+    /// without a recorded answer).
+    var respondedBubbleText: String? {
+        if let id = respondedOptionID,
+           let label = options.first(where: { $0.id == id })?.label {
+            if let extra = respondedText {
+                return "\(label) — \(extra)"
+            }
+            return label
+        }
+        return respondedText
     }
 
     /// `content.subject` + `content.body` for email-style drafts. Returns nil if

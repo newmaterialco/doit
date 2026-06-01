@@ -34,6 +34,16 @@ rsync -avc --delete \
   --exclude '*.pyc' \
   "$SRC" "$DEST"
 
+echo ">> install runner deps on $VM_HOST"
+ssh "$VM_HOST" "
+  cd '$VM_PATH' &&
+  if [ -d .venv ]; then
+    .venv/bin/pip install -q croniter==2.0.5
+  else
+    pip3 install -q croniter==2.0.5
+  fi
+"
+
 echo ">> restart doit-runner on $VM_HOST"
 ssh "$VM_HOST" '
   systemctl restart doit-runner &&

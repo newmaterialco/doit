@@ -66,6 +66,13 @@ struct TodoArtifact: Codable, Identifiable, Hashable, Sendable {
         object?["provider"]?.stringValue
     }
 
+    /// Composio slug for email drafts (defaults to `gmail`).
+    var emailProvider: String {
+        let raw = object?["provider"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let raw, !raw.isEmpty { return raw.lowercased() }
+        return "gmail"
+    }
+
     // MARK: - email
 
     /// `(subject, body, to)` triple for email artifacts. Returns nil when
@@ -138,4 +145,50 @@ struct TodoArtifact: Codable, Identifiable, Hashable, Sendable {
         f.formatOptions = [.withInternetDateTime]
         return f
     }()
+}
+
+// MARK: - Detail header layout
+
+extension TodoArtifact {
+    /// Primary deliverables (sheet, doc, calendar, text) first; email drafts
+    /// grouped underneath so the header reads as a drill-down.
+    static func groupedForDisplay(
+        _ artifacts: [TodoArtifact]
+    ) -> (primary: [TodoArtifact], emailDrafts: [TodoArtifact]) {
+        let sorted = artifacts.sorted {
+            if $0.created_at != $1.created_at { return $0.created_at < $1.created_at }
+            return $0.artifact_key < $1.artifact_key
+        }
+        let primary = sorted.filter { $0.kind != .email }
+        let emails = sorted.filter { $0.kind == .email }
+        return (primary, emails)
+    }
+
+    /// Connection logos for the metadata row: prep slug first, then providers
+    /// discovered from artifacts as the task progresses.
+    static func connectionSlugs(
+        todoSlug: String?,
+        artifacts: [TodoArtifact]
+    ) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+
+        func add(_ raw: String?) {
+            guard let raw else { return }
+            let slug = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !slug.isEmpty, !seen.contains(slug) else { return }
+            seen.insert(slug)
+            result.append(slug)
+        }
+
+        add(todoSlug)
+        let (primary, emails) = groupedForDisplay(artifacts)
+        for artifact in primary {
+            add(artifact.provider)
+        }
+        for artifact in emails {
+            add(artifact.emailProvider)
+        }
+        return result
+    }
 }
