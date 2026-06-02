@@ -3,6 +3,8 @@ import Supabase
 
 @MainActor
 enum TodosAPI {
+    private static let maxTodoTitleLength = 500
+
     static func list() async throws -> [Todo] {
         try await Supa.client
             .from("todos")
@@ -13,16 +15,20 @@ enum TodosAPI {
     }
 
     static func create(title: String, detail: String?, userID: UUID) async throws -> Todo {
+        let originalTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let initialTitle = originalTitle.limited(to: maxTodoTitleLength)
+        guard !initialTitle.isEmpty else { throw TodosAPIError.empty }
+
         // New todos enter `preparing` so the runner can rephrase the title,
         // pick a likely connection icon, and ask for clarification before the
         // user is ever asked to tap "Do it". The raw input is kept verbatim
         // on `original_title` so we don't lose what the user actually typed.
         let row = NewTodo(
             user_id: userID,
-            title: title,
+            title: initialTitle,
             detail: (detail?.isEmpty ?? true) ? nil : detail,
             status: .preparing,
-            original_title: title
+            original_title: originalTitle
         )
         let result: [Todo] = try await Supa.client
             .from("todos")
@@ -45,9 +51,14 @@ enum TodosAPI {
 
     static func update(_ id: UUID, title: String, detail: String?) async throws {
         struct Patch: Encodable { let title: String; let detail: String? }
+        let normalizedTitle = title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .limited(to: maxTodoTitleLength)
+        guard !normalizedTitle.isEmpty else { throw TodosAPIError.empty }
+
         _ = try await Supa.client
             .from("todos")
-            .update(Patch(title: title, detail: (detail?.isEmpty ?? true) ? nil : detail))
+            .update(Patch(title: normalizedTitle, detail: (detail?.isEmpty ?? true) ? nil : detail))
             .eq("id", value: id)
             .execute()
     }
@@ -194,6 +205,40 @@ enum TodosAPI {
         return byTodo
     }
 
+    // MARK: - Agent activity (live snapshot)
+
+    /// Latest live activity snapshot for a single todo. Returns `nil`
+    /// when no row exists (the runner only writes a row once a run
+    /// starts, so freshly-created todos legitimately have no activity).
+    static func agentActivity(for todoID: UUID) async throws -> AgentActivity? {
+        let rows: [AgentActivity] = try await Supa.client
+            .from("todo_agent_activity")
+            .select()
+            .eq("todo_id", value: todoID)
+            .limit(1)
+            .execute()
+            .value
+        return rows.first
+    }
+
+    /// Batched fetch so the todo list can attach a live status line per
+    /// row without one round-trip per card. Missing keys mean the runner
+    /// hasn't written a snapshot for that todo yet.
+    static func agentActivities(for todoIDs: [UUID]) async throws -> [UUID: AgentActivity] {
+        guard !todoIDs.isEmpty else { return [:] }
+        let rows: [AgentActivity] = try await Supa.client
+            .from("todo_agent_activity")
+            .select()
+            .in("todo_id", values: todoIDs)
+            .execute()
+            .value
+        var byTodo: [UUID: AgentActivity] = [:]
+        for row in rows {
+            byTodo[row.todo_id] = row
+        }
+        return byTodo
+    }
+
     /// Submit a user response and re-queue the todo so the runner can resume.
     /// We update the interaction first; the runner reads the response off the
     /// row when it next claims the todo.
@@ -250,4 +295,11 @@ enum InteractionPhase {
 
 enum TodosAPIError: Error {
     case empty
+}
+
+private extension String {
+    func limited(to maxLength: Int) -> String {
+        guard count > maxLength else { return self }
+        return String(prefix(maxLength)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }

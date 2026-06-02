@@ -34,6 +34,20 @@ def apply_spawned_tasks(
                 user_id,
             )
             continue
+        if db.spawned_todo_title_exists(
+            user_id,
+            task.title,
+            source_todo_id=source_todo_id,
+            source_cron_job_id=source_cron_job_id,
+        ):
+            log.info(
+                "spawn skip duplicate title=%r user=%s source_todo=%s source_cron=%s",
+                task.title,
+                user_id,
+                source_todo_id,
+                source_cron_job_id,
+            )
+            continue
         row = db.insert_spawned_todo(
             user_id=user_id,
             title=task.title,

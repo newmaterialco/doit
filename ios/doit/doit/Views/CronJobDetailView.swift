@@ -1,12 +1,18 @@
 import SwiftUI
 
 struct CronJobDetailView: View {
-    let job: CronJob
+    /// We open the cron detail view by id (not by passing a `CronJob`
+    /// snapshot) so the header always reflects the latest row from
+    /// `TodoStore`. See `docs/task-realtime.md`.
+    let jobID: UUID
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(TodoStore.self) private var store
 
-    @State private var current: CronJob
+    /// Chat-only state owned by the detail view. The cron job row lives in
+    /// the store; full interaction history is per-detail because the user
+    /// feed doesn't pre-load it.
     @State private var interactions: [CronJobInteraction] = []
     @State private var messages: [CronJobMessage] = []
     @State private var submittingOptionID: String?
@@ -15,23 +21,32 @@ struct CronJobDetailView: View {
     @State private var splitDetent: SplitDetent = .fraction(0.3)
     @State private var detentBeforeFocus: SplitDetent?
 
-    init(job: CronJob) {
-        self.job = job
-        self._current = State(initialValue: job)
+    init(jobID: UUID) {
+        self.jobID = jobID
+    }
+
+    private var current: CronJob? {
+        store.cronJob(id: jobID)
     }
 
     var body: some View {
         VerticalSplit(
             detent: $splitDetent,
-            topTitle: current.name,
+            topTitle: current?.name ?? "Scheduled",
             bottomTitle: "Chat",
             topView: {
-                CronJobHeaderView(
-                    job: current,
-                    agentStatus: openInteractionStatus,
-                    onBack: { dismiss() },
-                    onDelete: deleteJob
-                )
+                Group {
+                    if let current {
+                        CronJobHeaderView(
+                            job: current,
+                            agentStatus: openInteractionStatus,
+                            onBack: { dismiss() },
+                            onDelete: deleteJob
+                        )
+                    } else {
+                        Color.clear.onAppear { dismiss() }
+                    }
+                }
             },
             bottomView: {
                 TodoChatThread(
@@ -39,7 +54,7 @@ struct CronJobDetailView: View {
                     attachmentsByID: [:],
                     attachmentURLs: [:],
                     submittingOptionID: submittingOptionID,
-                    isAgentRunning: current.state.isActive || sending,
+                    isAgentRunning: (current?.state.isActive ?? false) || sending,
                     photoSelections: .constant([]),
                     canAddMoreAttachments: false,
                     maxNewAttachments: 1,
@@ -68,23 +83,25 @@ struct CronJobDetailView: View {
         )
         .toolbar(.hidden, for: .navigationBar)
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .task(id: current.id) {
+        .task(id: jobID) {
+            // The cron job row lives in the user-feed store. We only need
+            // a per-job watch for chat-only tables (`cron_job_messages`,
+            // `cron_job_interactions`).
             TodoRealtimeHub.beginCronJobWatch(
-                jobID: current.id,
+                jobID: jobID,
                 handlers: .init(
-                    onJob: { await refreshJob() },
-                    onInteractions: { await loadInteractions() },
-                    onMessages: { await loadMessages() }
+                    onMessages: { await loadMessages() },
+                    onInteractions: { await loadInteractions() }
                 )
             )
-            await refreshJob()
+            await store.refreshCronJob(id: jobID)
             await loadInteractions()
             await loadMessages()
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             Task {
-                await refreshJob()
+                await store.refreshCronJob(id: jobID)
                 await loadInteractions()
                 await loadMessages()
             }
@@ -92,7 +109,8 @@ struct CronJobDetailView: View {
     }
 
     private var conversationItems: [ConversationItem] {
-        CronConversationBuilder.build(
+        guard let current else { return [] }
+        return CronConversationBuilder.build(
             job: current,
             interactions: interactions,
             messages: messages
@@ -118,9 +136,9 @@ struct CronJobDetailView: View {
     }
 
     private func deleteJob() {
-        let id = current.id
+        let id = jobID
         dismiss()
-        Task { try? await CronJobsAPI.delete(id) }
+        Task { await store.deleteCronJob(id) }
     }
 
     private func respond(
@@ -133,7 +151,7 @@ struct CronJobDetailView: View {
         do {
             try await CronJobsAPI.respond(
                 to: interaction.id,
-                jobID: current.id,
+                jobID: jobID,
                 optionID: optionID,
                 text: text
             )
@@ -142,11 +160,12 @@ struct CronJobDetailView: View {
                 optionID: optionID,
                 text: text
             )
+            // Reflect the user's reply in the store so the list card
+            // updates without waiting for the realtime echo.
             if optionID?.lowercased() == "cancel" {
-                current.state = .paused
-                current.enabled = false
+                await store.refreshCronJob(id: jobID)
             } else {
-                current.state = .configuring
+                await store.refreshCronJob(id: jobID)
             }
         } catch {
             self.error = "Couldn't send your response: \(error.localizedDescription)"
@@ -169,6 +188,7 @@ struct CronJobDetailView: View {
     }
 
     private func send(_ text: String) async {
+        guard let current else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !sending else { return }
         sending = true
@@ -181,19 +201,17 @@ struct CronJobDetailView: View {
 
         let optimistic = CronJobMessage(
             id: UUID(),
-            cron_job_id: current.id,
+            cron_job_id: jobID,
             user_id: current.user_id,
             body: trimmed,
             consumed_at: nil,
             created_at: Date()
         )
         messages.append(optimistic)
-        let priorState = current.state
-        current.state = .configuring
 
         do {
             let saved = try await CronJobsAPI.sendMessage(
-                jobID: current.id,
+                jobID: jobID,
                 userID: current.user_id,
                 body: trimmed
             )
@@ -202,9 +220,11 @@ struct CronJobDetailView: View {
             } else {
                 messages.append(saved)
             }
+            // `sendMessage` re-queues the job; refresh so the list card
+            // shows "Setting up…" right away.
+            await store.refreshCronJob(id: jobID)
         } catch {
             messages.removeAll { $0.id == optimistic.id }
-            current.state = priorState
             self.error = "Couldn't send your message: \(error.localizedDescription)"
         }
     }
@@ -222,17 +242,9 @@ struct CronJobDetailView: View {
         }
     }
 
-    private func refreshJob() async {
-        do {
-            current = try await CronJobsAPI.fetch(current.id)
-        } catch {
-            print("[cron] refresh failed: \(error)")
-        }
-    }
-
     private func loadInteractions() async {
         do {
-            interactions = try await CronJobsAPI.interactions(for: current.id)
+            interactions = try await CronJobsAPI.interactions(for: jobID)
         } catch {
             print("[cron] interactions load failed: \(error)")
         }
@@ -240,7 +252,7 @@ struct CronJobDetailView: View {
 
     private func loadMessages() async {
         do {
-            messages = try await CronJobsAPI.messages(for: current.id)
+            messages = try await CronJobsAPI.messages(for: jobID)
         } catch {
             print("[cron] messages load failed: \(error)")
         }

@@ -50,3 +50,24 @@ doit/
 
 See `hermes/setup.md` for provisioning the VM and `supabase/README.md` for the
 managed-side setup.
+
+## Realtime contract (READ THIS BEFORE TOUCHING THE iOS LIST OR DETAIL VIEW)
+
+How a task ends up on screen after the agent does work is documented in
+[`docs/task-realtime.md`](docs/task-realtime.md). The short version:
+
+- The runner writes Postgres rows.
+- Supabase Realtime publishes those changes to the iOS client.
+- `TodoRealtimeHub` (in `ios/doit/doit/Supabase/TodoRealtimeHub.swift`) pulls
+  the row id out of the payload and hands it to `TodoStore`.
+- `TodoStore` (in `ios/doit/doit/Stores/TodoStore.swift`) is the single
+  app-scoped owner of task / cron / interaction / artifact state. Views
+  observe it; views do NOT keep their own `@State` copies.
+- APNs is a backup channel for when the app isn't running. It is not the
+  primary path for in-app updates.
+
+If you (or another agent) are about to add `@State private var todos: [Todo]`
+to a view, or a `Timer` that refetches the list every few seconds, stop and
+re-read the doc — that pattern is exactly what the store exists to prevent
+and it is the reason the list previously stopped updating after the prep
+pass.

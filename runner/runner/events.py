@@ -28,7 +28,13 @@ TASKS_CLOSE = "[[/DOIT_TASKS]]"
 
 # Kinds we know how to render on iOS. Anything else is dropped on the floor
 # rather than persisted with an unknown kind, since the UI has no fallback.
-_ARTIFACT_KINDS = {"link", "email", "calendar", "text"}
+_ARTIFACT_KINDS = {"link", "email", "calendar", "text", "audio"}
+
+# Name of the Hermes built-in tool we promote to an audio artifact. The
+# runner watches for `function_call` items with this name, captures the
+# spoken text, and pairs it with the `function_call_output` that carries
+# the generated file path.
+TTS_TOOL_NAME = "text_to_speech"
 
 # Anything that smells like a Composio OAuth redirect URL the user must visit.
 # Composio surfaces these via its connection meta-tools; the exact host varies
@@ -90,6 +96,36 @@ class SpawnedTaskRequest:
 
 
 @dataclass
+class TTSCall:
+    """Args of a single ``text_to_speech`` tool call the agent made.
+
+    Captured from the ``function_call`` item when it lands on the SSE
+    stream so the runner can pair the spoken text with the eventual
+    ``function_call_output`` result via ``call_id``.
+    """
+
+    call_id: str
+    text: str
+    voice: str | None = None
+    output_path: str | None = None
+
+
+@dataclass
+class TTSResult:
+    """Successful ``text_to_speech`` tool output ready to be uploaded.
+
+    Only emitted for ``success: true`` results that include a non-empty
+    ``file_path``. Failures fall through to the regular tool_result path
+    so the agent still sees the error in its activity log.
+    """
+
+    call_id: str
+    file_path: str
+    provider: str | None = None
+    voice_compatible: bool = False
+
+
+@dataclass
 class Translated:
     """Effect of one Hermes event on our DB."""
     step_kind: Literal[
@@ -111,6 +147,13 @@ class Translated:
     interaction: InteractionRequest | None = None
     artifacts: list[ArtifactRequest] = field(default_factory=list)
     spawned_tasks: list[SpawnedTaskRequest] = field(default_factory=list)
+    # Surfaced when this event is a TTS tool call (started) or its
+    # successful output. The runner stitches the two together by
+    # ``call_id`` and uploads the generated file to Supabase Storage,
+    # then writes an ``audio`` artifact row. Neither is set on most
+    # events.
+    tts_call: TTSCall | None = None
+    tts_result: TTSResult | None = None
     # Cumulative token total reported by this event for the *current* turn /
     # run. The runner derives a delta from successive values and increments
     # `todos.total_tokens` atomically. Zero means "no usage info on this
@@ -248,15 +291,34 @@ def translate(event_name: str, data: dict) -> Translated | None:
         item = data.get("item") or {}
         itype = item.get("type")
         if itype == "function_call" and actual_event == "response.output_item.added":
+            name = str(item.get("name") or "")
+            if name == TTS_TOOL_NAME:
+                tts_call = _parse_tts_call(item)
+                if tts_call is not None:
+                    return Translated(
+                        step_kind="tool_started",
+                        text="Generating spoken summary.",
+                        tool_name=name,
+                        tts_call=tts_call,
+                    )
             return Translated(
                 step_kind="tool_started",
                 text=_summarize_tool_call(item),
-                tool_name=str(item.get("name") or ""),
+                tool_name=name,
             )
         if itype == "function_call_output" and actual_event == "response.output_item.done":
             output = item.get("output")
             text = _stringify_output(output)
-            tool_name = str(item.get("name") or item.get("call_id") or "")
+            call_id = str(item.get("call_id") or "")
+            tool_name = str(item.get("name") or call_id or "")
+            tts_result = _parse_tts_result(call_id, output)
+            if tts_result is not None:
+                return Translated(
+                    step_kind="tool_result",
+                    text="Spoken summary ready.",
+                    tool_name=tool_name or TTS_TOOL_NAME,
+                    tts_result=tts_result,
+                )
             oauth_url = _looks_like_oauth_url(text, tool_name)
             if oauth_url:
                 return Translated(
@@ -462,6 +524,7 @@ def parse_spawned_tasks(text: str) -> list[SpawnedTaskRequest]:
 
     out: list[SpawnedTaskRequest] = []
     seen_keys: set[str] = set()
+    seen_titles: set[str] = set()
     for item in raw_tasks:
         if not isinstance(item, dict):
             continue
@@ -472,7 +535,14 @@ def parse_spawned_tasks(text: str) -> list[SpawnedTaskRequest]:
             continue
         if source_key in seen_keys:
             continue
+        # Some model replies accidentally duplicate the same task title with
+        # two different source_keys in one block; keep the first.
+        title_norm = " ".join(title.lower().split())
+        if title_norm in seen_titles:
+            log.warning("spawned task duplicate title=%r; skipping", title)
+            continue
         seen_keys.add(source_key)
+        seen_titles.add(title_norm)
         detail_raw = item.get("detail")
         detail = str(detail_raw).strip()[:4000] if detail_raw else None
         summary_raw = item.get("summary")
@@ -518,6 +588,73 @@ def _summarize_tool_call(item: dict) -> str:
     if isinstance(args, str) and args:
         return f"{name}({_truncate(args, 200)})"
     return f"{name}(...)"
+
+
+def _parse_tts_call(item: dict) -> TTSCall | None:
+    """Pull the spoken text + optional voice/output_path out of a TTS call.
+
+    Returns ``None`` when the arguments are malformed or empty so the
+    surrounding ``translate`` branch can fall through to the generic
+    tool_started rendering instead of pretending we captured a TTS call.
+    """
+    call_id = str(item.get("call_id") or "")
+    args = item.get("arguments")
+    parsed: dict[str, Any] = {}
+    if isinstance(args, str) and args.strip():
+        try:
+            parsed = json.loads(args)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(args, dict):
+        parsed = args
+    if not isinstance(parsed, dict):
+        return None
+    text = str(parsed.get("text") or "").strip()
+    if not text:
+        return None
+    voice_raw = parsed.get("voice")
+    voice = str(voice_raw).strip() if voice_raw else None
+    out_raw = parsed.get("output_path")
+    output_path = str(out_raw).strip() if out_raw else None
+    return TTSCall(
+        call_id=call_id,
+        text=text,
+        voice=voice or None,
+        output_path=output_path or None,
+    )
+
+
+def _parse_tts_result(call_id: str, output: Any) -> TTSResult | None:
+    """Return a TTSResult only for successful TTS tool outputs.
+
+    The Hermes ``text_to_speech`` tool returns a JSON string shaped like
+    ``{"success": true, "file_path": "...", "provider": "elevenlabs", ...}``.
+    Failures and non-TTS outputs short-circuit so the regular
+    ``tool_result`` path keeps surfacing them in the activity log.
+    """
+    parsed: dict[str, Any] | None = None
+    if isinstance(output, str) and output.strip():
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(output, dict):
+        parsed = output
+    if not isinstance(parsed, dict):
+        return None
+    if parsed.get("success") is not True:
+        return None
+    file_path = parsed.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        return None
+    provider_raw = parsed.get("provider")
+    provider = str(provider_raw).strip() if provider_raw else None
+    return TTSResult(
+        call_id=call_id,
+        file_path=file_path.strip(),
+        provider=provider or None,
+        voice_compatible=bool(parsed.get("voice_compatible", False)),
+    )
 
 
 def _stringify_output(output) -> str:

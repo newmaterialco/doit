@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1000003000000000000000A /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = A1000002000000000000000A /* Supabase */; };
+		D5D7BB0000000000DEF73940 /* doitActivityWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D5D7BB0000000000DEF73911 /* doitActivityWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -25,18 +26,50 @@
 			remoteGlobalIDString = D5D7BA972FC9038E00DEF739;
 			remoteInfo = doit;
 		};
+		D5D7BB0000000000DEF73930 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D5D7BA902FC9038E00DEF739 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D5D7BB0000000000DEF73910;
+			remoteInfo = doitActivityWidgetExtension;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		D5D7BB0000000000DEF73923 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				D5D7BB0000000000DEF73940 /* doitActivityWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		D5D7BA982FC9038E00DEF739 /* doit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = doit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5D7BAA52FC9038F00DEF739 /* doitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = doitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5D7BAAF2FC9038F00DEF739 /* doitUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = doitUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D5D7BB0000000000DEF73911 /* doitActivityWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = doitActivityWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		D5D7BA9A2FC9038E00DEF739 /* doit */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = doit;
+			sourceTree = "<group>";
+		};
+		D5D7BB0000000000DEF73901 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		D5D7BB0000000000DEF73902 /* doitActivityWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = doitActivityWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -64,6 +97,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D5D7BB0000000000DEF73921 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -71,6 +111,8 @@
 			isa = PBXGroup;
 			children = (
 				D5D7BA9A2FC9038E00DEF739 /* doit */,
+				D5D7BB0000000000DEF73901 /* Shared */,
+				D5D7BB0000000000DEF73902 /* doitActivityWidget */,
 				D5D7BA992FC9038E00DEF739 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -81,6 +123,7 @@
 				D5D7BA982FC9038E00DEF739 /* doit.app */,
 				D5D7BAA52FC9038F00DEF739 /* doitTests.xctest */,
 				D5D7BAAF2FC9038F00DEF739 /* doitUITests.xctest */,
+				D5D7BB0000000000DEF73911 /* doitActivityWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,13 +138,16 @@
 				D5D7BA942FC9038E00DEF739 /* Sources */,
 				D5D7BA952FC9038E00DEF739 /* Frameworks */,
 				D5D7BA962FC9038E00DEF739 /* Resources */,
+				D5D7BB0000000000DEF73923 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D5D7BB0000000000DEF73931 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				D5D7BA9A2FC9038E00DEF739 /* doit */,
+				D5D7BB0000000000DEF73901 /* Shared */,
 			);
 			name = doit;
 			packageProductDependencies = (
@@ -151,6 +197,29 @@
 			productReference = D5D7BAAF2FC9038F00DEF739 /* doitUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		D5D7BB0000000000DEF73910 /* doitActivityWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D5D7BB0000000000DEF73952 /* Build configuration list for PBXNativeTarget "doitActivityWidgetExtension" */;
+			buildPhases = (
+				D5D7BB0000000000DEF73920 /* Sources */,
+				D5D7BB0000000000DEF73921 /* Frameworks */,
+				D5D7BB0000000000DEF73922 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				D5D7BB0000000000DEF73901 /* Shared */,
+				D5D7BB0000000000DEF73902 /* doitActivityWidget */,
+			);
+			name = doitActivityWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = doitActivityWidgetExtension;
+			productReference = D5D7BB0000000000DEF73911 /* doitActivityWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -172,6 +241,9 @@
 						CreatedOnToolsVersion = 26.2;
 						TestTargetID = D5D7BA972FC9038E00DEF739;
 					};
+					D5D7BB0000000000DEF73910 = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = D5D7BA932FC9038E00DEF739 /* Build configuration list for PBXProject "doit" */;
@@ -192,6 +264,7 @@
 			projectRoot = "";
 			targets = (
 				D5D7BA972FC9038E00DEF739 /* doit */,
+				D5D7BB0000000000DEF73910 /* doitActivityWidgetExtension */,
 				D5D7BAA42FC9038F00DEF739 /* doitTests */,
 				D5D7BAAE2FC9038F00DEF739 /* doitUITests */,
 			);
@@ -214,6 +287,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D5D7BAAD2FC9038F00DEF739 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D5D7BB0000000000DEF73922 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -244,6 +324,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D5D7BB0000000000DEF73920 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -256,6 +343,11 @@
 			isa = PBXTargetDependency;
 			target = D5D7BA972FC9038E00DEF739 /* doit */;
 			targetProxy = D5D7BAB02FC9038F00DEF739 /* PBXContainerItemProxy */;
+		};
+		D5D7BB0000000000DEF73931 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D5D7BB0000000000DEF73910 /* doitActivityWidgetExtension */;
+			targetProxy = D5D7BB0000000000DEF73930 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -395,6 +487,8 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "doit uses the camera to attach photos to your tasks.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "doit uses the microphone to capture voice notes that we transcribe into your task.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "doit attaches selected photos to your tasks.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				INFOPLIST_KEY_NSSupportsLiveActivitiesFrequentUpdates = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -431,6 +525,8 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "doit uses the camera to attach photos to your tasks.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "doit uses the microphone to capture voice notes that we transcribe into your task.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "doit attaches selected photos to your tasks.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				INFOPLIST_KEY_NSSupportsLiveActivitiesFrequentUpdates = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -537,6 +633,70 @@
 			};
 			name = Release;
 		};
+		D5D7BB0000000000DEF73950 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 4549MX3MQY;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = doitActivityWidgetInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = do.it.doit.app.doitActivityWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D5D7BB0000000000DEF73951 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 4549MX3MQY;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = doitActivityWidgetInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = do.it.doit.app.doitActivityWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -572,6 +732,15 @@
 			buildConfigurations = (
 				D5D7BAC02FC9038F00DEF739 /* Debug */,
 				D5D7BAC12FC9038F00DEF739 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D5D7BB0000000000DEF73952 /* Build configuration list for PBXNativeTarget "doitActivityWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D5D7BB0000000000DEF73950 /* Debug */,
+				D5D7BB0000000000DEF73951 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

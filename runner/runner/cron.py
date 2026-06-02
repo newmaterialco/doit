@@ -46,7 +46,9 @@ _CRON_INSTRUCTIONS = (
     "}\n"
     "Every task needs title and source_key. Reuse the same source_key for "
     "the same email/thread on later runs so duplicates are skipped. Use "
-    "connection_slug when a specific Composio app is required.\n\n"
+    "connection_slug when a specific Composio app is required. Make each "
+    "title specific to the underlying message (sender + subject/action), "
+    "not a generic repeated inbox label.\n\n"
     "When finished, end with a one-line summary of what you did (outside "
     "the tasks block)."
 )

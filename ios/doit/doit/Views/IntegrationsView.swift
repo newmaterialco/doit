@@ -125,7 +125,14 @@ private struct ToolkitRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(toolkit.name).font(.headline)
-                    if toolkit.connected {
+                    if !toolkit.isConnectable {
+                        Text("Available")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 4))
+                            .foregroundStyle(Color(.systemGray))
+                    } else if toolkit.connected {
                         Text("Connected")
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
@@ -142,7 +149,7 @@ private struct ToolkitRow: View {
             Spacer()
             if busy {
                 ProgressView()
-            } else if toolkit.connected {
+            } else if toolkit.isConnectable && toolkit.connected {
                 Menu {
                     Button("Disconnect", role: .destructive, action: onDisconnect)
                 } label: {
@@ -150,7 +157,7 @@ private struct ToolkitRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-            } else {
+            } else if toolkit.isConnectable {
                 Button("Connect", action: onConnect)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.black)

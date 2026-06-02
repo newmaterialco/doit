@@ -119,7 +119,7 @@ struct AddTodoView: View {
                 Spacer()
 
                 Button {
-                    Task { await save() }
+                    beginSave()
                 } label: {
                     Text(saving ? "Creating…" : "Create")
                         .font(.system(.body, design: .rounded).weight(.semibold))
@@ -328,8 +328,14 @@ struct AddTodoView: View {
         pendingImages.count < AddTodoView.maxAttachments
     }
 
-    private func save() async {
+    private func beginSave() {
+        guard canCreate else { return }
         saving = true
+        Task { await save() }
+    }
+
+    private func save() async {
+        guard saving else { return }
         defer { saving = false }
         do {
             let todo = try await TodosAPI.create(

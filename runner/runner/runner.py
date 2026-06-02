@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import uuid
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
@@ -11,7 +13,15 @@ import httpx
 
 from .config import Config, load
 from .db import DB
-from .events import extract_terminal_text, extract_usage_total, translate
+from .activity import AgentActivityService, ActivitySnapshot
+from .events import (
+    ArtifactRequest,
+    TTSCall,
+    TTSResult,
+    extract_terminal_text,
+    extract_usage_total,
+    translate,
+)
 from .hermes import HermesClient
 from .hermes_memory import (
     HermesMemoryStore,
@@ -286,6 +296,17 @@ async def run_one_todo(
                 kind="error",
                 text="Cancelled by user.",
             )
+            _write_activity(
+                db,
+                todo_id=todo_id,
+                user_id=user_id,
+                snapshot=AgentActivityService().mark_terminal(
+                    state="failed",
+                    phase="cancelled",
+                    title="Cancelled",
+                ),
+                hermes_run_id=run_id,
+            )
         elif consume_task in done:
             terminal_status = consume_task.result()
         else:
@@ -303,6 +324,18 @@ async def run_one_todo(
                 kind="error",
                 text="The agent took too long and was stopped.",
             )
+            _write_activity(
+                db,
+                todo_id=todo_id,
+                user_id=user_id,
+                snapshot=AgentActivityService().mark_terminal(
+                    state="failed",
+                    phase="failed",
+                    title="Timed out",
+                    detail="The agent took too long and was stopped.",
+                ),
+                hermes_run_id=run_id,
+            )
 
     except httpx.HTTPError as e:
         log.exception("hermes call failed for todo %s", todo_id)
@@ -317,12 +350,36 @@ async def run_one_todo(
             kind="error",
             text=f"Couldn't reach the agent: {e}",
         )
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=AgentActivityService().mark_terminal(
+                state="failed",
+                phase="failed",
+                title="Couldn't reach the agent",
+                detail=str(e),
+            ),
+            hermes_run_id=run_id,
+        )
     except Exception as e:
         log.exception("unexpected failure processing todo %s", todo_id)
         terminal_status = "failed"
         db.update_todo(
             todo_id,
             {"status": "failed", "error_message": str(e)},
+        )
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=AgentActivityService().mark_terminal(
+                state="failed",
+                phase="failed",
+                title="Unexpected error",
+                detail=str(e),
+            ),
+            hermes_run_id=run_id,
         )
     finally:
         if cancel_watcher:
@@ -392,6 +449,20 @@ async def prepare_one_todo(
     # Preserve the user's original wording the first time we touch this row.
     if not todo.get("original_title"):
         db.update_todo(todo_id, {"original_title": raw_title})
+
+    # Surface the preparation pass in the live activity feed so the iOS
+    # card shows something better than "Preparing task..." while we wait
+    # for Hermes to rewrite the title.
+    _write_activity(
+        db,
+        todo_id=todo_id,
+        user_id=user_id,
+        snapshot=AgentActivityService().initial(
+            phase="preparing",
+            title="Reading your request",
+        ),
+        hermes_run_id=None,
+    )
 
     # If we already asked a clarifying question and the user answered it,
     # weave the response into this prep pass so the model can finalize.
@@ -505,6 +576,18 @@ async def prepare_one_todo(
         # this preparation flow (not into execution).
         updates["status"] = "needs_input"
         db.update_todo(todo_id, updates)
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=AgentActivityService().mark_terminal(
+                state="paused",
+                phase="needs_input",
+                title="Needs your input",
+                detail=result.clarification_prompt,
+            ),
+            hermes_run_id=run_id,
+        )
 
         payload: dict[str, Any] = {
             "phase": "prepare",
@@ -582,6 +665,18 @@ async def prepare_one_todo(
     # Ready — flip to 'todo' so the card shows the Do it button.
     updates["status"] = "todo"
     db.update_todo(todo_id, updates)
+    _write_activity(
+        db,
+        todo_id=todo_id,
+        user_id=user_id,
+        snapshot=AgentActivityService().mark_terminal(
+            state="completed",
+            phase="ready",
+            title="Ready when you are",
+            detail=result.summary,
+        ),
+        hermes_run_id=run_id,
+    )
 
     # Multi-task split: insert extras as already-prepared todos.
     for extra in result.additional_tasks:
@@ -610,6 +705,30 @@ async def _collect_final_text(hermes: HermesClient, run_id: str) -> str:
     return final or ""
 
 
+def _write_activity(
+    db: DB,
+    *,
+    todo_id: str,
+    user_id: str,
+    snapshot: ActivitySnapshot | None,
+    hermes_run_id: str | None,
+) -> None:
+    """Persist one activity snapshot through the runner DB wrapper.
+
+    Wrapped in its own helper so the runner only depends on the
+    snapshot shape (not Supabase column names) and so future call
+    sites (preparation pass, cancellation paths, timeouts) all push
+    through the same code.
+    """
+    if snapshot is None:
+        return
+    db.upsert_agent_activity(
+        todo_id=todo_id,
+        user_id=user_id,
+        fields=snapshot.to_db_fields(hermes_run_id=hermes_run_id),
+    )
+
+
 async def _consume_run(
     cfg: Config,
     db: DB,
@@ -626,6 +745,24 @@ async def _consume_run(
     # for THIS run. Used to compute a delta against the authoritative
     # run total when the SSE stream ends.
     live_total: int = 0
+    # Pending text_to_speech calls keyed by `call_id` so we can pair the
+    # spoken text (captured on the `function_call` event) with the
+    # generated file path (captured on the matching
+    # `function_call_output`). Older entries are kept until the run ends —
+    # the dict is small and per-run.
+    pending_tts: dict[str, TTSCall] = {}
+
+    # Drives the iOS "what is Hermes doing right now?" surfaces: the
+    # todo card status line, the detail-view animated cards, and the
+    # Live Activity widget. `todo_steps` keeps the historic audit log.
+    activity = AgentActivityService()
+    _write_activity(
+        db,
+        todo_id=todo_id,
+        user_id=user_id,
+        snapshot=activity.initial(phase="starting", title="Starting agent…"),
+        hermes_run_id=run_id,
+    )
 
     async for ev in hermes.stream_events(run_id):
         effect = translate(ev.event, ev.data)
@@ -640,9 +777,31 @@ async def _consume_run(
                 url=effect.url,
                 tool_name=effect.tool_name,
             )
+        # Update the live activity snapshot for every event the translator
+        # recognized. Terminal events also write a closing snapshot below
+        # so the UI doesn't sit on stale "Working on..." copy.
+        snap = activity.observe(effect, event_name=ev.event, raw_data=ev.data)
+        if snap is not None:
+            _write_activity(
+                db,
+                todo_id=todo_id,
+                user_id=user_id,
+                snapshot=snap,
+                hermes_run_id=run_id,
+            )
         # Persist artifacts before any terminal `break` below so a `done`
         # event that also carries deliverables still lands them in the DB.
+        artifact_text = _first_text_artifact_body(effect.artifacts) or effect.text
         for artifact in effect.artifacts:
+            if await _maybe_persist_audio_link_artifact(
+                db,
+                todo_id=todo_id,
+                user_id=user_id,
+                run_id=run_id,
+                artifact=artifact,
+                fallback_text=artifact_text,
+            ):
+                continue
             db.upsert_artifact(
                 todo_id=todo_id,
                 user_id=user_id,
@@ -651,6 +810,17 @@ async def _consume_run(
                 title=artifact.title,
                 payload=artifact.payload,
                 hermes_run_id=run_id,
+            )
+        if effect.tts_call is not None:
+            pending_tts[effect.tts_call.call_id] = effect.tts_call
+        if effect.tts_result is not None:
+            _persist_tts_audio(
+                db,
+                todo_id=todo_id,
+                user_id=user_id,
+                run_id=run_id,
+                result=effect.tts_result,
+                call=pending_tts.get(effect.tts_result.call_id),
             )
         if effect.spawned_tasks and effect.new_status == "done":
             spawned_count = apply_spawned_tasks(
@@ -700,6 +870,18 @@ async def _consume_run(
                         kind="oauth_needed",
                     ),
                 )
+                _write_activity(
+                    db,
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    snapshot=activity.mark_terminal(
+                        state="paused",
+                        phase="needs_auth",
+                        title="Connect an account to continue",
+                        detail=effect.text,
+                    ),
+                    hermes_run_id=run_id,
+                )
                 # The run usually pauses here in practice; we stop consuming
                 # so the next "Do it" can resume cleanly with fresh creds.
                 await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
@@ -726,11 +908,35 @@ async def _consume_run(
                         kind="needs_input",
                     ),
                 )
+                _write_activity(
+                    db,
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    snapshot=activity.mark_terminal(
+                        state="paused",
+                        phase="needs_input",
+                        title="Needs your input",
+                        detail=effect.interaction.prompt,
+                    ),
+                    hermes_run_id=run_id,
+                )
                 await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
                 return "needs_input"
 
             if effect.new_status in ("done", "failed"):
                 terminal = effect.new_status
+                _write_activity(
+                    db,
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    snapshot=activity.mark_terminal(
+                        state="completed" if effect.new_status == "done" else "failed",
+                        phase=effect.new_status,
+                        title="Done" if effect.new_status == "done" else "Failed",
+                        detail=effect.text,
+                    ),
+                    hermes_run_id=run_id,
+                )
                 # Drain until the stream actually closes so we don't miss tail
                 # events, but with a small grace.
                 break
@@ -743,6 +949,17 @@ async def _consume_run(
             text="Done.",
         )
         db.update_todo(todo_id, {"status": "done"})
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=activity.mark_terminal(
+                state="completed",
+                phase="final",
+                title="Done",
+            ),
+            hermes_run_id=run_id,
+        )
         terminal = "done"
 
     if terminal in ("done", "failed"):
@@ -751,6 +968,229 @@ async def _consume_run(
     await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
 
     return terminal
+
+
+_AUDIO_MIME_BY_EXT: dict[str, str] = {
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+}
+
+
+_AUDIO_LINK_HINTS = ("audio", "spoken", "speech", "recording", "voice")
+
+
+def _first_text_artifact_body(artifacts: list[ArtifactRequest]) -> str | None:
+    """Return the first text artifact body from one final reply, if present."""
+    for artifact in artifacts:
+        if artifact.kind != "text":
+            continue
+        text = artifact.payload.get("text")
+        if isinstance(text, str) and text.strip():
+            return text.strip()
+    return None
+
+
+def _looks_like_audio_link_artifact(artifact: ArtifactRequest) -> bool:
+    """Heuristic for model-emitted audio links we should promote in-app.
+
+    The ideal path is Hermes' native ``text_to_speech`` tool, whose local
+    file path we capture separately. In practice the agent may instead
+    create a Composio/R2 "Audio recording" link. Those links open in a
+    browser and expire, so the runner downloads them, re-uploads to our
+    private bucket, and skips the original link row.
+    """
+    if artifact.kind != "link":
+        return False
+    title = (artifact.title or "").lower()
+    key = artifact.key.lower()
+    if not any(hint in title or hint in key for hint in _AUDIO_LINK_HINTS):
+        return False
+    payload = artifact.payload or {}
+    url = payload.get("url")
+    if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return False
+    provider = str(payload.get("provider") or "").lower()
+    # Be conservative: only promote obvious audio links or links created by
+    # Composio's file/audio flow. Generic "audio docs" links should remain
+    # normal link artifacts unless their title/key says they are recordings.
+    return provider == "composio" or "recording" in title or "audio" in key
+
+
+def _extension_for_audio_response(url: str, content_type: str | None) -> str:
+    """Pick a storage extension from HTTP content-type or URL suffix."""
+    ctype = (content_type or "").split(";", 1)[0].strip().lower()
+    by_type = {
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/ogg": ".ogg",
+        "audio/opus": ".ogg",
+        "audio/wav": ".wav",
+        "audio/x-wav": ".wav",
+        "audio/mp4": ".m4a",
+        "audio/aac": ".aac",
+        "audio/flac": ".flac",
+    }
+    if ctype in by_type:
+        return by_type[ctype]
+    path = httpx.URL(url).path.lower()
+    ext = os.path.splitext(path)[1]
+    if ext in _AUDIO_MIME_BY_EXT:
+        return ext
+    return ".mp3"
+
+
+async def _maybe_persist_audio_link_artifact(
+    db: DB,
+    *,
+    todo_id: str,
+    user_id: str,
+    run_id: str,
+    artifact: ArtifactRequest,
+    fallback_text: str | None,
+) -> bool:
+    """Convert an expiring audio link artifact into a native audio artifact.
+
+    Returns True when the artifact was recognized as an audio link and
+    should not be persisted as a browser-opening ``link`` card. If the
+    download/upload fails we still return True: keeping the bad link is the
+    exact UX this fallback is meant to avoid.
+    """
+    if not _looks_like_audio_link_artifact(artifact):
+        return False
+    url = str((artifact.payload or {}).get("url") or "")
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            audio_bytes = resp.content
+    except Exception as e:
+        log.warning(
+            "audio link download failed todo=%s run=%s url=%s: %s",
+            todo_id, run_id, url[:160], e,
+        )
+        return True
+    if not audio_bytes:
+        log.warning("audio link empty todo=%s run=%s url=%s", todo_id, run_id, url[:160])
+        return True
+    ext = _extension_for_audio_response(url, resp.headers.get("content-type"))
+    mime = _AUDIO_MIME_BY_EXT.get(ext, "application/octet-stream")
+    storage_path = db.upload_todo_audio(
+        user_id=user_id,
+        todo_id=todo_id,
+        filename=f"{uuid.uuid4().hex}{ext}",
+        data=audio_bytes,
+        mime_type=mime,
+    )
+    if not storage_path:
+        return True
+    payload: dict[str, Any] = {
+        "bucket": "todo-audio",
+        "storage_path": storage_path,
+        "mime_type": mime,
+        "provider": str((artifact.payload or {}).get("provider") or "remote"),
+        "byte_size": len(audio_bytes),
+    }
+    if fallback_text and fallback_text.strip():
+        payload["text"] = fallback_text.strip()
+    db.upsert_artifact(
+        todo_id=todo_id,
+        user_id=user_id,
+        key="audio",
+        kind="audio",
+        title=artifact.title or "Spoken summary",
+        payload=payload,
+        hermes_run_id=run_id,
+    )
+    return True
+
+
+def _persist_tts_audio(
+    db: DB,
+    *,
+    todo_id: str,
+    user_id: str,
+    run_id: str,
+    result: TTSResult,
+    call: TTSCall | None,
+) -> None:
+    """Upload one TTS-generated file and upsert the matching audio artifact.
+
+    Best-effort: a missing source file, an unreadable file, an upload
+    failure, or any other transient error logs a warning and returns
+    without raising. We never want a TTS hiccup to fail an otherwise
+    successful task — the chat-visible final reply is still authoritative.
+
+    Audio is keyed on the literal string ``"audio"`` so a second TTS call
+    in the same run replaces the prior card via the existing upsert on
+    ``(todo_id, artifact_key)``. That matches the single-player UX in
+    the iOS detail header.
+    """
+    expanded = os.path.expanduser(os.path.expandvars(result.file_path))
+    if not os.path.isfile(expanded):
+        log.warning(
+            "tts audio file missing for todo=%s run=%s path=%s",
+            todo_id, run_id, expanded,
+        )
+        return
+    try:
+        with open(expanded, "rb") as f:
+            audio_bytes = f.read()
+    except Exception as e:
+        log.error(
+            "tts audio read failed for todo=%s run=%s path=%s: %s",
+            todo_id, run_id, expanded, e,
+        )
+        return
+    if not audio_bytes:
+        log.warning(
+            "tts audio empty for todo=%s run=%s path=%s",
+            todo_id, run_id, expanded,
+        )
+        return
+    ext = os.path.splitext(expanded)[1].lower() or ".mp3"
+    mime = _AUDIO_MIME_BY_EXT.get(ext, "application/octet-stream")
+    filename = f"{uuid.uuid4().hex}{ext}"
+    storage_path = db.upload_todo_audio(
+        user_id=user_id,
+        todo_id=todo_id,
+        filename=filename,
+        data=audio_bytes,
+        mime_type=mime,
+    )
+    if not storage_path:
+        return
+    payload: dict[str, Any] = {
+        "bucket": "todo-audio",
+        "storage_path": storage_path,
+        "mime_type": mime,
+        "voice_compatible": result.voice_compatible,
+        "byte_size": len(audio_bytes),
+    }
+    if result.provider:
+        payload["provider"] = result.provider
+    spoken_text = (call.text if call is not None else "").strip()
+    if spoken_text:
+        payload["text"] = spoken_text
+    if call is not None and call.voice:
+        payload["voice"] = call.voice
+    db.upsert_artifact(
+        todo_id=todo_id,
+        user_id=user_id,
+        key="audio",
+        kind="audio",
+        title="Spoken summary",
+        payload=payload,
+        hermes_run_id=run_id,
+    )
 
 
 async def _reconcile_run_tokens(

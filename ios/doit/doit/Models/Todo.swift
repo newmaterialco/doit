@@ -175,6 +175,17 @@ indirect enum JSONValue: Codable, Hashable, Sendable {
         return nil
     }
 
+    /// Numeric accessor used by artifact payloads that carry sizes /
+    /// durations (e.g. audio clips). Falls through to a parsed string for
+    /// JSON producers that emit numbers as strings.
+    var numberValue: Double? {
+        switch self {
+        case .number(let n): return n
+        case .string(let s): return Double(s)
+        default: return nil
+        }
+    }
+
     var objectValue: [String: JSONValue]? {
         if case .object(let o) = self { return o }
         return nil

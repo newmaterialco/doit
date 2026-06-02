@@ -6,10 +6,12 @@ struct Toolkit: Codable, Identifiable, Hashable, Sendable {
     let slug: String
     let name: String
     let description: String
-    let logo_url: String?
+    let connectable: Bool?
     let connected: Bool
     let connection_id: String?
     let status: String?
+
+    var isConnectable: Bool { connectable ?? true }
 }
 
 struct ConnectResult: Codable, Sendable {

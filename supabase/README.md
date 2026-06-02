@@ -26,9 +26,18 @@ Auth, database, Realtime, and Edge Functions for doit.
 
    Or paste `migrations/0001_init.sql` into the SQL editor.
 
-4. **Realtime** is enabled by the migration (publishes `todos`, `todo_steps`,
-   and `todo_interactions`). In Dashboard -> Database -> Replication, verify
-   they are listed.
+4. **Realtime** is enabled by the migrations and publishes `todos`,
+   `todo_steps`, `todo_interactions`, `todo_artifacts`, `todo_messages`,
+   `cron_jobs`, `cron_job_interactions`, and `cron_job_messages`. In
+   Dashboard -> Database -> Replication, verify they are listed.
+
+   The iOS app subscribes to a `user_id=eq.<userID>` slice of those tables
+   in [`ios/doit/doit/Supabase/TodoRealtimeHub.swift`](../ios/doit/doit/Supabase/TodoRealtimeHub.swift)
+   and routes the events through `TodoStore`. See
+   [`/docs/task-realtime.md`](../docs/task-realtime.md) for the full
+   contract. If you add a new table that the iOS list needs to render live,
+   add it to the `supabase_realtime` publication in a new migration *and*
+   extend the hub + store — don't try to poll from a view.
 
 ## Per-user onboarding
 

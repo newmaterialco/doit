@@ -112,6 +112,9 @@ SYSTEM_INSTRUCTIONS = (
     "this block when the user asked for a single coordinated action — use "
     "multiple [[DOIT_ARTIFACT]] blocks (sheet link first, then one email "
     "artifact per draft with distinct keys) instead.\n\n"
+    "When spawning from inbox, make each title specific to the message "
+    "(sender and subject/action), never a generic repeated title like "
+    "\"Review unread Gmail emails and propose next steps\".\n\n"
     "When you finish the task, end your final reply with a one-line summary of "
     "what you did (outside the tasks block)."
 )

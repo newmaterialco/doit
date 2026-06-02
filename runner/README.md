@@ -115,6 +115,12 @@ ssh "$DOIT_VM_HOST" '
 
 - The runner uses Supabase's **service_role** key so its writes bypass RLS.
   Keep that key off the iOS app at all costs — it's server-only.
+- **The iOS app sees runner writes via Supabase Realtime, not via APNs.**
+  Realtime is the primary in-app refresh path; APNs is only used when the
+  app is backgrounded or closed. If you add a new column or table the iOS
+  list needs to render live, make sure it's on the `supabase_realtime`
+  publication. See [`/docs/task-realtime.md`](../docs/task-realtime.md) for
+  the contract.
 - For the "thinking timeline" we deliberately ignore token-by-token deltas
   (they'd be too noisy) and emit one row per **tool started** + **tool result**,
   plus a single **final** row at the end. Good UX, low write volume.

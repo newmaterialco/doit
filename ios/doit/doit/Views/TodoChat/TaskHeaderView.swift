@@ -7,19 +7,19 @@ private enum TaskHeaderLayout {
     static let statusIconSize: CGFloat = 28
     static let statusIconSpacing: CGFloat = 12
     static var titleLeadingInset: CGFloat { statusIconSize + statusIconSpacing }
-    /// Extra trailing inset on the date / connection row beyond the
-    /// container's horizontal padding so the logo doesn't hug the edge.
-    static let metadataExtraTrailingPadding: CGFloat = 8
+    static let headerDateFontSize: CGFloat = 15
+    static let headerConnectionIconSize: CGFloat = 18
+    static let headerMetadataDotSize: CGFloat = 4
+    /// Extra space between the compact header row and the task title.
+    static let headerToTitleSpacing: CGFloat = 12
     static let connectorCornerRadius: CGFloat = 8
     /// Space between the horizontal connector stub and the component edge.
     static let connectorComponentGap: CGFloat = 8
 }
 
-/// Top panel of the split-screen detail view: a back chevron pinned to the
-/// top-left (so navigation mirrors the system nav bar), a more-actions
-/// (`ellipsis`) menu on the right that exposes "Stop task" while the agent
-/// is still cancellable, and a compact status indicator + title + status
-/// label below with extra breathing room from the action row.
+/// Top panel of the split-screen detail view: a compact action row with
+/// back, centered created-at time and connection logos, and a more-actions
+/// menu, then a status indicator + title + optional agent-status / artifacts below.
 struct TaskHeaderView: View {
     let todo: Todo
     /// User-visible deliverables produced by the agent (e.g. a created
@@ -33,6 +33,10 @@ struct TaskHeaderView: View {
     /// a status note (not as part of the chat). `nil` when there's
     /// nothing to surface.
     let agentStatus: String?
+    /// Live agent activity snapshot driving the animated activity card
+    /// at the top of the detail view. `nil` when no run is in flight.
+    /// Sourced from `TodoStore.agentActivityByTodoID`.
+    let agentActivity: AgentActivity?
     let onBack: () -> Void
     let onDelete: () -> Void
 
@@ -50,12 +54,14 @@ struct TaskHeaderView: View {
         todo: Todo,
         artifacts: [TodoArtifact] = [],
         agentStatus: String? = nil,
+        agentActivity: AgentActivity? = nil,
         onBack: @escaping () -> Void,
         onDelete: @escaping () -> Void
     ) {
         self.todo = todo
         self.artifacts = artifacts
         self.agentStatus = agentStatus
+        self.agentActivity = agentActivity
         self.onBack = onBack
         self.onDelete = onDelete
     }
@@ -63,72 +69,73 @@ struct TaskHeaderView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .center, spacing: 12) {
-                    Button(action: onBack) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.primary)
-                            .frame(width: 36, height: 36)
-                            .background(Color.primary.opacity(0.06), in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Back")
-
-                    Spacer(minLength: 8)
-
-                    Text(todo.status.label)
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .contentTransition(.opacity)
-                        .animation(.smooth(duration: 0.3), value: todo.status)
-                        .accessibilityLabel("Status: \(todo.status.label)")
-
-                    Spacer(minLength: 8)
-
-                    Menu {
-                        Button("Delete Task", role: .destructive, action: onDelete)
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 17, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 36)
-                            .background(Color.primary.opacity(0.06), in: Circle())
-                    }
-                    // Suppress Menu's default accent (blue) tint so the
-                    // ellipsis renders in the same neutral grey as the back
-                    // chevron's symbol.
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("More options")
-                }
-
-                // Metadata row: date aligns with the title column; connection
-                // logo sits further in from the trailing edge.
-                HStack(alignment: .center, spacing: 8) {
-                    Text(humanizedDate(todo.created_at))
-                        .font(.system(size: 13, weight: .regular, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 8)
-
-                    connectionLogosRow
-                }
-                .padding(.leading, TaskHeaderLayout.titleLeadingInset)
-                .padding(.trailing, TaskHeaderLayout.metadataExtraTrailingPadding)
-                .padding(.top, 12)
+                headerActionRow
 
                 taskTitleBlock
+                    .padding(.top, TaskHeaderLayout.headerToTitleSpacing)
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .padding(.bottom, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .animation(.smooth(duration: 0.3), value: agentStatus)
+            .animation(.smooth(duration: 0.3), value: agentActivity?.updated_at)
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Back and more menu pinned to the edges; created-at + connection
+    /// logos centered evenly between them.
+    private var headerActionRow: some View {
+        HStack(alignment: .center, spacing: 0) {
+            Button(action: onBack) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 36, height: 36)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
+
+            Spacer(minLength: 0)
+
+            HStack(alignment: .center, spacing: 6) {
+                Text(humanizedDate(todo.created_at))
+                    .font(.system(size: TaskHeaderLayout.headerDateFontSize, weight: .regular, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .accessibilityLabel("Created \(humanizedDate(todo.created_at))")
+
+                if !connectionSlugs.isEmpty {
+                    headerMetadataDot
+                    connectionLogosRow
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            Menu {
+                Button("Delete Task", role: .destructive, action: onDelete)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36)
+                    .background(Color.primary.opacity(0.06), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("More options")
+        }
+    }
+
+    private var headerMetadataDot: some View {
+        Circle()
+            .fill(Color.secondary.opacity(0.45))
+            .frame(width: TaskHeaderLayout.headerMetadataDotSize, height: TaskHeaderLayout.headerMetadataDotSize)
+            .accessibilityHidden(true)
     }
 
     private var connectionSlugs: [String] {
@@ -137,12 +144,27 @@ struct TaskHeaderView: View {
 
     @ViewBuilder
     private var connectionLogosRow: some View {
-        ConnectionLogosRow(slugs: connectionSlugs)
+        ConnectionLogosRow(
+            slugs: connectionSlugs,
+            iconSize: TaskHeaderLayout.headerConnectionIconSize,
+            spacing: 5
+        )
     }
 
     private var hasContentBelowTitle: Bool {
+        if let activity = agentActivity, shouldShowActivityCard(activity) { return true }
         if let status = agentStatus, !status.isEmpty { return true }
         return !artifacts.isEmpty
+    }
+
+    /// Show the activity card whenever we have a snapshot, including
+    /// settled `completed`/`failed` snapshots — they fade out shortly
+    /// after the chat thread renders the final reply, but during the
+    /// window the user just navigated in, the card is the cleanest
+    /// recap of what just happened. We hide only the never-ran case
+    /// (nil) and the `idle` placeholder phase.
+    private func shouldShowActivityCard(_ activity: AgentActivity) -> Bool {
+        activity.resolvedPhase != .idle
     }
 
     /// Checkmark, title, and any agent-status / artifact cards share one
@@ -164,9 +186,17 @@ struct TaskHeaderView: View {
                     .multilineTextAlignment(.leading)
                     .lineLimit(3)
 
+                if let activity = agentActivity, shouldShowActivityCard(activity) {
+                    AgentActivityCard(activity: activity, isTaskActive: todo.status.isActive)
+                        .connectorAnchor()
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
                 if let status = agentStatus, !status.isEmpty {
                     agentStatusBox(text: status)
-                        .connectorAnchor()
+                        .modifier(
+                            ConditionalConnectorAnchor(isActive: agentActivity == nil)
+                        )
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
@@ -261,7 +291,7 @@ struct TaskHeaderView: View {
         drafts: [TodoArtifact],
         anchorFirst: Bool
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
                 ConnectionLogo(slug: drafts.first?.emailProvider ?? "gmail")
                     .frame(width: 16, height: 16)
@@ -271,18 +301,12 @@ struct TaskHeaderView: View {
             }
             .padding(.leading, 4)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(drafts.enumerated()), id: \.element.id) { index, artifact in
                     TaskArtifactView(artifact: artifact)
                         .modifier(ConditionalConnectorAnchor(isActive: anchorFirst && index == 0))
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
-            }
-            .padding(.leading, 12)
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(Color.secondary.opacity(0.22))
-                    .frame(width: 2)
             }
         }
     }
@@ -410,10 +434,10 @@ private extension View {
 // MARK: - Artifact card
 
 /// Compact card the agent uses to surface a final deliverable — a created
-/// doc/sheet link, a sent email, a calendar invite, or a text result.
-/// Dispatches on `artifact.kind` to one of four small renderers; unknown
-/// or empty payloads short-circuit to nothing so a malformed row never
-/// leaves a blank tile in the header.
+/// doc/sheet link, a sent email, a calendar invite, a text result, or a
+/// Hermes-generated spoken summary. Dispatches on `artifact.kind` to one
+/// of five small renderers; unknown or empty payloads short-circuit to
+/// nothing so a malformed row never leaves a blank tile in the header.
 struct TaskArtifactView: View {
     let artifact: TodoArtifact
 
@@ -424,6 +448,7 @@ struct TaskArtifactView: View {
             case .email: EmailArtifactCard(artifact: artifact)
             case .calendar: CalendarArtifactCard(artifact: artifact)
             case .text: TextArtifactCard(artifact: artifact)
+            case .audio: AudioArtifactCard(artifact: artifact)
             }
         }
     }
@@ -468,11 +493,16 @@ private struct ArtifactCardShell<Content: View>: View {
             }
             content()
         }
-        .padding(12)
+        .padding(18)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
 
         if let onTap {
             Button(action: onTap) { card }
@@ -529,36 +559,55 @@ private struct LinkArtifactCard: View {
     }
 }
 
-/// Email draft preview: To/Subject in the header, body truncated below.
+/// Email draft preview styled like the chat's Gmail draft card: provider
+/// logo, bold subject, recipients, and the full drafted body in one tile.
 private struct EmailArtifactCard: View {
     let artifact: TodoArtifact
 
     var body: some View {
         let draft = artifact.emailDraft
-        let title = artifact.title ?? draft?.subject ?? "Email draft"
-        ArtifactCardShell(
-            icon: AnyView(
-                ConnectionLogo(slug: artifact.emailProvider)
-            ),
-            title: title
-        ) {
-            if let draft {
-                VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 14) {
+            ConnectionLogo(slug: artifact.emailProvider)
+                .frame(width: 20, height: 20)
+                .padding(.top, 4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(artifact.title ?? draft?.subject ?? "Email draft")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                if let draft {
                     if !draft.to.isEmpty {
                         Text("To: \(draft.to.joined(separator: ", "))")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                            .lineLimit(2)
                             .truncationMode(.tail)
                     }
+
                     Text(draft.body)
-                        .font(.system(size: 13, weight: .regular, design: .rounded))
+                        .font(.system(size: 15, weight: .regular, design: .rounded))
                         .foregroundStyle(.secondary)
-                        .lineLimit(3)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
     }
 }
 
@@ -593,7 +642,7 @@ private struct CalendarArtifactCard: View {
                         .labelStyle(.titleAndIcon)
                         .font(.system(size: 12, weight: .regular, design: .rounded))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let attendees = event?.attendees, !attendees.isEmpty {
                     Label(attendees.joined(separator: ", "),
@@ -601,8 +650,7 @@ private struct CalendarArtifactCard: View {
                         .labelStyle(.titleAndIcon)
                         .font(.system(size: 12, weight: .regular, design: .rounded))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let url = event?.url {
                     Button {

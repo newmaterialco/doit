@@ -1,25 +1,24 @@
 import AuthenticationServices
 import PhotosUI
-import PostgREST
-import Supabase
 import SwiftUI
 
 struct TodoDetailView: View {
     /// Hard cap on attached images per task; matches the New Task sheet.
     private static let maxAttachments = 5
 
-    let todo: Todo
+    /// We open the detail view by id (not by passing a `Todo` snapshot) so
+    /// the header always reflects the latest row from `TodoStore`. If a
+    /// realtime update lands while the user is here, the header redraws
+    /// automatically without a manual refetch. See `docs/task-realtime.md`.
+    let todoID: UUID
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(TodoStore.self) private var store
 
-    @State private var current: Todo
+    /// Chat-only state owned by the detail view. Task row, artifacts, and
+    /// interaction history all come from the store.
     @State private var steps: [TodoStep] = []
-    /// Full interaction history for this todo (open + closed). Stored as
-    /// an array so the chat keeps every Q&A turn visible like a real
-    /// chat app; `openInteraction` derives the currently-actionable one.
-    @State private var interactions: [TodoInteraction] = []
-    @State private var artifacts: [TodoArtifact] = []
     @State private var submittingOptionID: String?
     @State private var error: String?
     @State private var oauthSession: ASWebAuthenticationSession?
@@ -43,24 +42,51 @@ struct TodoDetailView: View {
     /// and roll back to whatever they had before once they dismiss.
     @State private var detentBeforeFocus: SplitDetent?
 
-    init(todo: Todo) {
-        self.todo = todo
-        self._current = State(initialValue: todo)
+    init(todoID: UUID) {
+        self.todoID = todoID
+    }
+
+    /// Current task row from the store. Until the first refresh lands we
+    /// fall back to a placeholder so the layout doesn't flicker between
+    /// "loading" and "empty" — the header just renders an empty title.
+    private var current: Todo? {
+        store.todo(id: todoID)
+    }
+
+    /// Full interaction history for the chat thread.
+    private var interactions: [TodoInteraction] {
+        store.interactions(for: todoID)
+    }
+
+    /// Latest artifacts (header cards).
+    private var artifacts: [TodoArtifact] {
+        store.artifacts(for: todoID)
     }
 
     var body: some View {
         VerticalSplit(
             detent: $splitDetent,
-            topTitle: current.title.isEmpty ? "Task" : current.title,
+            topTitle: (current?.title.isEmpty == false) ? (current?.title ?? "Task") : "Task",
             bottomTitle: "Chat",
             topView: {
-                TaskHeaderView(
-                    todo: current,
-                    artifacts: artifacts,
-                    agentStatus: openInteractionStatus,
-                    onBack: { dismiss() },
-                    onDelete: deleteTask
-                )
+                Group {
+                    if let current {
+                        TaskHeaderView(
+                            todo: current,
+                            artifacts: artifacts,
+                            agentStatus: openInteractionStatus,
+                            agentActivity: store.agentActivity(for: todoID),
+                            onBack: { dismiss() },
+                            onDelete: deleteTask
+                        )
+                    } else {
+                        // Row was deleted (or RLS removed it) while we
+                        // were here — pop back to the list rather than
+                        // render a confusing empty header.
+                        Color.clear
+                            .onAppear { dismiss() }
+                    }
+                }
             },
             bottomView: {
                 TodoChatThread(
@@ -68,7 +94,7 @@ struct TodoDetailView: View {
                     attachmentsByID: attachmentsByID,
                     attachmentURLs: attachmentURLs,
                     submittingOptionID: submittingOptionID,
-                    isAgentRunning: current.status.isActive || sending,
+                    isAgentRunning: (current?.status.isActive ?? false) || sending,
                     photoSelections: $photoSelections,
                     canAddMoreAttachments: canAddMoreAttachments,
                     maxNewAttachments: max(1, TodoDetailView.maxAttachments - attachments.count),
@@ -101,7 +127,7 @@ struct TodoDetailView: View {
                 )
             }
         )
-        .handleTrailingText(formattedTokens(current.total_tokens))
+        .handleTrailingText(formattedTokens(current?.total_tokens))
         // The vendor split positions everything (handle pill, mini
         // overlay, wrappers) with absolute offsets and `.ignoresSafeArea()`
         // on the wrappers — but the *root* ZStack still participates in
@@ -116,51 +142,51 @@ struct TodoDetailView: View {
         // erasing to `some View` first would hide it.
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .toolbar(.hidden, for: .navigationBar)
-        .task(id: current.id) {
-            // Realtime lives in `TodoRealtimeHub` so `onDisappear` /
-            // split-layout churn does not cancel in-flight channel joins.
-            // The list calls `endTodoWatch()` when `navigationPath` pops.
+        .task(id: todoID) {
+            // Realtime for the task row, interactions, and artifacts flows
+            // through the app-scoped user feed → `TodoStore`. The hub's
+            // per-todo watch only covers chat-only tables (`todo_steps`,
+            // `todo_messages`) that the user feed doesn't carry. The list
+            // calls `endTodoWatch()` when `navigationPath` pops.
             TodoRealtimeHub.beginTodoWatch(
-                todoID: current.id,
+                todoID: todoID,
                 handlers: .init(
-                    onTodo: { await refreshTodo() },
                     onSteps: { await loadSteps() },
-                    onInteractions: { await loadInteractions() },
-                    onArtifacts: { await loadArtifacts() },
                     onMessages: { await loadMessages() }
                 )
             )
-            // Refetch the row on every appearance so columns that mutate
-            // mid-run (status, total_tokens, error_message) are fresh —
-            // the list view's cached `Todo` can lag, especially after the
-            // user navigates back here from the home feed once a run has
-            // already incremented tokens.
-            await refreshTodo()
+            // Tell the store this todo is now in front of the user. The
+            // store refreshes the row + artifacts + full interaction
+            // history so columns that mutate mid-run (status, total_tokens,
+            // error_message) are fresh even if the list snapshot lagged.
+            store.beginTracking(todoID: todoID)
             await loadSteps()
-            await loadInteractions()
             await loadAttachments()
-            await loadArtifacts()
             await loadMessages()
         }
+        .onDisappear {
+            store.endTracking(todoID: todoID)
+        }
         .onChange(of: scenePhase) { oldPhase, newPhase in
-            print("[detail] scenePhase \(oldPhase)→\(newPhase) todo=\(current.id)")
+            print("[detail] scenePhase \(oldPhase)→\(newPhase) todo=\(todoID)")
             guard newPhase == .active else { return }
             Task {
-                await refreshTodo()
+                await store.refreshTodo(id: todoID)
+                await store.refreshArtifacts(for: todoID)
+                await store.refreshInteractions(for: todoID)
+                await store.refreshAgentActivity(for: todoID)
                 await loadSteps()
-                await loadInteractions()
-                await loadArtifacts()
                 await loadMessages()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .todoRemoteUpdate)) { note in
-            guard TodoRemoteUpdate.todoID(from: note) == current.id else { return }
-            print("[detail] push refresh todo=\(current.id)")
+            guard TodoRemoteUpdate.todoID(from: note) == todoID else { return }
+            print("[detail] push refresh todo=\(todoID)")
             Task {
-                await refreshTodo()
+                await store.refreshTodo(id: todoID)
+                await store.refreshArtifacts(for: todoID)
+                await store.refreshInteractions(for: todoID)
                 await loadSteps()
-                await loadInteractions()
-                await loadArtifacts()
                 await loadMessages()
             }
         }
@@ -190,7 +216,8 @@ struct TodoDetailView: View {
     }
 
     private var conversationItems: [ConversationItem] {
-        ConversationBuilder.build(
+        guard let current else { return [] }
+        return ConversationBuilder.build(
             todo: current,
             steps: steps,
             interactions: interactions,
@@ -269,13 +296,11 @@ struct TodoDetailView: View {
     /// Permanent removal of the todo (and its cascaded children). Pops back
     /// to the list immediately so the navigation animation runs in parallel
     /// with the network round-trip — the row is already gone client-side
-    /// via realtime by the time the list view re-renders.
+    /// via the store by the time the list view re-renders.
     private func deleteTask() {
-        let id = current.id
+        let id = todoID
         dismiss()
-        Task {
-            try? await TodosAPI.delete(id)
-        }
+        Task { await store.deleteTodo(id) }
     }
 
     private func respond(
@@ -283,66 +308,18 @@ struct TodoDetailView: View {
         optionID: String?,
         text: String?
     ) async {
+        guard let current else { return }
         submittingOptionID = optionID ?? "__freeform"
         defer { submittingOptionID = nil }
-        let phase: InteractionPhase = interaction.isPreparationPhase ? .prepare : .execute
-        do {
-            try await TodosAPI.respond(
-                to: interaction.id,
-                todoID: current.id,
-                optionID: optionID,
-                text: text,
-                phase: phase
-            )
-            // Optimistic: flip the local row to `.responded` with the
-            // submitted answer so the chat keeps showing the question
-            // *and* the user's reply, instead of the card vanishing.
-            // Realtime will reconcile with the persisted row shortly.
-            applyOptimisticResponse(
-                interactionID: interaction.id,
-                optionID: optionID,
-                text: text
-            )
-            if optionID?.lowercased() == "cancel" {
-                current.status = .cancelled
-            } else {
-                // Keep the status in an "active" bucket so the header
-                // reads "Doing" while the runner re-claims; without
-                // this it briefly flashes through `needs_input` again
-                // before realtime catches up.
-                current.status = phase.nextStatus
-            }
-        } catch {
-            print("[interaction] respond failed: \(error)")
-            self.error = "Couldn't send your response: \(error.localizedDescription)"
-        }
-    }
-
-    /// Mutate the local `interactions` row in place so the chat
-    /// transcript reflects the new `.responded` state immediately. We
-    /// build a synthetic JSON payload that mirrors what the server
-    /// will end up storing (`{option_id, text}`) so the same helpers
-    /// (`respondedBubbleText`, `respondedOptionID`, …) work whether
-    /// we're displaying optimistic local state or a freshly-loaded
-    /// realtime row.
-    private func applyOptimisticResponse(
-        interactionID: UUID,
-        optionID: String?,
-        text: String?
-    ) {
-        guard let idx = interactions.firstIndex(where: { $0.id == interactionID }) else { return }
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-        var responseObj: [String: JSONValue] = [:]
-        if let id = optionID, !id.isEmpty {
-            responseObj["option_id"] = .string(id)
-        }
-        if let body = trimmed, !body.isEmpty {
-            responseObj["text"] = .string(body)
-        }
-        let now = Date()
-        interactions[idx].status = (optionID?.lowercased() == "cancel") ? .cancelled : .responded
-        interactions[idx].response = responseObj.isEmpty ? nil : .object(responseObj)
-        interactions[idx].responded_at = now
+        // Store owns the optimistic mutation + the API call so the chat
+        // bubble flips to `.responded` instantly and the list card stays
+        // in sync.
+        await store.respond(
+            to: interaction,
+            todo: current,
+            optionID: optionID,
+            text: text
+        )
     }
 
     /// Free-form chat send from the composer. If there's an open
@@ -353,6 +330,7 @@ struct TodoDetailView: View {
     /// makes the bubble appear instantly; realtime will reconcile the row
     /// id once the server returns.
     private func send(_ text: String) async {
+        guard let current else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !sending else { return }
         sending = true
@@ -375,7 +353,10 @@ struct TodoDetailView: View {
         )
         messages.append(optimistic)
         let priorStatus = current.status
-        current.status = .requested
+        // Status flip + REST call go through the store so the list card
+        // also reads "Doing" instantly. The runner's resume will write
+        // the real status back via realtime.
+        await store.setStatus(todoID, .requested)
 
         do {
             let saved = try await TodosAPI.sendMessage(
@@ -393,7 +374,7 @@ struct TodoDetailView: View {
         } catch {
             print("[chat] send failed: \(error)")
             messages.removeAll { $0.id == optimistic.id }
-            current.status = priorStatus
+            await store.setStatus(todoID, priorStatus)
             self.error = "Couldn't send your message: \(error.localizedDescription)"
         }
     }
@@ -426,20 +407,10 @@ struct TodoDetailView: View {
 
     /// Inline "Do it" confirmation from the chat thread's
     /// `.agentReadyToRun` bubble. Mirrors the list-view's pillbutton:
-    /// flip the row to `.requested` optimistically (so the chat shows
-    /// "Doing" instantly) and let realtime reconcile.
+    /// flip the row to `.requested` via the store so chat AND list show
+    /// "Doing" instantly, then let realtime reconcile.
     private func confirmRun() {
-        let prior = current.status
-        current.status = .requested
-        Task {
-            do {
-                try await TodosAPI.setStatus(current.id, .requested)
-            } catch {
-                print("[detail] confirmRun failed: \(error)")
-                current.status = prior
-                self.error = "Couldn't start the task: \(error.localizedDescription)"
-            }
-        }
+        Task { await store.setStatus(todoID, .requested) }
     }
 
     private func startOAuth(url: URL) {
@@ -457,99 +428,39 @@ struct TodoDetailView: View {
     }
 
     // MARK: - Loading + realtime
+    //
+    // Detail-only state. Task row, interactions, and artifacts live in
+    // `TodoStore` and are kept fresh by the user-feed realtime path. The
+    // detail view only owns chat-only state (`todo_steps`, `todo_messages`,
+    // attachments) that the user feed does not carry.
 
     private func loadSteps() async {
         let prevCount = steps.count
         let prevLastID = steps.last?.id
         do {
-            steps = try await TodosAPI.steps(for: current.id)
+            steps = try await TodosAPI.steps(for: todoID)
             let lastKind = steps.last?.kind.rawValue ?? "-"
             let lastID = steps.last?.id
             let added = steps.count - prevCount
             let changed = added != 0 || lastID != prevLastID
-            print("[realtime][steps] loaded count=\(steps.count) (Δ=\(added)) lastKind=\(lastKind) changed=\(changed) todo=\(current.id)")
+            print("[realtime][steps] loaded count=\(steps.count) (Δ=\(added)) lastKind=\(lastKind) changed=\(changed) todo=\(todoID)")
             if steps.contains(where: \.containsInteractionMarker) {
-                await loadInteractionWithRetry()
+                await refreshInteractionsWithRetry()
             }
         } catch {
-            print("[realtime][steps] load failed todo=\(current.id): \(error)")
+            print("[realtime][steps] load failed todo=\(todoID): \(error)")
             self.error = "Couldn't load steps: \(error.localizedDescription)"
         }
     }
 
-    private func loadInteractions() async {
-        let prevCount = interactions.count
-        let prevOpenID = openInteraction?.id
-        do {
-            let fresh = try await TodosAPI.interactions(for: current.id)
-            // Preserve optimistic local mutations: if we already flipped
-            // a row to `.responded` and the server hasn't caught up yet,
-            // keep our local copy until realtime confirms.
-            let merged: [TodoInteraction] = fresh.map { remote in
-                if let local = interactions.first(where: { $0.id == remote.id }),
-                   remote.status == .open,
-                   local.status != .open {
-                    return local
-                }
-                return remote
-            }
-            interactions = merged
-            let newOpenID = openInteraction?.id
-            print("[interaction] loaded count=\(interactions.count) (Δ=\(interactions.count - prevCount)) open=\(newOpenID?.uuidString ?? "nil") prevOpen=\(prevOpenID?.uuidString ?? "nil") todo=\(current.id)")
-        } catch {
-            print("[interaction] load failed todo=\(current.id): \(error)")
-        }
-    }
-
-    private func refreshTodo() async {
-        let prevStatus = current.status
-        let prevTokens = current.total_tokens ?? 0
-        do {
-            let rows: [Todo] = try await Supa.client
-                .from("todos")
-                .select()
-                .eq("id", value: current.id)
-                .limit(1)
-                .execute()
-                .value
-            if let first = rows.first {
-                self.current = first
-                let newTokens = first.total_tokens ?? 0
-                let changed = (prevStatus != first.status) || (prevTokens != newTokens)
-                print("[realtime][todo] refreshed id=\(first.id) status=\(prevStatus)→\(first.status) tok=\(prevTokens)→\(newTokens) changed=\(changed)")
-                if first.status == .needs_input {
-                    await loadInteractionWithRetry()
-                }
-            } else {
-                print("[realtime][todo] refresh returned no rows id=\(current.id)")
-            }
-        } catch {
-            print("[realtime][todo] refresh failed id=\(current.id): \(error)")
-        }
-    }
-
-    private func loadInteractionWithRetry() async {
-        await loadInteractions()
+    /// The interaction row sometimes lags a beat behind the status flip on
+    /// Postgres' commit ordering; a single half-second retry through the
+    /// store covers that race without spamming.
+    private func refreshInteractionsWithRetry() async {
+        await store.refreshInteractions(for: todoID)
         if openInteraction == nil {
-            // The interaction row sometimes lags a beat behind the
-            // status flip on Postgres' commit ordering; a single
-            // half-second retry covers that race without spamming.
             try? await Task.sleep(for: .milliseconds(500))
-            await loadInteractions()
-        }
-    }
-
-    // MARK: - Artifacts
-
-    private func loadArtifacts() async {
-        do {
-            let rows = try await TodosAPI.artifacts(for: current.id)
-            // Drop empty/malformed rows defensively so the header view
-            // never tries to render a card with no content.
-            artifacts = rows.filter(\.hasContent)
-            print("[artifacts] loaded count=\(artifacts.count) todo=\(current.id)")
-        } catch {
-            print("[artifacts] load failed todo=\(current.id): \(error)")
+            await store.refreshInteractions(for: todoID)
         }
     }
 
@@ -557,7 +468,7 @@ struct TodoDetailView: View {
 
     private func loadMessages() async {
         do {
-            let fresh = try await TodosAPI.messages(for: current.id)
+            let fresh = try await TodosAPI.messages(for: todoID)
             // Preserve any optimistic locals we inserted but the server
             // hasn't echoed back yet (shouldn't happen often since the
             // insert API returns the persisted row, but guard against
@@ -565,9 +476,9 @@ struct TodoDetailView: View {
             let knownIDs = Set(fresh.map(\.id))
             let pending = messages.filter { !knownIDs.contains($0.id) && $0.consumed_at == nil }
             messages = fresh + pending
-            print("[chat] messages loaded count=\(messages.count) todo=\(current.id)")
+            print("[chat] messages loaded count=\(messages.count) todo=\(todoID)")
         } catch {
-            print("[chat] messages load failed todo=\(current.id): \(error)")
+            print("[chat] messages load failed todo=\(todoID): \(error)")
         }
     }
 
@@ -575,10 +486,10 @@ struct TodoDetailView: View {
 
     private func loadAttachments() async {
         do {
-            attachments = try await AttachmentsAPI.list(forTodoID: current.id)
+            attachments = try await AttachmentsAPI.list(forTodoID: todoID)
             await refreshAttachmentURLs()
         } catch {
-            print("[attachments] load failed todo=\(current.id): \(error)")
+            print("[attachments] load failed todo=\(todoID): \(error)")
         }
     }
 
@@ -620,6 +531,7 @@ struct TodoDetailView: View {
     }
 
     private func uploadImages(_ images: [UIImage]) async {
+        guard let current else { return }
         guard !images.isEmpty else { return }
         uploading = true
         defer { uploading = false }

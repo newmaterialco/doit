@@ -203,7 +203,7 @@ def parse_prepare(
     schedule = _clean_str(data.get("schedule"), max_len=120)
     schedule_display = _clean_str(data.get("schedule_display"), max_len=200)
 
-    additional_tasks: list[PrepTask] = []
+    parsed_tasks: list[PrepTask] = []
     raw_tasks = data.get("tasks")
     if isinstance(raw_tasks, list):
         for item in raw_tasks:
@@ -216,9 +216,15 @@ def parse_prepare(
             if t_slug:
                 t_slug = t_slug.lower() if t_slug.lower() in allowed_slugs else None
             t_summary = _clean_str(item.get("summary"), max_len=400)
-            additional_tasks.append(
+            parsed_tasks.append(
                 PrepTask(title=t_title, connection_slug=t_slug, summary=t_summary)
             )
+    # The prep contract says `tasks[0]` is represented by the original todo
+    # row; only tasks after the first should become new rows. This also
+    # handles models that emit a one-item `tasks` array for a single task.
+    if parsed_tasks and not title:
+        title = parsed_tasks[0].title
+    additional_tasks = parsed_tasks[1:] if parsed_tasks else []
 
     clarification = data.get("clarification")
     c_prompt: str | None = None

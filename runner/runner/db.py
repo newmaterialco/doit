@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from supabase import Client, create_client
@@ -15,6 +15,11 @@ log = logging.getLogger(__name__)
 
 
 _TITLE_MAX = 120
+_CLAIM_STALE_AFTER = timedelta(minutes=15)
+
+
+def _iso_z(dt: datetime) -> str:
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 def _derive_title(text: str) -> str:
@@ -44,23 +49,43 @@ class DB:
     # ------------------------------------------------------------------
 
     def claim_next_preparing_todo(self) -> dict | None:
-        """Return the oldest ``preparing`` todo, or ``None``.
+        """Atomically claim and return the oldest ``preparing`` todo.
 
-        Unlike the execution claim, there is no separate "preparing in
-        progress" status — the preparation pass is short and the runner is
-        single-instance per deployment (see ``README.md``). If we ever scale
-        to multiple runners we'll need a CAS column like ``prep_started_at``.
+        The row stays in ``status='preparing'`` so the iOS card still renders
+        the correct placeholder, but ``prep_claimed_at`` acts as a short lease
+        so overlapping runner processes do not both prepare and split the
+        same todo.
         """
-        resp = (
-            self._client.table("todos")
-            .select("*")
-            .eq("status", "preparing")
-            .order("created_at")
-            .limit(1)
-            .execute()
-        )
-        rows = resp.data or []
-        return rows[0] if rows else None
+        now = datetime.now(UTC)
+        now_iso = _iso_z(now)
+        stale_before = _iso_z(now - _CLAIM_STALE_AFTER)
+        try:
+            resp = (
+                self._client.table("todos")
+                .select("*")
+                .eq("status", "preparing")
+                .or_(f"prep_claimed_at.is.null,prep_claimed_at.lt.{stale_before}")
+                .order("created_at")
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                return None
+            candidate = rows[0]
+            upd = (
+                self._client.table("todos")
+                .update({"prep_claimed_at": now_iso})
+                .eq("id", candidate["id"])
+                .eq("status", "preparing")
+                .or_(f"prep_claimed_at.is.null,prep_claimed_at.lt.{stale_before}")
+                .execute()
+            )
+            claimed = upd.data or []
+            return claimed[0] if claimed else None
+        except Exception as e:
+            log.error("claim_next_preparing_todo failed: %s", e)
+            return None
 
     def claim_next_requested_todo(self) -> dict | None:
         """Atomically transition one 'requested' todo to 'running' and return it.
@@ -393,6 +418,61 @@ class DB:
         except Exception as e:
             log.error("insert_step(%s, %s) failed: %s", todo_id, kind, e)
 
+    # ------------------------------------------------------------------
+    # Live agent activity snapshot
+    # ------------------------------------------------------------------
+    #
+    # `todo_steps` is the audit log (every event we recognized). The
+    # `todo_agent_activity` table holds the *current* snapshot of what
+    # Hermes is doing right now — one row per todo. The iOS app reads
+    # this snapshot for the card status line, the detail-view animated
+    # cards, and the Live Activity widget. See `runner/activity.py` for
+    # how the snapshot is built and the
+    # `supabase/migrations/...todo_agent_activity.sql` file for shape.
+
+    def upsert_agent_activity(
+        self,
+        *,
+        todo_id: str,
+        user_id: str,
+        fields: dict[str, Any],
+    ) -> None:
+        """Upsert the single current-activity row for a todo.
+
+        `fields` is the dict returned by ``ActivitySnapshot.to_db_fields``;
+        we splice in the keys this table requires (`todo_id`, `user_id`,
+        `started_at` for first-time inserts) so callers don't have to
+        know about every column. Failures are logged but never raise — a
+        missed live-activity write is annoying but never blocks the run.
+        """
+        if not fields:
+            return
+        row: dict[str, Any] = dict(fields)
+        row["todo_id"] = todo_id
+        row["user_id"] = user_id
+        row.setdefault("started_at", datetime.now(UTC).isoformat())
+        try:
+            self._client.table("todo_agent_activity").upsert(
+                row,
+                on_conflict="todo_id",
+            ).execute()
+        except Exception as e:
+            log.error("upsert_agent_activity(%s) failed: %s", todo_id, e)
+
+    def clear_agent_activity(self, todo_id: str) -> None:
+        """Delete the current-activity row.
+
+        Optional helper for hard cancellations; typical exit paths write
+        a terminal snapshot via ``upsert_agent_activity`` so the iOS app
+        gets a chance to render the closing card.
+        """
+        try:
+            self._client.table("todo_agent_activity").delete().eq(
+                "todo_id", todo_id
+            ).execute()
+        except Exception as e:
+            log.error("clear_agent_activity(%s) failed: %s", todo_id, e)
+
     def increment_todo_tokens(self, todo_id: str, delta: int) -> None:
         """Atomically bump `todos.total_tokens` by `delta` via the
         `increment_todo_tokens(uuid, bigint)` Postgres RPC.
@@ -563,6 +643,50 @@ class DB:
     # Artifacts (user-visible deliverables)
     # ------------------------------------------------------------------
 
+    def upload_todo_audio(
+        self,
+        *,
+        user_id: str,
+        todo_id: str,
+        filename: str,
+        data: bytes,
+        mime_type: str,
+    ) -> str | None:
+        """Upload generated audio to the private ``todo-audio`` bucket.
+
+        Mirrors the per-user folder layout used by ``todo-attachments`` so
+        the existing storage RLS policies apply unchanged. The runner
+        uses service_role and bypasses RLS for the upload itself, but
+        iOS later signs the same path with the user's JWT.
+
+        Returns the relative storage path on success (the value the
+        runner persists on the audio artifact payload), or ``None`` on
+        failure.
+        """
+        if not data:
+            log.warning(
+                "upload_todo_audio(user=%s, todo=%s) skipped: empty data",
+                user_id, todo_id,
+            )
+            return None
+        storage_path = f"{user_id}/{todo_id}/{filename}"
+        try:
+            self._client.storage.from_("todo-audio").upload(
+                path=storage_path,
+                file=data,
+                file_options={
+                    "content-type": mime_type,
+                    "upsert": "false",
+                },
+            )
+            return storage_path
+        except Exception as e:
+            log.error(
+                "upload_todo_audio(user=%s, todo=%s) failed: %s",
+                user_id, todo_id, e,
+            )
+            return None
+
     def upsert_artifact(
         self,
         *,
@@ -666,6 +790,35 @@ class DB:
             log.error("spawn_key_exists(%s) failed: %s", spawn_key, e)
             return False
 
+    def spawned_todo_title_exists(
+        self,
+        user_id: str,
+        title: str,
+        *,
+        source_todo_id: str | None = None,
+        source_cron_job_id: str | None = None,
+    ) -> bool:
+        """Best-effort fallback dedupe when an agent emits an unstable source_key."""
+        try:
+            query = (
+                self._client.table("todos")
+                .select("id")
+                .eq("user_id", user_id)
+                .eq("title", title)
+                .limit(1)
+            )
+            if source_todo_id:
+                query = query.eq("spawned_by_todo_id", source_todo_id)
+            elif source_cron_job_id:
+                query = query.eq("spawned_by_cron_job_id", source_cron_job_id)
+            else:
+                return False
+            resp = query.execute()
+            return bool(resp.data)
+        except Exception as e:
+            log.error("spawned_todo_title_exists(%r) failed: %s", title, e)
+            return False
+
     def insert_spawned_todo(
         self,
         *,
@@ -752,18 +905,34 @@ class DB:
             return None
 
     def claim_next_configuring_cron_job(self) -> dict | None:
-        """Return the oldest cron job needing configuration."""
+        """Atomically claim the oldest cron job needing configuration."""
+        now = datetime.now(UTC)
+        now_iso = _iso_z(now)
+        stale_before = _iso_z(now - _CLAIM_STALE_AFTER)
         try:
             resp = (
                 self._client.table("cron_jobs")
                 .select("*")
                 .eq("state", "configuring")
+                .or_(f"configure_claimed_at.is.null,configure_claimed_at.lt.{stale_before}")
                 .order("updated_at")
                 .limit(1)
                 .execute()
             )
             rows = resp.data or []
-            return rows[0] if rows else None
+            if not rows:
+                return None
+            candidate = rows[0]
+            upd = (
+                self._client.table("cron_jobs")
+                .update({"configure_claimed_at": now_iso})
+                .eq("id", candidate["id"])
+                .eq("state", "configuring")
+                .or_(f"configure_claimed_at.is.null,configure_claimed_at.lt.{stale_before}")
+                .execute()
+            )
+            claimed = upd.data or []
+            return claimed[0] if claimed else None
         except Exception as e:
             log.error("claim_next_configuring_cron_job failed: %s", e)
             return None

@@ -6,7 +6,7 @@
 //
 // Endpoints (all POST, body { action, ... }):
 //   { action: "list" }
-//     -> { toolkits: [{ slug, name, description, logo_url, connected, connection_id? }] }
+//     -> { toolkits: [{ slug, name, description, connected, connection_id?, connectable? }] }
 //   { action: "connect", toolkit: "gmail" }
 //     -> { redirect_url: "https://...", connection_id: "..." }
 //   { action: "disconnect", connection_id: "..." }
@@ -26,6 +26,8 @@ const CATALOG: Array<{
     slug: string;
     name: string;
     description: string;
+    /** When false the toolkit is always available (no OAuth connect flow). */
+    connectable?: boolean;
 }> = [
     {
         slug: "gmail",
@@ -72,6 +74,11 @@ const CATALOG: Array<{
         name: "GitHub",
         description: "Open issues and read repos.",
     },
+    {
+        slug: "reddit",
+        name: "Reddit",
+        description: "Browse, post, and comment on subreddits.",
+    },
 ];
 
 interface ComposioConnectedAccount {
@@ -102,14 +109,8 @@ interface ComposioToolkit {
     } | null;
 }
 
-async function listAvailableToolkits(): Promise<ComposioToolkit[]> {
-    const res = await composio("/api/v3.1/toolkits?limit=1000");
-    if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`composio available toolkits failed: ${res.status} ${t}`);
-    }
-    const data = await res.json();
-    return Array.isArray(data) ? data : (data.items ?? data.data ?? []);
+function connectableSlugs(): string[] {
+    return CATALOG.filter((t) => t.connectable !== false).map((t) => t.slug);
 }
 
 function corsHeaders(): HeadersInit {
@@ -156,7 +157,7 @@ async function listConnections(
 
 async function createSession(
     userId: string,
-    toolkits = CATALOG.map((t) => t.slug),
+    toolkits = connectableSlugs(),
 ): Promise<string> {
     const res = await composio("/api/v3.1/tool_router/session", {
         method: "POST",
@@ -184,10 +185,11 @@ async function createSession(
 
 async function listSessionToolkits(
     sessionId: string,
+    slugs = connectableSlugs(),
 ): Promise<ComposioToolkit[]> {
-    const slugs = CATALOG.map((t) => t.slug).join(",");
+    const slugList = slugs.join(",");
     const res = await composio(
-        `/api/v3.1/tool_router/session/${encodeURIComponent(sessionId)}/toolkits?limit=50&toolkits=${encodeURIComponent(slugs)}`,
+        `/api/v3.1/tool_router/session/${encodeURIComponent(sessionId)}/toolkits?limit=50&toolkits=${encodeURIComponent(slugList)}`,
     );
     if (!res.ok) {
         const t = await res.text();
@@ -276,14 +278,11 @@ serve(async (req) => {
         switch (body.action) {
             case "list": {
                 const sessionId = await createSession(userId);
-                const sessionToolkits = await listSessionToolkits(sessionId);
-                const availableToolkits = await listAvailableToolkits();
-                const conns = await listConnections(userId);
+                const [sessionToolkits, conns] = await Promise.all([
+                    listSessionToolkits(sessionId),
+                    listConnections(userId),
+                ]);
                 const bySlug = new Map<string, ComposioConnectedAccount>();
-                const toolkitMetadataBySlug = new Map<string, ComposioToolkit>();
-                for (const tk of availableToolkits) {
-                    toolkitMetadataBySlug.set(tk.slug.toLowerCase(), tk);
-                }
                 for (const tk of sessionToolkits) {
                     const conn = tk.connected_account ??
                         tk.connection?.connected_account ?? null;
@@ -302,21 +301,16 @@ serve(async (req) => {
                     }
                 }
                 const toolkits = CATALOG.map((t) => {
-                    const sessionToolkit = sessionToolkits.find((tk) =>
-                        tk.slug.toLowerCase() === t.slug
-                    );
-                    const metadataToolkit = toolkitMetadataBySlug.get(t.slug);
-                    const conn = bySlug.get(t.slug);
+                    const connectable = t.connectable !== false;
+                    const conn = connectable ? bySlug.get(t.slug) : null;
                     return {
                         slug: t.slug,
                         name: t.name,
                         description: t.description,
-                        logo_url: metadataToolkit?.meta?.logo ??
-                            metadataToolkit?.logo ??
-                            sessionToolkit?.meta?.logo ??
-                            sessionToolkit?.logo ??
-                            null,
-                        connected: conn?.status === "ACTIVE",
+                        connectable,
+                        connected: connectable
+                            ? conn?.status === "ACTIVE"
+                            : true,
                         connection_id: conn?.id ?? null,
                         status: conn?.status ?? null,
                     };
@@ -327,8 +321,12 @@ serve(async (req) => {
                 if (!body.toolkit) {
                     return json({ error: "missing_toolkit" }, 400);
                 }
-                if (!CATALOG.some((t) => t.slug === body.toolkit)) {
+                const catalogEntry = CATALOG.find((t) => t.slug === body.toolkit);
+                if (!catalogEntry) {
                     return json({ error: "unknown_toolkit" }, 400);
+                }
+                if (catalogEntry.connectable === false) {
+                    return json({ error: "not_connectable" }, 400);
                 }
                 const result = await initiateConnection(
                     userId,

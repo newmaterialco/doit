@@ -128,14 +128,28 @@ class ParsePrepareTests(unittest.TestCase):
         text = wrap(
             '{"title":"Send rent email","connection_slug":"gmail",'
             '"summary":"Email landlord.","ready":true,'
-            '"tasks":[{"title":"Book calendar hold","connection_slug":'
-            '"googlecalendar","summary":"Block time to review lease."}]}'
+            '"tasks":['
+            '{"title":"Send rent email","connection_slug":"gmail","summary":"Email landlord."},'
+            '{"title":"Book calendar hold","connection_slug":'
+            '"googlecalendar","summary":"Block time to review lease."}'
+            ']}'
         )
         result = parse_prepare(text)
         assert result is not None
         self.assertEqual(len(result.additional_tasks), 1)
         self.assertEqual(result.additional_tasks[0].title, "Book calendar hold")
         self.assertEqual(result.additional_tasks[0].connection_slug, "googlecalendar")
+
+    def test_single_task_array_stays_on_original_row(self) -> None:
+        text = wrap(
+            '{"ready":true,'
+            '"tasks":[{"title":"Send rent email","connection_slug":"gmail",'
+            '"summary":"Email landlord."}]}'
+        )
+        result = parse_prepare(text)
+        assert result is not None
+        self.assertEqual(result.title, "Send rent email")
+        self.assertEqual(result.additional_tasks, [])
 
 
 class CronHeuristicTests(unittest.TestCase):

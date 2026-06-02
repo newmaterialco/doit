@@ -48,6 +48,17 @@ class ParseSpawnedTasksTests(unittest.TestCase):
         self.assertNotIn(TASKS_OPEN, strip_tasks(text))
         self.assertIn("Done.", strip_tasks(text))
 
+    def test_dedupes_same_title_even_with_different_source_keys(self) -> None:
+        text = wrap_tasks(
+            '{"tasks":['
+            '{"title":"Review unread Gmail emails and propose next steps","source_key":"k1"},'
+            '{"title":" Review  unread  Gmail emails and propose next steps ","source_key":"k2"}'
+            ']}'
+        )
+        tasks = parse_spawned_tasks(text)
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].source_key, "k1")
+
     def _completed_event(self, text: str) -> dict:
         return {
             "event": "response.completed",
@@ -82,6 +93,7 @@ class ApplySpawnedTasksTests(unittest.TestCase):
 
         db = MagicMock()
         db.spawn_key_exists.return_value = False
+        db.spawned_todo_title_exists.return_value = False
         db.insert_spawned_todo.side_effect = [
             {"id": "t1"},
             None,
@@ -100,6 +112,29 @@ class ApplySpawnedTasksTests(unittest.TestCase):
         call_kw = db.insert_spawned_todo.call_args.kwargs
         self.assertEqual(call_kw["spawned_by_todo_id"], "parent-1")
         self.assertEqual(call_kw["spawn_key"], "k1")
+
+    def test_skips_existing_title_for_same_cron_source(self) -> None:
+        from runner.events import SpawnedTaskRequest
+
+        db = MagicMock()
+        db.spawn_key_exists.return_value = False
+        db.spawned_todo_title_exists.return_value = True
+
+        count = apply_spawned_tasks(
+            db,
+            "user-1",
+            [SpawnedTaskRequest(title="Reply to Alex", source_key="unstable-2")],
+            source_cron_job_id="cron-1",
+        )
+
+        self.assertEqual(count, 0)
+        db.spawned_todo_title_exists.assert_called_once_with(
+            "user-1",
+            "Reply to Alex",
+            source_todo_id=None,
+            source_cron_job_id="cron-1",
+        )
+        db.insert_spawned_todo.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -175,6 +175,39 @@ Rules:
 - Anything outside the markers stays in the chat reply as normal prose.
 - Do not emit artifacts in the same reply as a [[DOIT_INTERACTION]] block;
   re-emit them once the user answers and the task actually finishes.
+
+Spoken summaries (audio):
+When the user asks for a summary, recap, digest, briefing, or "read this to
+me", and the answer is at least a few sentences long, also call the
+built-in ``text_to_speech`` tool with a concise spoken version of the
+summary. The Doit runner intercepts that tool's output, uploads the
+generated audio file, and surfaces it as an audio player at the top of
+the task detail view with the spoken text shown beneath it.
+
+Guidelines for ``text_to_speech``:
+- Pass only the ``text`` argument; the user picks the provider/voice in
+  their Hermes config (ElevenLabs, OpenAI TTS, Edge TTS, etc.). Do not
+  set ``output_path`` — let the tool pick a path.
+- Use the native tool named exactly ``text_to_speech``. Do not use
+  Composio, browser uploads, storage/file-sharing tools, "audio
+  recording" tools, or generated links for spoken summaries. Those show
+  up as browser links in the app and are the wrong UX.
+- The spoken text should read naturally out loud: drop markdown,
+  bullet syntax, raw URLs, code blocks, and JSON. Use full sentences
+  with light pacing. Keep it under ~400 words for a quick listen unless
+  the user explicitly asked for the whole thing.
+- Call ``text_to_speech`` once per task in your final turn (after any
+  tool work has finished). Do not call it on every turn, and do not
+  emit a separate ``[[DOIT_ARTIFACT]]`` block for the audio — the
+  runner creates the artifact automatically from the tool result.
+- Never emit a ``link`` artifact for audio. If you used
+  ``text_to_speech`` correctly, the runner has the generated local file
+  path and will create the in-app audio player automatically.
+- Skip TTS for short replies (a single sentence, a confirmation,
+  "Done.", a one-line answer) and for tasks where audio adds no value
+  (sending an email, scheduling, writing a draft the user will read).
+- Never put a ``MEDIA:`` tag or the raw file path in your chat reply —
+  the audio player handles delivery.
 """
 
 
