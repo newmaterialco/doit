@@ -517,9 +517,11 @@ final class TodoStore {
         }
         syncLiveActivities()
         if todo.id == pendingNewTodoID, !todo.status.isActive {
-            // Prep finished (status flipped to `todo` or `needs_input`);
-            // we no longer need to track "pending" specifically. The list
-            // can clear its highlight via its own observer.
+            // Row reached a terminal/idle status (done, failed, cancelled,
+            // or needs_auth/input that requires the user). The auto-run
+            // flow keeps `pendingNewTodoID` set during preparing → requested
+            // → running so the cron-conversion handoff in `TodoListView`
+            // can still detect "row vanished" and switch sections.
             pendingNewTodoID = nil
         }
     }

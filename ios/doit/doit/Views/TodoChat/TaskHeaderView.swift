@@ -12,6 +12,9 @@ private enum TaskHeaderLayout {
     static let headerMetadataDotSize: CGFloat = 4
     /// Extra space between the compact header row and the task title.
     static let headerToTitleSpacing: CGFloat = 12
+    /// Breathing room below the final artifact card before the split handle /
+    /// chat panel begins.
+    static let artifactsBottomPadding: CGFloat = 24
     static let connectorCornerRadius: CGFloat = 8
     /// Space between the horizontal connector stub and the component edge.
     static let connectorComponentGap: CGFloat = 8
@@ -40,10 +43,11 @@ struct TaskHeaderView: View {
     let onBack: () -> Void
     let onDelete: () -> Void
 
-    /// Vertical position (in `TaskHeaderTitleBlock` space) where the
-    /// connector bends into the first attached component — measured from
-    /// the component's midline via `ConnectorBendYKey`.
-    @State private var connectorBendY: CGFloat = 0
+    /// Midlines (in `TaskHeaderTitleBlock` space) of every component the
+    /// timeline connector branches into — activity card, status, each
+    /// artifact. Sorted before drawing so the trunk extends as more
+    /// deliverables appear.
+    @State private var connectorBranchYs: [CGFloat] = []
 
     /// Explicit memberwise init so Xcode's incremental compiler can't
     /// keep a stale synthesized signature around when this view's
@@ -194,31 +198,30 @@ struct TaskHeaderView: View {
 
                 if let status = agentStatus, !status.isEmpty {
                     agentStatusBox(text: status)
-                        .modifier(
-                            ConditionalConnectorAnchor(isActive: agentActivity == nil)
-                        )
+                        .connectorAnchor()
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
                 if !artifacts.isEmpty {
-                    artifactsSection(anchorFirst: agentStatus?.isEmpty != false)
+                    artifactsSection()
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .coordinateSpace(name: "TaskHeaderTitleBlock")
-        .onPreferenceChange(ConnectorBendYKey.self) { bendY in
-            connectorBendY = bendY
+        .onPreferenceChange(ConnectorBranchYsKey.self) { ys in
+            connectorBranchYs = ys
+                .filter { $0 > TaskHeaderLayout.statusIconSize }
+                .sorted()
         }
         .background {
-            if hasContentBelowTitle,
-               connectorBendY > TaskHeaderLayout.statusIconSize {
+            if hasContentBelowTitle, !connectorBranchYs.isEmpty {
                 GeometryReader { proxy in
                     TaskHeaderConnectorShape(
                         iconCenterX: TaskHeaderLayout.statusIconSize / 2,
                         contentLeadingX: TaskHeaderLayout.titleLeadingInset,
                         iconBottomY: TaskHeaderLayout.statusIconSize,
-                        bendY: connectorBendY,
+                        branchYs: connectorBranchYs,
                         cornerRadius: TaskHeaderLayout.connectorCornerRadius,
                         componentGap: TaskHeaderLayout.connectorComponentGap
                     )
@@ -227,6 +230,7 @@ struct TaskHeaderView: View {
                         style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
                     )
                     .frame(width: proxy.size.width, height: proxy.size.height)
+                    .animation(.smooth(duration: 0.3), value: connectorBranchYs)
                 }
             }
         }
@@ -266,31 +270,26 @@ struct TaskHeaderView: View {
     /// surrounding `ScrollView` lets the header expand when there are
     /// multiple artifacts without squeezing the chat panel.
     @ViewBuilder
-    private func artifactsSection(anchorFirst: Bool) -> some View {
+    private func artifactsSection() -> some View {
         let grouped = TodoArtifact.groupedForDisplay(artifacts)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(grouped.primary.enumerated()), id: \.element.id) { index, artifact in
+            ForEach(grouped.primary) { artifact in
                 TaskArtifactView(artifact: artifact)
-                    .modifier(ConditionalConnectorAnchor(isActive: anchorFirst && index == 0))
+                    .connectorAnchor()
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             if !grouped.emailDrafts.isEmpty {
-                emailDraftsSection(
-                    drafts: grouped.emailDrafts,
-                    anchorFirst: anchorFirst && grouped.primary.isEmpty
-                )
+                emailDraftsSection(drafts: grouped.emailDrafts)
             }
         }
         .animation(.smooth(duration: 0.25), value: artifacts.map(\.id))
         .padding(.top, 4)
+        .padding(.bottom, TaskHeaderLayout.artifactsBottomPadding)
     }
 
     @ViewBuilder
-    private func emailDraftsSection(
-        drafts: [TodoArtifact],
-        anchorFirst: Bool
-    ) -> some View {
+    private func emailDraftsSection(drafts: [TodoArtifact]) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
                 ConnectionLogo(slug: drafts.first?.emailProvider ?? "gmail")
@@ -302,9 +301,9 @@ struct TaskHeaderView: View {
             .padding(.leading, 4)
 
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(drafts.enumerated()), id: \.element.id) { index, artifact in
+                ForEach(drafts) { artifact in
                     TaskArtifactView(artifact: artifact)
-                        .modifier(ConditionalConnectorAnchor(isActive: anchorFirst && index == 0))
+                        .connectorAnchor()
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
@@ -357,46 +356,139 @@ struct StatusIndicatorIcon: View {
     }
 }
 
-/// Timeline stroke from the checkmark column toward attached content:
-/// vertical under the icon, a rounded 90° corner, then a straight
-/// horizontal stub that stops short of the component.
+/// Timeline stroke from the checkmark column toward attached content.
+/// A vertical trunk runs under the status icon; each anchored component
+/// gets a horizontal branch with the same rounded 90° elbow. The trunk
+/// lengthens as more `branchYs` are reported.
 private struct TaskHeaderConnectorShape: Shape {
     var iconCenterX: CGFloat
     var contentLeadingX: CGFloat
     var iconBottomY: CGFloat
-    var bendY: CGFloat
+    var branchYs: [CGFloat]
     var cornerRadius: CGFloat
     var componentGap: CGFloat
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        let r = cornerRadius
-        let y = min(max(bendY, iconBottomY + r + 1), rect.maxY)
-        let horizontalEndX = contentLeadingX - componentGap
+        let branches = branchYs
+            .map { min(max($0, iconBottomY + 1), rect.maxY) }
+            .sorted()
+        guard let firstY = branches.first else { return path }
 
-        path.move(to: CGPoint(x: iconCenterX, y: iconBottomY))
-        path.addLine(to: CGPoint(x: iconCenterX, y: y - r))
+        let r = cornerRadius
+        let trunkX = iconCenterX
+        let stubX = contentLeadingX - componentGap
+        let lastY = branches.last ?? firstY
+
+        if branches.count == 1 {
+            drawCurvedBranch(
+                into: &path,
+                trunkX: trunkX,
+                stubX: stubX,
+                iconBottomY: iconBottomY,
+                branchY: firstY,
+                radius: r
+            )
+            return path
+        }
+
+        drawCurvedBranch(
+            into: &path,
+            trunkX: trunkX,
+            stubX: stubX,
+            iconBottomY: iconBottomY,
+            branchY: firstY,
+            radius: r
+        )
+
+        // Stop the trunk where the last elbow begins — not at the
+        // artifact midline — so we don't draw a short vertical tail
+        // past the final horizontal stub.
+        let trunkEndY = lastY - r
+        if trunkEndY > firstY + 1 {
+            path.move(to: CGPoint(x: trunkX, y: firstY))
+            path.addLine(to: CGPoint(x: trunkX, y: trunkEndY))
+        }
+
+        for y in branches.dropFirst() {
+            drawCurvedStubFromTrunk(
+                into: &path,
+                trunkX: trunkX,
+                stubX: stubX,
+                branchY: y,
+                radius: r
+            )
+        }
+
+        return path
+    }
+
+    /// Vertical drop from the status icon into the first branch elbow.
+    private func drawCurvedBranch(
+        into path: inout Path,
+        trunkX: CGFloat,
+        stubX: CGFloat,
+        iconBottomY: CGFloat,
+        branchY: CGFloat,
+        radius: CGFloat
+    ) {
+        path.move(to: CGPoint(x: trunkX, y: iconBottomY))
+        path.addLine(to: CGPoint(x: trunkX, y: branchY - radius))
+        drawCurvedElbow(
+            into: &path,
+            trunkX: trunkX,
+            stubX: stubX,
+            branchY: branchY,
+            radius: radius
+        )
+    }
+
+    /// Horizontal stub off the trunk (same elbow as the first branch).
+    private func drawCurvedStubFromTrunk(
+        into path: inout Path,
+        trunkX: CGFloat,
+        stubX: CGFloat,
+        branchY: CGFloat,
+        radius: CGFloat
+    ) {
+        guard stubX > trunkX else { return }
+        path.move(to: CGPoint(x: trunkX, y: branchY - radius))
+        drawCurvedElbow(
+            into: &path,
+            trunkX: trunkX,
+            stubX: stubX,
+            branchY: branchY,
+            radius: radius
+        )
+    }
+
+    private func drawCurvedElbow(
+        into path: inout Path,
+        trunkX: CGFloat,
+        stubX: CGFloat,
+        branchY: CGFloat,
+        radius: CGFloat
+    ) {
+        let r = radius
         path.addArc(
-            center: CGPoint(x: iconCenterX + r, y: y - r),
+            center: CGPoint(x: trunkX + r, y: branchY - r),
             radius: r,
             startAngle: .radians(.pi),
             endAngle: .radians(.pi / 2),
             clockwise: true
         )
-        if horizontalEndX > iconCenterX + r {
-            path.addLine(to: CGPoint(x: horizontalEndX, y: y))
+        if stubX > trunkX + r {
+            path.addLine(to: CGPoint(x: stubX, y: branchY))
         }
-        return path
     }
 }
 
-/// Reports the vertical midpoint of the first attached component so the
-/// connector knows where to bend into it.
-private struct ConnectorBendYKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        let next = nextValue()
-        if next > 0 { value = next }
+/// Collects every anchored component midline so the connector can
+/// branch to each asset / status card below the title.
+private struct ConnectorBranchYsKey: PreferenceKey {
+    static var defaultValue: [CGFloat] = []
+    static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) {
+        value.append(contentsOf: nextValue())
     }
 }
 
@@ -404,23 +496,12 @@ private struct ConnectorAnchorModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             GeometryReader { geo in
+                let midY = geo.frame(in: .named("TaskHeaderTitleBlock")).midY
                 Color.clear.preference(
-                    key: ConnectorBendYKey.self,
-                    value: geo.frame(in: .named("TaskHeaderTitleBlock")).midY
+                    key: ConnectorBranchYsKey.self,
+                    value: midY > 0 ? [midY] : []
                 )
             }
-        }
-    }
-}
-
-private struct ConditionalConnectorAnchor: ViewModifier {
-    let isActive: Bool
-
-    func body(content: Content) -> some View {
-        if isActive {
-            content.modifier(ConnectorAnchorModifier())
-        } else {
-            content
         }
     }
 }

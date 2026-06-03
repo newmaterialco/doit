@@ -32,6 +32,7 @@ final class AgentLiveActivityManager {
     private var lastUpdate: [UUID: Date] = [:]
     private var lastStateSignature: [UUID: String] = [:]
     private var pendingUpdateTasks: [UUID: Task<Void, Never>] = [:]
+    private var terminalDismissTasks: [UUID: Task<Void, Never>] = [:]
 
     /// How long a completed / failed Live Activity should remain visible
     /// after Hermes returns. Keep this short: the detail view and chat are
@@ -65,6 +66,8 @@ final class AgentLiveActivityManager {
             let taskTitle = titles[todoID] ?? snapshot.title
             if snapshot.isRunning || snapshot.resolvedState == .paused {
                 guard canStartOrUpdate else { continue }
+                terminalDismissTasks[todoID]?.cancel()
+                terminalDismissTasks.removeValue(forKey: todoID)
                 if let existing = owned[todoID] {
                     enqueueUpdate(existing, snapshot: snapshot, taskTitle: taskTitle)
                 } else {
@@ -74,13 +77,16 @@ final class AgentLiveActivityManager {
                 // Send one final update and end the activity. We keep the
                 // finished card on screen for a few seconds so the user
                 // sees the result before it dismisses.
-                if let existing = owned[todoID] {
-                    Task { await end(existing, snapshot: snapshot, taskTitle: taskTitle) }
-                    owned.removeValue(forKey: todoID)
-                    lastUpdate.removeValue(forKey: todoID)
-                    lastStateSignature.removeValue(forKey: todoID)
+                if let existing = owned[todoID], terminalDismissTasks[todoID] == nil {
                     pendingUpdateTasks[todoID]?.cancel()
                     pendingUpdateTasks.removeValue(forKey: todoID)
+                    terminalDismissTasks[todoID] = Task { [weak self, existing] in
+                        await self?.finishThenDismiss(
+                            existing,
+                            snapshot: snapshot,
+                            taskTitle: taskTitle
+                        )
+                    }
                 }
             }
         }
@@ -94,6 +100,8 @@ final class AgentLiveActivityManager {
             lastStateSignature.removeValue(forKey: todoID)
             pendingUpdateTasks[todoID]?.cancel()
             pendingUpdateTasks.removeValue(forKey: todoID)
+            terminalDismissTasks[todoID]?.cancel()
+            terminalDismissTasks.removeValue(forKey: todoID)
         }
     }
 
@@ -106,10 +114,13 @@ final class AgentLiveActivityManager {
             lastStateSignature.removeValue(forKey: todoID)
             pendingUpdateTasks[todoID]?.cancel()
             pendingUpdateTasks.removeValue(forKey: todoID)
+            terminalDismissTasks[todoID]?.cancel()
+            terminalDismissTasks.removeValue(forKey: todoID)
         }
         lastUpdate.removeAll()
         lastStateSignature.removeAll()
         pendingUpdateTasks.removeAll()
+        terminalDismissTasks.removeAll()
     }
 
     // MARK: - Internals
@@ -138,6 +149,8 @@ final class AgentLiveActivityManager {
             lastStateSignature[todoID] = signature(for: state)
             pendingUpdateTasks[todoID]?.cancel()
             pendingUpdateTasks.removeValue(forKey: todoID)
+            terminalDismissTasks[todoID]?.cancel()
+            terminalDismissTasks.removeValue(forKey: todoID)
         } catch {
             print("[live-activity] start failed todo=\(todoID) error=\(error)")
         }
@@ -195,17 +208,27 @@ final class AgentLiveActivityManager {
         await activity.update(.init(state: state, staleDate: nil))
     }
 
-    private func end(
+    private func finishThenDismiss(
         _ activity: Activity<HermesActivityAttributes>,
         snapshot: AgentActivity,
         taskTitle: String
     ) async {
+        _ = taskTitle
+        let todoID = activity.attributes.todoID
         let state = contentState(from: snapshot)
-        lastStateSignature[activity.attributes.todoID] = signature(for: state)
-        await activity.end(
-            .init(state: state, staleDate: nil),
-            dismissalPolicy: .after(Date().addingTimeInterval(terminalDismissalDelay))
-        )
+        let signature = signature(for: state)
+        guard owned[todoID]?.id == activity.id else { return }
+        lastUpdate[todoID] = Date()
+        lastStateSignature[todoID] = signature
+        print("[live-activity] finish todo=\(todoID) state=\(state.state) intent=\(state.currentIntent)")
+        await activity.update(.init(state: state, staleDate: nil))
+
+        try? await Task.sleep(nanoseconds: UInt64(terminalDismissalDelay * 1_000_000_000))
+        guard !Task.isCancelled else { return }
+        guard owned[todoID]?.id == activity.id else { return }
+        print("[live-activity] dismiss todo=\(todoID)")
+        await activity.end(nil, dismissalPolicy: .immediate)
+        cleanupActivity(todoID)
     }
 
     private func contentState(from snapshot: AgentActivity) -> HermesActivityAttributes.ContentState {
@@ -261,5 +284,15 @@ final class AgentLiveActivityManager {
             state.secondPreviousIntent?.id ?? "-",
             state.intentEndDate == nil ? "open" : "ended"
         ].joined(separator: "|")
+    }
+
+    private func cleanupActivity(_ todoID: UUID) {
+        owned.removeValue(forKey: todoID)
+        lastUpdate.removeValue(forKey: todoID)
+        lastStateSignature.removeValue(forKey: todoID)
+        pendingUpdateTasks[todoID]?.cancel()
+        pendingUpdateTasks.removeValue(forKey: todoID)
+        terminalDismissTasks[todoID]?.cancel()
+        terminalDismissTasks.removeValue(forKey: todoID)
     }
 }

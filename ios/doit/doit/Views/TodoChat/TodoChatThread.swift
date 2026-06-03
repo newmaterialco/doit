@@ -10,6 +10,8 @@ private enum ChatStyle {
     static let optionFontSize: CGFloat = 17
     static let optionVerticalPadding: CGFloat = 14
     static let optionHorizontalPadding: CGFloat = 20
+    /// Sent images in the transcript (compact thumbnails).
+    static let attachmentImageSize: CGFloat = 110
 }
 
 /// Bottom panel of the split-screen detail view: a scrolling conversation
@@ -37,7 +39,6 @@ struct TodoChatThread: View {
     let canAddMoreAttachments: Bool
     let maxNewAttachments: Int
     let onTakePhoto: () -> Void
-    let onRemoveAttachment: (TodoAttachment) -> Void
     let onPreviewAttachment: (TodoAttachment) -> Void
     let onOpenOAuth: (URL) -> Void
     let onRespondInteraction: (_ interaction: ChatInteractionEnvelope, _ optionID: String?, _ text: String?) -> Void
@@ -163,7 +164,6 @@ struct TodoChatThread: View {
             UserAttachmentsBubble(
                 attachments: attachments,
                 urls: attachmentURLs,
-                onRemove: onRemoveAttachment,
                 onTap: onPreviewAttachment
             )
         case .userMessage(_, let text, _):
@@ -211,29 +211,42 @@ private struct UserTextBubble: View {
     }
 }
 
+/// Right-aligned image strip for a user turn. Sits on the timeline
+/// immediately above the text bubble that follows (the builder sorts
+/// attachments before messages at the same timestamp). Sent images are
+/// read-only — no remove badge.
 private struct UserAttachmentsBubble: View {
     let attachments: [TodoAttachment]
     let urls: [UUID: URL]
-    let onRemove: (TodoAttachment) -> Void
     let onTap: (TodoAttachment) -> Void
 
-    var body: some View {
-        HStack {
-            Spacer(minLength: 40)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(attachments) { attachment in
-                        RemoteAttachmentTile(
-                            signedURL: urls[attachment.id],
-                            onRemove: { onRemove(attachment) },
-                            onTap: { onTap(attachment) }
-                        )
-                    }
-                }
-                .padding(.vertical, 2)
+    private var tiles: some View {
+        HStack(spacing: 8) {
+            ForEach(attachments) { attachment in
+                RemoteAttachmentTile(
+                    signedURL: urls[attachment.id],
+                    size: ChatStyle.attachmentImageSize,
+                    onRemove: nil,
+                    onTap: { onTap(attachment) }
+                )
             }
-            .frame(maxWidth: 280, alignment: .trailing)
         }
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            Spacer(minLength: 56)
+            if attachments.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    tiles
+                }
+            } else {
+                tiles
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        // Pull the user text bubble up so the image reads as one turn.
+        .padding(.bottom, -(ChatStyle.messageSpacing - 8))
     }
 }
 
@@ -279,26 +292,39 @@ private struct AgentThinkingMessage: View {
 }
 
 private struct AgentStepMessage: View {
-    let step: TodoStep
+    let bodyText: String
+    let timestamp: Date
+    let toolName: String?
+    let oauthURL: URL?
     let onOpenOAuth: (URL) -> Void
+
+    init(step: TodoStep, onOpenOAuth: @escaping (URL) -> Void) {
+        self.bodyText = AgentReplyText.normalize(step.text ?? "")
+        self.timestamp = step.ts
+        self.toolName = step.tool_name
+        if step.kind == .oauth_needed, let urlStr = step.url {
+            self.oauthURL = URL(string: urlStr)
+        } else {
+            self.oauthURL = nil
+        }
+        self.onOpenOAuth = onOpenOAuth
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let toolName = step.tool_name, !toolName.isEmpty {
+            if let toolName, !toolName.isEmpty {
                 Text(prettify(toolName))
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
             }
-            if let text = step.text, !text.isEmpty {
-                Text(text)
+            if !bodyText.isEmpty {
+                Text(bodyText)
                     .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
                     .foregroundStyle(Color.primary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if step.kind == .oauth_needed,
-               let urlStr = step.url,
-               let url = URL(string: urlStr) {
+            if let url = oauthURL {
                 Button {
                     onOpenOAuth(url)
                 } label: {
@@ -315,7 +341,7 @@ private struct AgentStepMessage: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text(step.ts.formatted(date: .omitted, time: .shortened))
+            Text(timestamp.formatted(date: .omitted, time: .shortened))
                 .font(.system(size: 11, weight: .regular, design: .rounded))
                 .foregroundStyle(.tertiary)
         }

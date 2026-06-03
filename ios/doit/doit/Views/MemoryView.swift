@@ -11,7 +11,7 @@ struct MemoryView: View {
     var body: some View {
         List {
             Section {
-                Text("This is Hermes' built-in memory. The agent reads it at the start of every task and curates it as it learns. Entries you add here are pinned and reach the agent before the next run; entries with the \"Learned by agent\" tag were saved by Hermes itself. Memory is bounded, so the agent may consolidate older notes over time.")
+                Text("What Hermes remembers across your todos. The agent is the source of truth — this screen is a live mirror of its USER.md and MEMORY.md. Anything tagged \"Learned by agent\" was saved by Hermes itself; entries you add show up as \"Pinned\" once the next run picks them up. Memory is bounded, so the agent will consolidate older notes over time.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

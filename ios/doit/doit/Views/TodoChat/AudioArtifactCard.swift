@@ -142,7 +142,7 @@ struct AudioArtifactCard: View {
                         .monospacedDigit()
                 }
             }
-            .padding(.top, 6)
+            .padding(.top, 10)
         }
     }
 
@@ -221,6 +221,7 @@ final class AudioPlayerState {
 
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var statusObserver: NSKeyValueObservation?
     private var loadedStoragePath: String?
 
     deinit {
@@ -266,9 +267,7 @@ final class AudioPlayerState {
             new.automaticallyWaitsToMinimizeStalling = true
             player = new
             attachObservers(player: new, item: item)
-            if duration <= 0 {
-                Task { await loadDurationFromAsset(item: item) }
-            }
+            Task { await loadDurationFromAsset(item: item) }
         } catch {
             loadError = error.localizedDescription
         }
@@ -284,6 +283,18 @@ final class AudioPlayerState {
             player.pause()
             isPlaying = false
             return
+        }
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playback,
+                mode: .spokenAudio,
+                options: []
+            )
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            // Playback may still work, but surface the issue so a device-
+            // specific audio-session failure isn't silent during debugging.
+            loadError = error.localizedDescription
         }
         if duration > 0, currentTime >= duration - 0.05 {
             player.seek(to: .zero)
@@ -316,6 +327,8 @@ final class AudioPlayerState {
             NotificationCenter.default.removeObserver(end)
             endObserver = nil
         }
+        statusObserver?.invalidate()
+        statusObserver = nil
         player = nil
         isPlaying = false
         currentTime = 0
@@ -324,6 +337,16 @@ final class AudioPlayerState {
     }
 
     private func attachObservers(player: AVPlayer, item: AVPlayerItem) {
+        statusObserver = item.observe(
+            \.status,
+            options: [.initial, .new]
+        ) { [weak self, weak item] _, _ in
+            Task { @MainActor in
+                guard let self, let item else { return }
+                self.updateDuration(from: item)
+            }
+        }
+
         let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: interval,
@@ -337,6 +360,9 @@ final class AudioPlayerState {
                 let secs = time.seconds
                 if secs.isFinite {
                     self.currentTime = secs
+                }
+                if let item = player.currentItem {
+                    self.updateDuration(from: item)
                 }
             }
         }
@@ -366,6 +392,20 @@ final class AudioPlayerState {
         } catch {
             // Duration is best-effort; an unreadable asset just keeps
             // the slider in its 0..0.01 fallback range.
+        }
+        updateDuration(from: item)
+    }
+
+    private func updateDuration(from item: AVPlayerItem) {
+        let candidates = [
+            item.duration.seconds,
+            item.asset.duration.seconds,
+        ]
+        for secs in candidates where secs.isFinite && secs > 0 {
+            if secs > duration {
+                duration = secs
+            }
+            return
         }
     }
 }

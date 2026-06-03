@@ -58,7 +58,8 @@ class ParsePrepareTests(unittest.TestCase):
 
     def test_missing_ready_defaults_to_true(self) -> None:
         # Defensive: if the model leaves out `ready`, the safer interpretation
-        # is "go ahead and let the user tap Do it" — not stuck on a question.
+        # is "go ahead and run" — not stuck on a question. The runner now
+        # auto-queues these for execution instead of waiting on a Do it tap.
         text = wrap('{"title":"x","connection_slug":null}')
         result = parse_prepare(text)
         assert result is not None
@@ -108,7 +109,7 @@ class ParsePrepareTests(unittest.TestCase):
         # Guardrail: the slugs we expose must stay aligned with the iOS asset
         # catalog and the integrations Edge Function CATALOG. Drift here
         # would mean the card icon silently goes missing for popular apps.
-        for expected in ("gmail", "googlecalendar", "slack", "notion"):
+        for expected in ("gmail", "googlecalendar", "slack", "notion", "hunter"):
             self.assertIn(expected, CONNECTION_SLUGS)
 
     def test_cron_kind_roundtrips(self) -> None:

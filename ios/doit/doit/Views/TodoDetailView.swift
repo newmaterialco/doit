@@ -99,9 +99,6 @@ struct TodoDetailView: View {
                     canAddMoreAttachments: canAddMoreAttachments,
                     maxNewAttachments: max(1, TodoDetailView.maxAttachments - attachments.count),
                     onTakePhoto: takePhoto,
-                    onRemoveAttachment: { attachment in
-                        Task { await delete(attachment) }
-                    },
                     onPreviewAttachment: { attachment in
                         if let url = attachmentURLs[attachment.id] {
                             preview = AttachmentPreview(url: url)

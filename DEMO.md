@@ -113,6 +113,8 @@ work — not a prompt workaround on our side.
 
 1. Create a todo "Send a test email to my personal email
    gabemitchell93@gmail.com." Tap **Do it**. Approve the draft when prompted.
+   In the run's activity feed you should see an "Updating long-term memory:
+   add: …" step — that's the agent calling its `memory` tool.
 2. Wait for the run to finish, then open **Settings > Memory**. Within a
    few seconds you should see a new "Learned by agent" entry under
    **About you** like "Personal email: gabemitchell93@gmail.com" — that's
@@ -121,14 +123,24 @@ work — not a prompt workaround on our side.
 3. Create a second todo, "Send something short to my personal email about
    coffee." Tap **Do it**, do *not* include the address.
 4. The agent should reach the draft step without asking what your personal
-   email is. Confirm in the run's activity that it either pulled the
-   address from memory directly, or called `session_search` against the
-   earlier todo's session.
+   email is. Confirm in the run's activity feed that it either pulled the
+   address from memory directly (no `Searching past tasks…` step needed),
+   or called `session_search` against the earlier todo's session
+   (the activity feed renders that as "Searching past tasks for context:
+   personal email"). Because we now rotate `session_id` per todo, the
+   second run gets a *fresh* memory snapshot — so a value the agent saved
+   on the first run will be visible at the top of the second run's system
+   prompt without any other plumbing.
 
 If step 4 fails:
 
 - Check `hermes -p <profile> memory status` on the VM — built-in MEMORY +
   USER files should be active.
+- Run `python -m runner.mirror_memory_cli --user-id <uuid>` from the
+  runner venv on the VM to backfill Settings > Memory from whatever the
+  profile already has on disk. If the entry shows up there but the agent
+  still didn't use it, the problem is with memory recall, not memory
+  saving.
 - Inspect `~/.hermes/profiles/<profile>/memories/USER.md`. The personal
   email entry should be there after step 1; if it isn't, the agent decided
   it wasn't durable enough — try a third "remember my personal email is …"
@@ -150,4 +162,5 @@ If step 4 fails:
 | Hermes logs `401 Unauthorized` for Composio MCP | The profile is probably using the static `connect.composio.dev/mcp` URL. Generate a Composio v3 session with `Composio().create(user_id=...)` and paste `session.mcp.url` + `session.mcp.headers` into the profile config. |
 | OAuth screen errors out | Verify in `hermes mcp` that Composio is connected for the profile; try the manual sanity check in `hermes/setup.md` step 7. |
 | Memory tag shows "Sync failed" in Settings > Memory | The profile's `USER.md` or `MEMORY.md` is full or unreachable. Shorten existing entries from the app, or run `hermes -p <profile> memory status` on the VM to confirm built-in memory is enabled. |
-| Agent keeps re-asking facts you already taught it | Confirm the runner is on the new build (stable `session_id`), check `~/.hermes/profiles/<profile>/memories/USER.md` for the fact, and pin it manually in Settings > Memory if Hermes didn't save it on its own. |
+| Agent keeps re-asking facts you already taught it | Confirm the runner is on the new build (per-todo `session_id=doit-todo-*`), check `~/.hermes/profiles/<profile>/memories/USER.md` for the fact, and pin it manually in Settings > Memory if Hermes didn't save it on its own. |
+| Settings > Memory looks empty even though Hermes "knows" things | Run `python -m runner.mirror_memory_cli --user-id <uuid>` (or `--all`) on the VM to backfill from `USER.md` / `MEMORY.md`. The reverse mirror runs after every todo, but this CLI seeds it without needing a run. |

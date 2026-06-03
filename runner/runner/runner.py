@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from contextlib import suppress
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -18,8 +20,10 @@ from .events import (
     ArtifactRequest,
     TTSCall,
     TTSResult,
+    Translated,
     extract_terminal_text,
     extract_usage_total,
+    merge_terminal_translated,
     translate,
 )
 from .hermes import HermesClient
@@ -40,8 +44,9 @@ from .prompt import (
     build_followup_prompt as _build_followup_prompt,
     build_prompt as _build_prompt,
     build_resume_prompt as _build_resume_prompt,
-    prep_session_id_for_user as _prep_session_id_for_user,
-    session_id_for_user as _session_id_for_user,
+    prep_session_id_for_todo as _prep_session_id_for_todo,
+    session_id_for_todo as _session_id_for_todo,
+    session_key_for_user as _session_key_for_user,
 )
 from .push import Pusher, PushPayload
 from .spawn import apply_spawned_tasks
@@ -113,12 +118,12 @@ async def run_one_todo(
     pending_bodies = [m.get("body") or "" for m in pending_messages]
     pending_ids = [str(m["id"]) for m in pending_messages]
 
+    # Short-circuit a "cancel" response before any prompt work — nothing else
+    # needs to happen and we don't want to spin up the Hermes endpoint just to
+    # tear it down.
     if resume is not None:
         response = resume.get("response") or {}
         option_id = str(response.get("option_id") or "").lower()
-        # Mark the responded row as superseded right away so that we don't
-        # accidentally replay this same answer on a future "Do it" of the
-        # same todo. The response payload itself is preserved on the row.
         db.mark_interaction(resume["id"], status="superseded")
         if option_id == "cancel":
             log.info("todo %s cancelled via interaction response", todo_id)
@@ -130,56 +135,9 @@ async def run_one_todo(
                 kind="error",
                 text="Cancelled by user.",
             )
-            # Drop any unsent messages too; the user just cancelled the task.
             if pending_ids:
                 db.mark_user_messages_consumed(pending_ids)
             return
-        prompt = _build_resume_prompt(
-            title=title,
-            detail=detail,
-            interaction=resume,
-            original_title=original_title,
-            preparation_summary=preparation_summary,
-            connection_slug=connection_slug,
-            attachment_urls=attachment_urls,
-        )
-        # If the user happened to also type a free-form message alongside
-        # the interaction response, tack it onto the same prompt so the
-        # agent sees both pieces in one turn.
-        if pending_bodies:
-            quoted = "\n".join(
-                f"  > {line}"
-                for body in pending_bodies
-                for line in (body.strip().splitlines() or [""])
-                if body.strip()
-            )
-            if quoted:
-                prompt = (
-                    f"{prompt}\n\n"
-                    "The user also sent these follow-up messages:\n"
-                    f"{quoted}"
-                )
-            db.mark_user_messages_consumed(pending_ids)
-    elif pending_bodies:
-        prompt = _build_followup_prompt(
-            title,
-            detail,
-            messages=pending_bodies,
-            original_title=original_title,
-            preparation_summary=preparation_summary,
-            connection_slug=connection_slug,
-            attachment_urls=attachment_urls,
-        )
-        db.mark_user_messages_consumed(pending_ids)
-    else:
-        prompt = _build_prompt(
-            title,
-            detail,
-            original_title=original_title,
-            preparation_summary=preparation_summary,
-            connection_slug=connection_slug,
-            attachment_urls=attachment_urls,
-        )
 
     log.info("processing todo %s user=%s title=%r", todo_id, user_id, title)
 
@@ -241,20 +199,89 @@ async def run_one_todo(
         )
         return
 
-    # Push any newly-pinned user memories into Hermes' USER.md / MEMORY.md so
-    # they land in the next session's frozen snapshot. This runs before the
-    # /v1/runs call on purpose — Hermes loads memory at session start.
+    # Stage any newly-pinned user memories into Hermes' USER.md / MEMORY.md
+    # BEFORE we build the prompt or start the run, for two reasons:
+    #   1. Hermes freezes the memory snapshot at session start. With per-todo
+    #      session ids this run already gets a fresh snapshot, but we still
+    #      want the pin on disk before the snapshot is taken.
+    #   2. We pass the staged rows into the prompt builder so the agent gets
+    #      a nudge to curate them via its own ``memory`` tool (dedupe,
+    #      replace older entries) rather than treating them as opaque text.
     memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
-    _sync_pending_memories_to_hermes(db, memory_store, user_id)
+    staged_memories = _sync_pending_memories_to_hermes(db, memory_store, user_id)
+    task_context = (
+        _task_context_for_prompt(db, todo_id)
+        if resume is not None or pending_bodies
+        else None
+    )
+
+    if resume is not None:
+        prompt = _build_resume_prompt(
+            title=title,
+            detail=detail,
+            interaction=resume,
+            original_title=original_title,
+            preparation_summary=preparation_summary,
+            connection_slug=connection_slug,
+            attachment_urls=attachment_urls,
+            pinned_memories=staged_memories,
+            task_context=task_context,
+        )
+        if pending_bodies:
+            quoted = "\n".join(
+                f"  > {line}"
+                for body in pending_bodies
+                for line in (body.strip().splitlines() or [""])
+                if body.strip()
+            )
+            if quoted:
+                prompt = (
+                    f"{prompt}\n\n"
+                    "The user also sent these follow-up messages:\n"
+                    f"{quoted}"
+                )
+            db.mark_user_messages_consumed(pending_ids)
+    elif pending_bodies:
+        prompt = _build_followup_prompt(
+            title,
+            detail,
+            messages=pending_bodies,
+            original_title=original_title,
+            preparation_summary=preparation_summary,
+            connection_slug=connection_slug,
+            attachment_urls=attachment_urls,
+            pinned_memories=staged_memories,
+            task_context=task_context,
+        )
+        db.mark_user_messages_consumed(pending_ids)
+    else:
+        prompt = _build_prompt(
+            title,
+            detail,
+            original_title=original_title,
+            preparation_summary=preparation_summary,
+            connection_slug=connection_slug,
+            attachment_urls=attachment_urls,
+            pinned_memories=staged_memories,
+        )
 
     hermes = HermesClient(endpoint)
     cancel_watcher: asyncio.Task | None = None
     run_id: str | None = None
-    session_id = _session_id_for_user(user_id)
+    # Per-todo session so MEMORY.md/USER.md are reloaded fresh; cross-todo
+    # recall still works via session_search (FTS5 over state.db). The
+    # X-Hermes-Session-Key header keeps an eventual external memory
+    # provider scoped per-user even though we're rotating session_id.
+    session_id = _session_id_for_todo(user_id, todo_id)
+    session_key = _session_key_for_user(user_id)
     terminal_status: str | None = None
 
     try:
-        run_id = await hermes.start_run(prompt, session_id=session_id)
+        run_id = await hermes.start_run(
+            prompt,
+            session_id=session_id,
+            session_key=session_key,
+        )
         db.update_todo(
             todo_id,
             {"hermes_run_id": run_id, "hermes_session_id": session_id},
@@ -272,7 +299,15 @@ async def run_one_todo(
         )
 
         consume_task = asyncio.create_task(
-            _consume_run(cfg, db, pusher, hermes, todo, run_id)
+            _consume_run(
+                cfg,
+                db,
+                pusher,
+                hermes,
+                todo,
+                run_id,
+                profile_name=endpoint.profile_name,
+            )
         )
 
         done, pending = await asyncio.wait(
@@ -431,13 +466,15 @@ async def prepare_one_todo(
     Reads the user's raw input, asks Hermes (with a strict no-tools, JSON-only
     instruction) to rewrite the title, pick a likely connection slug, and
     decide whether one clarifying question is needed. On success the todo
-    moves to ``status='todo'`` (ready); on a clarification it moves to
-    ``status='needs_input'`` with a prep-phase interaction.
+    moves to ``status='requested'`` so the execution loop picks it up and
+    starts working automatically (no second "Do it" tap). On a clarification
+    it moves to ``status='needs_input'`` with a prep-phase interaction. On a
+    recurring automation it converts to a ``cron_jobs`` row.
 
     Failure modes are intentionally non-fatal: if Hermes is unreachable, the
-    prep JSON is missing/malformed, or we time out, we still flip the todo
-    to ``todo`` so the user can decide to tap "Do it" with their original
-    wording. Preparation is best-effort UX, not a gate on execution.
+    prep JSON is missing/malformed, or we time out, we still queue the todo
+    for execution from the user's original wording. Preparation is best-effort
+    UX polish, not a gate on execution.
     """
     todo_id = todo["id"]
     user_id = todo["user_id"]
@@ -492,9 +529,10 @@ async def prepare_one_todo(
 
     endpoint = db.get_user_hermes(user_id)
     if endpoint is None:
-        # No Hermes for this user yet: skip prep and let the existing
-        # execution path surface the "no profile" error when they tap Do it.
-        db.update_todo(todo_id, {"status": "todo"})
+        # No Hermes for this user yet: skip prep and queue the row for
+        # execution anyway so the existing "no profile" error surfaces on the
+        # task card without the user having to tap Do it first.
+        db.update_todo(todo_id, {"status": "requested"})
         return
 
     memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
@@ -508,7 +546,11 @@ async def prepare_one_todo(
         prior=prior,
         attachment_urls=_resolve_attachment_urls(db, todo_id),
     )
-    session_id = _prep_session_id_for_user(user_id)
+    # Per-todo prep session so any USER.md edits we just staged are visible
+    # in the prep snapshot, and so prep turns from different todos do not
+    # share a transcript. Memory/session_search remain per-profile.
+    session_id = _prep_session_id_for_todo(todo_id)
+    session_key = _session_key_for_user(user_id)
 
     hermes = HermesClient(endpoint)
     run_id: str | None = None
@@ -517,6 +559,7 @@ async def prepare_one_todo(
         run_id = await hermes.start_run(
             prep_prompt,
             session_id=session_id,
+            session_key=session_key,
             instructions=PREP_INSTRUCTIONS,
         )
         final_text = await asyncio.wait_for(
@@ -545,9 +588,11 @@ async def prepare_one_todo(
 
     result = parse_prepare(final_text or "", CONNECTION_SLUGS)
     if result is None:
-        # Couldn't get usable prep — proceed without it so the user isn't stuck.
-        log.info("prep produced no result for todo %s; marking ready", todo_id)
-        db.update_todo(todo_id, {"status": "todo"})
+        # Couldn't get usable prep — queue the row anyway so the agent can
+        # still work from the user's original wording instead of stranding
+        # the task on the list.
+        log.info("prep produced no result for todo %s; auto-queuing for execution", todo_id)
+        db.update_todo(todo_id, {"status": "requested"})
         return
 
     # Safety net: if the user asked for recurrence but the model returned
@@ -662,23 +707,25 @@ async def prepare_one_todo(
             db.update_todo(todo_id, updates)
         return
 
-    # Ready — flip to 'todo' so the card shows the Do it button.
-    updates["status"] = "todo"
+    # Ready — auto-queue for execution so the user does not have to tap
+    # "Do it" a second time. The execution loop will claim the row, flip
+    # it to `running`, and start streaming Hermes events as usual.
+    updates["status"] = "requested"
     db.update_todo(todo_id, updates)
     _write_activity(
         db,
         todo_id=todo_id,
         user_id=user_id,
-        snapshot=AgentActivityService().mark_terminal(
-            state="completed",
-            phase="ready",
-            title="Ready when you are",
-            detail=result.summary,
+        snapshot=AgentActivityService().initial(
+            phase="starting",
+            title="Starting task",
         ),
         hermes_run_id=run_id,
     )
 
-    # Multi-task split: insert extras as already-prepared todos.
+    # Multi-task split: insert extras as already-prepared todos that also
+    # auto-run. Keeps the UX consistent — every row created from the
+    # `+` sheet starts working without an extra tap.
     for extra in result.additional_tasks:
         db.insert_prepared_todo(
             user_id=user_id,
@@ -687,6 +734,7 @@ async def prepare_one_todo(
             detail=None,
             connection_slug=extra.connection_slug,
             preparation_summary=extra.summary,
+            status="requested",
         )
 
 
@@ -736,6 +784,8 @@ async def _consume_run(
     hermes: HermesClient,
     todo: dict,
     run_id: str,
+    *,
+    profile_name: str | None = None,
 ) -> str:
     """Consume the SSE stream and return the terminal status."""
     todo_id = todo["id"]
@@ -751,6 +801,12 @@ async def _consume_run(
     # `function_call_output`). Older entries are kept until the run ends —
     # the dict is small and per-run.
     pending_tts: dict[str, TTSCall] = {}
+    pending_tts_started_at: dict[str, float] = {}
+    lifecycle_tts_uploaded = False
+    # Hermes can emit more than one terminal assistant message per run
+    # (e.g. a short artifact line plus a longer summary). We drain the
+    # stream and persist one merged ``final`` row for the chat transcript.
+    pending_final: Translated | None = None
 
     # Drives the iOS "what is Hermes doing right now?" surfaces: the
     # todo card status line, the detail-view animated cards, and the
@@ -768,7 +824,10 @@ async def _consume_run(
         effect = translate(ev.event, ev.data)
         if effect is None:
             continue
-        if effect.step_kind:
+        defer_final = (
+            effect.step_kind == "final" and effect.new_status == "done"
+        )
+        if effect.step_kind and not defer_final:
             db.insert_step(
                 todo_id=todo_id,
                 user_id=user_id,
@@ -813,6 +872,7 @@ async def _consume_run(
             )
         if effect.tts_call is not None:
             pending_tts[effect.tts_call.call_id] = effect.tts_call
+            pending_tts_started_at[effect.tts_call.call_id] = time.time() - 10
         if effect.tts_result is not None:
             _persist_tts_audio(
                 db,
@@ -822,6 +882,39 @@ async def _consume_run(
                 result=effect.tts_result,
                 call=pending_tts.get(effect.tts_result.call_id),
             )
+            lifecycle_tts_uploaded = True
+        if (
+            effect.step_kind == "tool_result"
+            and effect.tool_name == "text_to_speech"
+            and not lifecycle_tts_uploaded
+        ):
+            call = pending_tts.get("hermes-lifecycle")
+            started_at = pending_tts_started_at.get("hermes-lifecycle", time.time() - 60)
+            file_path = _find_latest_hermes_tts_audio(
+                cfg,
+                profile_name=profile_name,
+                since=started_at,
+            )
+            if file_path:
+                _persist_tts_audio(
+                    db,
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    result=TTSResult(
+                        call_id="hermes-lifecycle",
+                        file_path=str(file_path),
+                        provider="elevenlabs",
+                    ),
+                    call=call,
+                )
+                lifecycle_tts_uploaded = True
+            else:
+                log.warning(
+                    "text_to_speech completed but no local audio file found "
+                    "todo=%s run=%s profile=%s since=%.3f",
+                    todo_id, run_id, profile_name, started_at,
+                )
         if effect.spawned_tasks and effect.new_status == "done":
             spawned_count = apply_spawned_tasks(
                 db,
@@ -925,21 +1018,65 @@ async def _consume_run(
 
             if effect.new_status in ("done", "failed"):
                 terminal = effect.new_status
-                _write_activity(
-                    db,
-                    todo_id=todo_id,
-                    user_id=user_id,
-                    snapshot=activity.mark_terminal(
-                        state="completed" if effect.new_status == "done" else "failed",
-                        phase=effect.new_status,
-                        title="Done" if effect.new_status == "done" else "Failed",
-                        detail=effect.text,
-                    ),
-                    hermes_run_id=run_id,
-                )
-                # Drain until the stream actually closes so we don't miss tail
-                # events, but with a small grace.
-                break
+                if effect.new_status == "done" and effect.step_kind == "final":
+                    pending_final = merge_terminal_translated(
+                        pending_final, effect
+                    )
+                elif effect.new_status == "failed":
+                    _write_activity(
+                        db,
+                        todo_id=todo_id,
+                        user_id=user_id,
+                        snapshot=activity.mark_terminal(
+                            state="failed",
+                            phase="failed",
+                            title="Failed",
+                            detail=effect.text,
+                        ),
+                        hermes_run_id=run_id,
+                    )
+                    break
+                # Keep draining so a later ``run.completed`` / duplicate
+                # ``response.completed`` can be merged into one chat reply.
+                continue
+
+    if pending_final is not None:
+        db.insert_step(
+            todo_id=todo_id,
+            user_id=user_id,
+            kind="final",
+            text=pending_final.text,
+        )
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=activity.mark_terminal(
+                state="completed",
+                phase="done",
+                title="Done",
+                detail=pending_final.text,
+            ),
+            hermes_run_id=run_id,
+        )
+    elif terminal == "done":
+        db.insert_step(
+            todo_id=todo_id,
+            user_id=user_id,
+            kind="final",
+            text="Done.",
+        )
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=activity.mark_terminal(
+                state="completed",
+                phase="done",
+                title="Done",
+            ),
+            hermes_run_id=run_id,
+        )
 
     if terminal is None:
         db.insert_step(
@@ -983,6 +1120,62 @@ _AUDIO_MIME_BY_EXT: dict[str, str] = {
 
 
 _AUDIO_LINK_HINTS = ("audio", "spoken", "speech", "recording", "voice")
+
+
+def _candidate_hermes_audio_dirs(
+    cfg: Config,
+    *,
+    profile_name: str | None,
+) -> list[Path]:
+    """Likely Hermes TTS output dirs for profile-scoped API runs."""
+    home = Path.home()
+    dirs: list[Path] = []
+    if profile_name:
+        dirs.append(home / ".hermes" / "profiles" / profile_name / "audio_cache")
+        dirs.append(Path(cfg.hermes_profiles_dir) / profile_name / "audio_cache")
+    dirs.append(home / ".hermes" / "audio_cache")
+    dirs.append(home / ".hermes" / "cache" / "audio" / "audio_cache")
+
+    seen: set[str] = set()
+    out: list[Path] = []
+    for d in dirs:
+        key = str(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    return out
+
+
+def _find_latest_hermes_tts_audio(
+    cfg: Config,
+    *,
+    profile_name: str | None,
+    since: float,
+) -> Path | None:
+    """Find the newest Hermes-generated audio file after ``since``.
+
+    The Hermes Runs API lifecycle event shape for ``tool.completed`` does
+    not include the ``file_path`` that the lower-level TTS tool returns.
+    The tool still writes to the profile audio cache, so the runner
+    recovers the file by modification time and uploads it to Supabase.
+    """
+    candidates: list[Path] = []
+    for directory in _candidate_hermes_audio_dirs(cfg, profile_name=profile_name):
+        if not directory.exists():
+            continue
+        for path in directory.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in _AUDIO_MIME_BY_EXT:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if stat.st_mtime >= since and stat.st_size > 0:
+                candidates.append(path)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def _first_text_artifact_body(artifacts: list[ArtifactRequest]) -> str | None:
@@ -1249,7 +1442,7 @@ def _sync_pending_memories_to_hermes(
     db: DB,
     store: HermesMemoryStore,
     user_id: str,
-) -> None:
+) -> list[dict]:
     """Write the user's pinned memories into Hermes' USER.md / MEMORY.md.
 
     User-authored rows in Supabase carry ``source='user'`` and start at
@@ -1257,10 +1450,14 @@ def _sync_pending_memories_to_hermes(
     matching file (preserving everything already there), then update each
     row to ``synced`` with the fingerprint of the text we wrote so the
     reverse-direction mirror (Hermes -> Supabase) won't duplicate them.
+
+    Returns the rows that actually landed on disk this call (i.e. the ones
+    we marked ``synced``). The runner forwards them to the prompt so the
+    agent can curate them with its own ``memory`` tool on the same turn.
     """
     pending = db.list_memories_for_sync(user_id)
     if not pending:
-        return
+        return []
 
     by_target: dict[MemoryTarget, list[dict]] = {"user": [], "memory": []}
     for row in pending:
@@ -1269,6 +1466,7 @@ def _sync_pending_memories_to_hermes(
             target = "user"
         by_target[target].append(row)
 
+    staged: list[dict] = []
     now = datetime.now(UTC).isoformat()
     for target, rows in by_target.items():
         if not rows:
@@ -1296,6 +1494,8 @@ def _sync_pending_memories_to_hermes(
                 )
             else:
                 db.mark_memory_synced(row["id"], fingerprint=fp, when_iso=now)
+                staged.append(row)
+    return staged
 
 
 def _mirror_hermes_memory_to_supabase(
@@ -1361,6 +1561,22 @@ def _memory_row_to_entry_text(row: dict) -> str:
     if title and body and title != body:
         return f"{title}: {body}"
     return body or title
+
+
+def _task_context_for_prompt(db: DB, todo_id: str) -> dict[str, list[dict]]:
+    """Explicit same-task context for follow-up prompts.
+
+    We still reuse the same per-todo Hermes session id for each run, but the
+    task detail's DB rows are the reliable source of what the user can see:
+    artifact cards, chat messages, and visible activity. Including a compact
+    snapshot in follow-up prompts keeps the agent grounded when the user says
+    "that doc" or "the first sheet" after a completed run.
+    """
+    return {
+        "artifacts": db.list_todo_artifacts_for_context(todo_id),
+        "messages": db.list_todo_messages_for_context(todo_id),
+        "steps": db.list_todo_steps_for_context(todo_id),
+    }
 
 
 async def main_loop() -> None:

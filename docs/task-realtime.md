@@ -104,11 +104,20 @@ When Hermes finishes:
 
 1. **Prep pass** (`runner/runner/runner.py::prepare_one_todo`):
    - Updates `todos` with `title`, `connection_slug`, `preparation_summary`
-     and flips `status` from `preparing` → `todo`.
+     and flips `status` from `preparing` → `requested` so the execution
+     loop picks the row up automatically. Tasks created from the `+`
+     sheet auto-run; the user does not have to tap "Do it" in between.
    - If the agent needs a clarification, inserts a `todo_interactions` row
      with `payload.phase = "prepare"` and flips `status` to `needs_input`.
    - If the prep result is a cron, deletes the todo and inserts a
      `cron_jobs` row.
+   - If prep fails (Hermes unreachable, JSON missing, timeout), still
+     queues the row at `status = "requested"` so the user is not stranded
+     on a half-prepared placeholder.
+   - Multi-task splits from one `+` sheet submission are inserted as
+     `status = "requested"` too (`db.insert_prepared_todo(status=...)`).
+     Agent / cron-spawned tasks created mid-execution stay at the
+     default `status = "todo"` so they wait for explicit user action.
 2. **Execution pass** (`runner/runner/runner.py::_consume_run`):
    - Per SSE event, writes `todo_steps`, upserts `todo_artifacts`,
      increments `todos.total_tokens`, and upserts the current-activity
@@ -119,6 +128,13 @@ When Hermes finishes:
      `todo_interactions`, writes a terminal `todo_agent_activity`
      snapshot (so iOS shows the closing card instead of stale "working
      on…" copy), sends APNs.
+   - The execution prompt carries an approval policy block (see
+     [`runner/runner/prompt.py`](../runner/runner/prompt.py)
+     `_APPROVAL_INSTRUCTIONS`): the agent drafts spreadsheets / docs /
+     other low-risk artifacts without asking, but for outbound email,
+     calendar invites, and other externally visible sends it must
+     emit a `[[DOIT_INTERACTION]]` `kind=approval` block AFTER the
+     draft is ready and wait for the user before sending.
 
 Every one of these writes goes through `service_role`, which means RLS is
 bypassed on the runner side but the realtime publication still fires for

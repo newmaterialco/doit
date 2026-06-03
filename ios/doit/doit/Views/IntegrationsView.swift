@@ -7,6 +7,8 @@ struct IntegrationsView: View {
     @State private var error: String?
     @State private var busySlug: String?
     @State private var oauthSession: ASWebAuthenticationSession?
+    @State private var apiKeyToolkit: Toolkit?
+    @State private var apiKeyInput = ""
 
     init() {
         let cachedToolkits = IntegrationsAPI.cachedToolkits ?? []
@@ -33,14 +35,14 @@ struct IntegrationsView: View {
                         ToolkitRow(
                             toolkit: tk,
                             busy: busySlug == tk.slug,
-                            onConnect: { Task { await connect(tk) } },
+                            onConnect: { beginConnect(tk) },
                             onDisconnect: { Task { await disconnect(tk) } }
                         )
                         .padding(.horizontal, 28)
                         Divider()
                             .padding(.horizontal, 28)
                     }
-                    Text("Connected accounts let the agent act on your behalf. We never see your password - Composio manages secure OAuth tokens.")
+                    Text("Connected accounts let the agent act on your behalf. OAuth apps open a secure sign-in; API key apps (like Hunter) store your key via Composio — we never see it.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 20)
@@ -55,6 +57,27 @@ struct IntegrationsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load(showSpinner: toolkits.isEmpty) }
         .refreshable { await load() }
+        .sheet(item: $apiKeyToolkit) { tk in
+            ApiKeyConnectSheet(
+                toolkit: tk,
+                apiKey: $apiKeyInput,
+                busy: busySlug == tk.slug,
+                onConnect: { Task { await connectWithApiKey(tk) } },
+                onCancel: {
+                    apiKeyToolkit = nil
+                    apiKeyInput = ""
+                }
+            )
+        }
+    }
+
+    private func beginConnect(_ tk: Toolkit) {
+        if tk.usesApiKey {
+            apiKeyInput = ""
+            apiKeyToolkit = tk
+        } else {
+            Task { await connectOAuth(tk) }
+        }
     }
 
     private func load(showSpinner: Bool = true) async {
@@ -70,12 +93,13 @@ struct IntegrationsView: View {
         }
     }
 
-    private func connect(_ tk: Toolkit) async {
+    private func connectOAuth(_ tk: Toolkit) async {
         busySlug = tk.slug
         defer { busySlug = nil }
         do {
             let result = try await IntegrationsAPI.connect(toolkit: tk.slug)
-            guard let url = URL(string: result.redirect_url) else {
+            guard let urlString = result.redirect_url,
+                  let url = URL(string: urlString) else {
                 self.error = "Got an invalid authorization URL."
                 return
             }
@@ -83,6 +107,21 @@ struct IntegrationsView: View {
             await load()
         } catch {
             self.error = "Couldn't start connection: \(error.localizedDescription)"
+        }
+    }
+
+    private func connectWithApiKey(_ tk: Toolkit) async {
+        let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        busySlug = tk.slug
+        defer { busySlug = nil }
+        do {
+            _ = try await IntegrationsAPI.connect(toolkit: tk.slug, apiKey: key)
+            apiKeyToolkit = nil
+            apiKeyInput = ""
+            await load()
+        } catch {
+            self.error = "Couldn't connect Hunter: \(error.localizedDescription)"
         }
     }
 
@@ -110,6 +149,45 @@ struct IntegrationsView: View {
                 cont.resume()
             }
         }
+    }
+}
+
+private struct ApiKeyConnectSheet: View {
+    let toolkit: Toolkit
+    @Binding var apiKey: String
+    let busy: Bool
+    let onConnect: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField("Hunter API key", text: $apiKey)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                } footer: {
+                    Text("Find your key at hunter.io → API. Composio stores it securely for agent use.")
+                }
+            }
+            .navigationTitle("Connect \(toolkit.name)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if busy {
+                        ProgressView()
+                    } else {
+                        Button("Connect", action: onConnect)
+                            .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 

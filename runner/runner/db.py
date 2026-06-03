@@ -1,6 +1,7 @@
 """Supabase REST client wrapper for the runner (uses service_role)."""
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -144,6 +145,29 @@ class DB:
             port=int(r["api_port"]),
             api_key=r["api_key"],
         )
+
+    def list_user_hermes_profiles(self) -> list[dict]:
+        """Return ``[{user_id, profile_name}, ...]`` for every provisioned user.
+
+        Used by the memory-backfill CLI to iterate every user without
+        loading the full endpoint (host/port/api_key aren't needed for a
+        local file read). Sorted by ``user_id`` so output is stable.
+        """
+        try:
+            resp = (
+                self._client.table("user_hermes")
+                .select("user_id, profile_name")
+                .order("user_id")
+                .execute()
+            )
+            return [
+                {"user_id": str(r["user_id"]), "profile_name": str(r["profile_name"])}
+                for r in (resp.data or [])
+                if r.get("user_id") and r.get("profile_name")
+            ]
+        except Exception as e:
+            log.error("list_user_hermes_profiles failed: %s", e)
+            return []
 
     def get_pending_agent_model_setting(self, user_id: str) -> AgentModelSetting | None:
         settings_resp = (
@@ -334,21 +358,40 @@ class DB:
         title = _derive_title(text)
         body = text[:2000]
         try:
-            self._client.table("memories").upsert(
-                {
-                    "user_id": user_id,
-                    "title": title,
-                    "body": body,
-                    "category": None,
-                    "target": target,
-                    "source": "hermes",
-                    "sync_status": "synced",
-                    "hermes_fingerprint": fingerprint,
-                    "last_sync_at": when_iso,
-                    "sync_error": None,
-                },
-                on_conflict="user_id,target,hermes_fingerprint",
-            ).execute()
+            row = {
+                "user_id": user_id,
+                "title": title,
+                "body": body,
+                "category": None,
+                "target": target,
+                "source": "hermes",
+                "sync_status": "synced",
+                "hermes_fingerprint": fingerprint,
+                "last_sync_at": when_iso,
+                "sync_error": None,
+            }
+            existing = (
+                self._client.table("memories")
+                .select("id, source")
+                .eq("user_id", user_id)
+                .eq("target", target)
+                .eq("hermes_fingerprint", fingerprint)
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            if rows:
+                # If the user pinned this exact text first, leave their row
+                # alone. The reverse mirror already treats it as seen because
+                # fingerprints match; overwriting it would hide that it was
+                # user-authored.
+                if rows[0].get("source") != "hermes":
+                    return
+                self._client.table("memories").update(row).eq(
+                    "id", rows[0]["id"]
+                ).execute()
+                return
+            self._client.table("memories").insert(row).execute()
         except Exception as e:
             log.error(
                 "upsert_hermes_memory(user=%s, target=%s) failed: %s",
@@ -639,9 +682,93 @@ class DB:
                 e,
             )
 
+    def list_todo_messages_for_context(
+        self,
+        todo_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Recent user-authored chat messages for a todo, oldest first.
+
+        This feeds the explicit same-task context block in follow-up prompts.
+        We do not rely solely on Hermes' session transcript because the app's
+        task detail is already the source of truth for what the user sees.
+        """
+        try:
+            resp = (
+                self._client.table("todo_messages")
+                .select("body, created_at")
+                .eq("todo_id", todo_id)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return list(reversed(resp.data or []))
+        except Exception as e:
+            log.error("list_todo_messages_for_context(%s) failed: %s", todo_id, e)
+            return []
+
+    def list_todo_steps_for_context(
+        self,
+        todo_id: str,
+        *,
+        limit: int = 30,
+    ) -> list[dict]:
+        """Recent runner-visible agent activity for a todo, oldest first."""
+        try:
+            resp = (
+                self._client.table("todo_steps")
+                .select("kind, text, url, tool_name, ts")
+                .eq("todo_id", todo_id)
+                .order("ts", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return list(reversed(resp.data or []))
+        except Exception as e:
+            log.error("list_todo_steps_for_context(%s) failed: %s", todo_id, e)
+            return []
+
     # ------------------------------------------------------------------
     # Artifacts (user-visible deliverables)
     # ------------------------------------------------------------------
+
+    def list_todo_artifacts_for_context(
+        self,
+        todo_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Current user-visible deliverables for a todo, newest last.
+
+        Artifacts are the most important context for follow-up chat because
+        the user naturally refers to "the sheet" or "the doc" they can see in
+        the task detail. We include the payload JSON so URLs, subjects, and
+        short text artifacts survive the next Hermes run.
+        """
+        try:
+            resp = (
+                self._client.table("todo_artifacts")
+                .select("artifact_key, kind, title, payload, updated_at")
+                .eq("todo_id", todo_id)
+                .order("updated_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            rows = list(reversed(resp.data or []))
+            # supabase-py usually returns jsonb as dict already, but older
+            # versions may hand back a JSON string. Normalize defensively.
+            for row in rows:
+                payload = row.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        row["payload"] = json.loads(payload)
+                    except json.JSONDecodeError:
+                        row["payload"] = {"raw": payload}
+            return rows
+        except Exception as e:
+            log.error("list_todo_artifacts_for_context(%s) failed: %s", todo_id, e)
+            return []
 
     def upload_todo_audio(
         self,
@@ -759,8 +886,14 @@ class DB:
         detail: str | None = None,
         connection_slug: str | None = None,
         preparation_summary: str | None = None,
+        status: str = "todo",
     ) -> dict | None:
-        """Insert an already-prepared todo (status=todo) for multi-task splits."""
+        """Insert an already-prepared todo for multi-task splits.
+
+        ``status`` defaults to ``todo`` for backward compatibility, but the
+        prep pipeline now passes ``requested`` so split-out tasks auto-run
+        in lockstep with the original `+` sheet submission.
+        """
         return self.insert_spawned_todo(
             user_id=user_id,
             title=title,
@@ -771,6 +904,7 @@ class DB:
             spawn_key=None,
             spawned_by_todo_id=None,
             spawned_by_cron_job_id=None,
+            status=status,
         )
 
     def spawn_key_exists(self, user_id: str, spawn_key: str) -> bool:
@@ -831,14 +965,20 @@ class DB:
         spawn_key: str | None = None,
         spawned_by_todo_id: str | None = None,
         spawned_by_cron_job_id: str | None = None,
+        status: str = "todo",
     ) -> dict | None:
-        """Insert a ready todo (status=todo), optionally with spawn provenance."""
+        """Insert a ready todo, optionally with spawn provenance.
+
+        ``status`` defaults to ``todo`` so existing agent/cron spawned
+        tasks still wait for explicit user action. Callers that want a
+        row to auto-run (the `+` sheet prep split) pass ``requested``.
+        """
         row: dict[str, Any] = {
             "user_id": user_id,
             "title": title,
             "original_title": original_title,
             "detail": detail,
-            "status": "todo",
+            "status": status,
         }
         if connection_slug:
             row["connection_slug"] = connection_slug

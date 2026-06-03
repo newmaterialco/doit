@@ -69,8 +69,10 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
 
 /// Insert payload for a new todo. The DB fills in `id`, `user_id` (via RLS check),
 /// `created_at`, `updated_at`. New todos enter `preparing` so the runner can
-/// rephrase the title and pick a likely connection before the user is asked
-/// to tap "Do it".
+/// rephrase the title and pick a likely connection. On success the runner
+/// flips the same row to `requested` and the agent starts working
+/// automatically — there is no manual "Do it" tap in front of the
+/// auto-run flow.
 struct NewTodo: Encodable, Sendable {
     let user_id: UUID
     let title: String

@@ -93,6 +93,61 @@ class BuildFollowupPromptTests(unittest.TestCase):
         self.assertIn("- shorten", prompt)
         self.assertIn("- friendlier", prompt)
 
+    def test_followup_includes_previous_task_context(self) -> None:
+        prompt = build_followup_prompt(
+            "Create a Google Sheet of AI training-data job subreddits",
+            "",
+            messages=[
+                "Can you create another Google doc that explains the first "
+                "5-10 customers I could reach out to?"
+            ],
+            task_context={
+                "artifacts": [
+                    {
+                        "artifact_key": "sheet",
+                        "kind": "link",
+                        "title": "AI training-data job subreddits",
+                        "payload": {
+                            "provider": "googlesheets",
+                            "url": "https://docs.google.com/spreadsheets/d/sheet-id",
+                        },
+                    },
+                    {
+                        "artifact_key": "strategy-doc",
+                        "kind": "link",
+                        "title": "AI data business strategy doc",
+                        "payload": {
+                            "provider": "googledocs",
+                            "url": "https://docs.google.com/document/d/doc-id",
+                        },
+                    },
+                ],
+                "messages": [{"body": "please make the docs practical"}],
+                "steps": [{"kind": "final", "text": "Created the sheet and docs."}],
+            },
+        )
+        self.assertIn("Previous context for this task:", prompt)
+        self.assertIn("Artifacts already created:", prompt)
+        self.assertIn("AI training-data job subreddits", prompt)
+        self.assertIn("https://docs.google.com/spreadsheets/d/sheet-id", prompt)
+        self.assertIn("AI data business strategy doc", prompt)
+        self.assertIn("https://docs.google.com/document/d/doc-id", prompt)
+        self.assertIn("Recent user chat messages:", prompt)
+        self.assertIn("Created the sheet and docs.", prompt)
+        self.assertLess(
+            prompt.index("Previous context for this task:"),
+            prompt.index("The user sent a follow-up message"),
+        )
+
+    def test_empty_context_block_is_omitted(self) -> None:
+        prompt = build_followup_prompt(
+            "Draft the email",
+            "",
+            messages=["make it shorter"],
+            task_context={"artifacts": [], "messages": [], "steps": []},
+        )
+        self.assertNotIn("Previous context for this task:", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

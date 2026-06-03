@@ -20,8 +20,11 @@ import json
 import os
 import threading
 import tempfile
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from runner.events import (
@@ -523,6 +526,57 @@ class AudioLinkFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(consumed)
         self.assertEqual(db.uploads, [])
         self.assertEqual(db.upserts, [])
+
+
+class HermesLifecycleAudioCacheTests(unittest.TestCase):
+    """Lifecycle tool.completed events recover files from profile cache."""
+
+    def test_finds_latest_profile_audio_file_after_start_time(self) -> None:
+        from runner.runner import _find_latest_hermes_tts_audio
+
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = Path(tmp) / "profiles"
+            cache = profiles / "gabriel" / "audio_cache"
+            cache.mkdir(parents=True)
+            old = cache / "tts_old.mp3"
+            new = cache / "tts_new.mp3"
+            old.write_bytes(b"old")
+            new.write_bytes(b"new-audio")
+            now = time.time()
+            os.utime(old, (now - 120, now - 120))
+            os.utime(new, (now + 1, now + 1))
+            cfg = SimpleNamespace(hermes_profiles_dir=str(profiles))
+
+            found = _find_latest_hermes_tts_audio(
+                cfg,  # type: ignore[arg-type]
+                profile_name="gabriel",
+                since=now - 10,
+            )
+
+        self.assertIsNotNone(found)
+        assert found is not None
+        self.assertEqual(found.name, "tts_new.mp3")
+
+    def test_returns_none_when_no_recent_audio_file_exists(self) -> None:
+        from runner.runner import _find_latest_hermes_tts_audio
+
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = Path(tmp) / "profiles"
+            cache = profiles / "gabriel" / "audio_cache"
+            cache.mkdir(parents=True)
+            old = cache / "tts_old.mp3"
+            old.write_bytes(b"old")
+            now = time.time()
+            os.utime(old, (now - 120, now - 120))
+            cfg = SimpleNamespace(hermes_profiles_dir=str(profiles))
+
+            found = _find_latest_hermes_tts_audio(
+                cfg,  # type: ignore[arg-type]
+                profile_name="gabriel",
+                since=now - 10,
+            )
+
+        self.assertIsNone(found)
 
 
 if __name__ == "__main__":

@@ -12,14 +12,21 @@ A single async loop:
 2. Looks up the user's Hermes endpoint in `user_hermes`.
 3. Applies any pending Settings > Model change to that user's Hermes profile.
 4. Stages any pending user-pinned memories into the profile's `memories/USER.md`
-   or `memories/MEMORY.md` so Hermes picks them up in the next session's
-   frozen snapshot (see "Memory" below).
+   or `memories/MEMORY.md` so Hermes picks them up in this run's frozen
+   snapshot, and surfaces the same entries in the prompt so the agent can
+   curate them via its `memory` tool (see "Memory" below).
 5. `POST http://127.0.0.1:<port>/v1/runs` with the todo text + a system prompt,
-   using a stable per-user `session_id = doit-user-<uuid>` so memory and
-   `session_search` span all todos for that user.
+   using a per-todo `session_id = doit-todo-<uuid>` and a per-user
+   `X-Hermes-Session-Key = doit-user:<uuid>` header. The per-todo session id
+   matters because Hermes injects MEMORY.md/USER.md as a *frozen* snapshot at
+   session start; rotating it per todo guarantees the next run sees the
+   latest memory writes. Cross-todo continuity comes from `session_search`
+   (FTS5 over `state.db`) and the per-profile memory files.
 6. Consumes `GET /v1/runs/{id}/events` (Server-Sent Events).
 7. Translates Hermes events into rows in `todo_steps` and status changes on
-   `todos`. The iOS app sees them live via Supabase Realtime.
+   `todos`. The iOS app sees them live via Supabase Realtime. `memory` and
+   `session_search` tool calls get their own activity-feed labels so it's
+   easy to confirm the agent is actually using its memory.
 8. After the run, mirrors Hermes' updated `USER.md` / `MEMORY.md` back into
    Supabase so Settings > Memory shows what the agent has learned.
 9. Sends APNs pushes on the key moments: **needs Gmail auth**, **needs your
@@ -46,7 +53,8 @@ runner/
 |   |-- runner.py       main loop + per-todo orchestration
 |   |-- hermes.py       /v1/runs client + SSE parser
 |   |-- hermes_memory.py read/write Hermes' MEMORY.md and USER.md files
-|   |-- prompt.py       per-todo prompt + stable session id helpers
+|   |-- mirror_memory_cli.py one-shot CLI to backfill Settings > Memory
+|   |-- prompt.py       per-todo prompt + per-todo session id helpers
 |   |-- events.py       map Hermes events -> todo_steps + status
 |   |-- db.py           Supabase REST (service_role)
 |   |-- model_settings.py apply app-selected model settings to Hermes profiles
@@ -166,18 +174,39 @@ ssh "$DOIT_VM_HOST" '
   `~/.hermes/profiles/<profile>/config.yaml`, restarts `hermes-<profile>`, then
   marks the setting applied.
 - Memory: we lean on Hermes' built-in persistent memory instead of
-  re-injecting facts into every prompt. The runner uses a stable
-  `session_id = doit-user-<uuid>` so the agent's `USER.md`, `MEMORY.md`, and
-  `session_search` span every todo for that user. Two-way sync runs around
-  each `/v1/runs` call:
-  - Before: pending user-pinned rows from Supabase `memories`
+  re-injecting facts into every prompt. Session strategy and sync details:
+  - **Per-todo `session_id`** (`doit-todo-<uuid>` for execution,
+    `doit-prep-<uuid>` for prep). Hermes freezes `USER.md` and `MEMORY.md`
+    as a snapshot at session start and never refreshes mid-session, so a
+    fresh session per todo is what guarantees the next run sees the latest
+    memory writes. Cross-todo continuity comes from `session_search`
+    (FTS5 over `state.db`) and the per-profile memory files, not from a
+    shared session id.
+  - **Per-user `X-Hermes-Session-Key`** header
+    (`doit-user:<uuid>`). Hermes uses this to scope external long-term
+    memory providers (Honcho, Mem0, …) independently of the
+    transcript-scoped session id. Built-in memory is per-profile so the
+    key is future-proofing for now.
+  - **Before each run**: pending user-pinned rows from Supabase `memories`
     (`source='user'`, `sync_status='pending'`) are staged into the matching
     `~/.hermes/profiles/<profile>/memories/{USER,MEMORY}.md` file with
-    fingerprints, then marked `synced`.
-  - After: the same files are read back and any new agent-curated entries
-    are upserted into Supabase as `source='hermes'`; Hermes-authored rows
-    whose fingerprints have vanished from disk are deleted so Settings >
-    Memory mirrors the agent's current state. User-pinned rows are never
-    deleted by the mirror.
-  - The fallback `_build_prompt` no longer enumerates memories — that path
-    is gone now that the frozen snapshot does the job.
+    fingerprints, marked `synced`, and also forwarded into the prompt as a
+    short "user-pinned memories — confirm/consolidate via your memory tool"
+    block. Direct file write + tool-curation prompt together is the
+    pragmatic Phase 4 compromise: the entry lands on disk for sure, and
+    Hermes still gets a chance to dedupe/replace with its own judgment.
+  - **After each run**: the same files are read back and any new
+    agent-curated entries are upserted into Supabase as `source='hermes'`;
+    Hermes-authored rows whose fingerprints have vanished from disk are
+    deleted so Settings > Memory mirrors the agent's current state.
+    User-pinned rows are never deleted by the mirror.
+  - **Observability**: `memory` and `session_search` tool calls render
+    with friendly labels ("Updating long-term memory…", "Searching past
+    tasks for context…") in the activity feed, so a glance at the run
+    timeline tells you whether the agent is actually using its memory.
+  - **Backfill**: see `python -m runner.mirror_memory_cli --user-id <uuid>`
+    to populate Settings > Memory from an existing profile without
+    running a todo. Useful as a smoke test for "did Hermes remember
+    anything about me?".
+  - The fallback `_build_prompt` no longer enumerates the user's memory
+    list — that path is gone now that the frozen snapshot does the job.

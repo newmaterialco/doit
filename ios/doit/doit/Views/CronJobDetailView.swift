@@ -59,7 +59,6 @@ struct CronJobDetailView: View {
                     canAddMoreAttachments: false,
                     maxNewAttachments: 1,
                     onTakePhoto: {},
-                    onRemoveAttachment: { _ in },
                     onPreviewAttachment: { _ in },
                     onOpenOAuth: { _ in },
                     onRespondInteraction: { envelope, optionID, text in

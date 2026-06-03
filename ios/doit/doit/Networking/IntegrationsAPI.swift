@@ -6,17 +6,20 @@ struct Toolkit: Codable, Identifiable, Hashable, Sendable {
     let slug: String
     let name: String
     let description: String
+    let auth_type: String?
     let connectable: Bool?
     let connected: Bool
     let connection_id: String?
     let status: String?
 
     var isConnectable: Bool { connectable ?? true }
+    var usesApiKey: Bool { auth_type == "api_key" }
 }
 
 struct ConnectResult: Codable, Sendable {
-    let redirect_url: String
-    let connection_id: String
+    let redirect_url: String?
+    let connection_id: String?
+    let connected: Bool?
 }
 
 @MainActor
@@ -32,12 +35,16 @@ enum IntegrationsAPI {
         return resp.toolkits
     }
 
-    static func connect(toolkit: String) async throws -> ConnectResult {
-        struct Body: Codable { let action: String; let toolkit: String }
+    static func connect(toolkit: String, apiKey: String? = nil) async throws -> ConnectResult {
+        struct Body: Codable {
+            let action: String
+            let toolkit: String
+            let api_key: String?
+        }
         return try await Supa.client.functions
             .invoke(
                 "integrations",
-                options: .init(body: Body(action: "connect", toolkit: toolkit))
+                options: .init(body: Body(action: "connect", toolkit: toolkit, api_key: apiKey))
             )
     }
 

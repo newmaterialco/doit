@@ -18,6 +18,9 @@ from runner.events import (
     ARTIFACT_OPEN,
     INTERACTION_CLOSE,
     INTERACTION_OPEN,
+    collapse_done_leadins,
+    merge_terminal_translated,
+    normalize_visible_reply,
     parse_artifacts,
     strip_artifacts,
     translate,
@@ -136,6 +139,77 @@ class StripArtifactsTests(unittest.TestCase):
     def test_no_block_is_noop(self) -> None:
         body = "Just a normal reply."
         self.assertEqual(strip_artifacts(body), body)
+
+
+class CollapseDoneLeadinsTests(unittest.TestCase):
+    def test_merges_second_done_paragraph(self) -> None:
+        body = (
+            "Done — I created and verified the Google Doc here: https://example.com/doc\n\n"
+            "Done — I made the one-pager focused on pricing and scope."
+        )
+        merged = collapse_done_leadins(body)
+        self.assertEqual(merged.count("Done —"), 1)
+        self.assertIn("pricing and scope", merged)
+        self.assertIn("https://example.com/doc", merged)
+
+
+class MergeTerminalTranslatedTests(unittest.TestCase):
+    def test_combines_two_terminal_replies(self) -> None:
+        first = translate(
+            "response.completed",
+            {
+                "event": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "Done — Doc ready: https://example.com/doc",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            },
+        )
+        second = translate(
+            "run.completed",
+            {
+                "event": "run.completed",
+                "output": "Done — The doc covers pricing and pilot scope.",
+            },
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        merged = merge_terminal_translated(first, second)  # type: ignore[arg-type]
+        self.assertEqual(merged.step_kind, "final")
+        self.assertEqual(merged.text.count("Done —"), 1)
+        self.assertIn("pricing", merged.text)
+        self.assertIn("https://example.com/doc", merged.text)
+
+
+class NormalizeVisibleReplyTests(unittest.TestCase):
+    def test_collapses_blank_lines_after_artifact_strip(self) -> None:
+        body = (
+            "Done — links:\n"
+            "Google Sheet: https://docs.google.com/spreadsheets/d/abc\n\n"
+            + wrap(
+                '{"key":"sheet","type":"link",'
+                '"payload":{"url":"https://docs.google.com/spreadsheets/d/abc"}}'
+            )
+            + "\n\n\n"
+            + wrap(
+                '{"key":"doc","type":"link",'
+                '"payload":{"url":"https://docs.google.com/document/d/xyz"}}'
+            )
+            + "\n\n\nClosing paragraph."
+        )
+        visible = normalize_visible_reply(strip_artifacts(body))
+        self.assertNotIn("\n\n\n", visible)
+        self.assertIn("Closing paragraph.", visible)
+        self.assertIn("Google Sheet:", visible)
 
 
 class TranslateFinalArtifactTests(unittest.TestCase):

@@ -212,11 +212,104 @@ extension TodoArtifact {
             if $0.created_at != $1.created_at { return $0.created_at < $1.created_at }
             return $0.artifact_key < $1.artifact_key
         }
-        let audio = sorted.filter { $0.kind == .audio }
-        let others = sorted.filter { $0.kind != .email && $0.kind != .audio }
+        let deduped = deduplicatedForDisplay(sorted)
+        let audio = deduped.filter { $0.kind == .audio }
+        let others = deduped.filter { $0.kind != .email && $0.kind != .audio }
         let primary = audio + others
-        let emails = sorted.filter { $0.kind == .email }
+        let emails = deduped.filter { $0.kind == .email }
         return (primary, emails)
+    }
+
+    /// Collapse repeated artifact rows that refer to the same user-facing
+    /// deliverable. Reruns can emit a fresh row/key while updating an
+    /// existing calendar invite or email draft; the header should keep the
+    /// original card position and render the newest row's content.
+    private static func deduplicatedForDisplay(_ sorted: [TodoArtifact]) -> [TodoArtifact] {
+        var buckets: [String: ArtifactDisplayBucket] = [:]
+
+        for artifact in sorted {
+            let identity = artifact.displayIdentity
+            if var bucket = buckets[identity] {
+                if artifact.updated_at >= bucket.artifact.updated_at {
+                    bucket.artifact = artifact
+                }
+                if artifact.created_at < bucket.firstCreated {
+                    bucket.firstCreated = artifact.created_at
+                    bucket.firstKey = artifact.artifact_key
+                }
+                buckets[identity] = bucket
+            } else {
+                buckets[identity] = ArtifactDisplayBucket(
+                    firstCreated: artifact.created_at,
+                    firstKey: artifact.artifact_key,
+                    artifact: artifact
+                )
+            }
+        }
+
+        return buckets.values
+            .sorted {
+                if $0.firstCreated != $1.firstCreated {
+                    return $0.firstCreated < $1.firstCreated
+                }
+                return $0.firstKey < $1.firstKey
+            }
+            .map(\.artifact)
+    }
+
+    private var displayIdentity: String {
+        switch kind {
+        case .calendar:
+            if let event = calendarEvent {
+                return [
+                    "calendar",
+                    Self.normalized(event.title),
+                    Self.dateIdentity(event.start),
+                    Self.dateIdentity(event.end)
+                ].joined(separator: "|")
+            }
+        case .email:
+            if let draft = emailDraft {
+                return [
+                    "email",
+                    emailProvider,
+                    draft.to.map(Self.normalized).sorted().joined(separator: ","),
+                    Self.normalized(draft.subject)
+                ].joined(separator: "|")
+            }
+        case .link:
+            if let url {
+                return "link|\(url.absoluteString.lowercased())"
+            }
+        case .text:
+            return [
+                "text",
+                Self.normalized(title ?? ""),
+                Self.normalized(text ?? "")
+            ].joined(separator: "|")
+        case .audio:
+            if let clip = audio {
+                return "audio|\(clip.storagePath)"
+            }
+        }
+
+        return "\(kind.rawValue)|\(artifact_key)"
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(
+                of: #"\s+"#,
+                with: " ",
+                options: .regularExpression
+            )
+            .lowercased()
+    }
+
+    private static func dateIdentity(_ value: Date?) -> String {
+        guard let value else { return "" }
+        return String(Int(value.timeIntervalSince1970))
     }
 
     /// Connection logos for the metadata row: prep slug first, then providers
@@ -251,4 +344,10 @@ extension TodoArtifact {
         }
         return result
     }
+}
+
+private struct ArtifactDisplayBucket {
+    var firstCreated: Date
+    var firstKey: String
+    var artifact: TodoArtifact
 }

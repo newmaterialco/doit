@@ -20,58 +20,57 @@ struct HermesLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label {
-                        Text(context.attributes.agentName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    } icon: {
-                        StatusDot(state: context.state.state)
-                    }
+                    IslandLogo()
+                        .frame(width: 26, height: 26)
+                        .padding(.top, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    StateBadge(state: context.state, started: context.state.intentStartDate)
+                    IslandElapsedText(state: context.state)
+                        .frame(maxWidth: 42, alignment: .trailing)
+                        .padding(.top, 4)
+                        .padding(.trailing, 8)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(context.attributes.taskTitle)
-                            .font(.caption.weight(.semibold))
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        Label {
-                            Text(context.state.currentIntent)
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(1)
-                        } icon: {
-                            Image(systemName: context.state.currentSymbolName)
-                                .font(.system(size: 13, weight: .semibold))
-                        }
+                        Text(context.state.currentIntent)
+                            .font(.system(size: 19, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     if let previous = context.state.previousIntent {
-                        Label {
+                        HStack(spacing: 6) {
+                            Image(systemName: previous.isCompleted ? "checkmark" : previous.symbolName)
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.secondary)
                             Text(previous.title)
                                 .font(.caption2)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                        } icon: {
-                            Image(systemName: previous.symbolName)
-                                .font(.system(size: 10, weight: .regular))
-                                .foregroundStyle(.tertiary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .opacity(0.55)
                     }
                 }
             } compactLeading: {
-                StatusDot(state: context.state.state)
+                IslandLogo()
+                    .frame(width: 21, height: 21)
             } compactTrailing: {
                 Text(compactTrailing(for: context))
-                    .font(.caption.weight(.medium))
+                    .font(.caption2.weight(.semibold))
                     .lineLimit(1)
-                    .frame(maxWidth: 96, alignment: .trailing)
+                    .frame(maxWidth: 76, alignment: .trailing)
                     .monospacedDigit()
             } minimal: {
-                StatusDot(state: context.state.state)
+                IslandLogo()
+                    .frame(width: 21, height: 21)
             }
         }
     }
@@ -83,6 +82,63 @@ struct HermesLiveActivity: Widget {
         case "paused": return "Paused"
         default: return context.state.currentIntent
         }
+    }
+}
+
+private struct IslandLogo: View {
+    var body: some View {
+        Image("doit_app_Small_logo")
+            .resizable()
+            .scaledToFill()
+            .clipShape(Circle())
+    }
+}
+
+private struct IslandElapsedText: View {
+    let state: HermesActivityAttributes.ContentState
+
+    var body: some View {
+        if state.state == "running" {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                pill(elapsedLabel(now: context.date))
+            }
+        } else {
+            pill(statusLabel)
+        }
+    }
+
+    private func pill(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Color.black.opacity(0.74))
+            .frame(width: 34, alignment: .center)
+            .padding(.vertical, 3)
+            .background(Color.white.opacity(0.92), in: Capsule())
+            .overlay {
+                Capsule().stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .contentTransition(.numericText(countsDown: false))
+    }
+
+    private var statusLabel: String {
+        switch state.state {
+        case "completed": return "Done"
+        case "failed": return "Fail"
+        case "paused": return "Wait"
+        default: return "0:00"
+        }
+    }
+
+    private func elapsedLabel(now: Date) -> String {
+        let elapsed = max(0, Int(now.timeIntervalSince(state.intentStartDate)))
+        let minutes = elapsed / 60
+        let seconds = elapsed % 60
+        if minutes > 9 {
+            return "9:59"
+        }
+        return "\(minutes):\(String(format: "%02d", seconds))"
     }
 }
 

@@ -113,6 +113,21 @@ class AgentActivityServiceTests(unittest.TestCase):
         completed = [s for s in result_snap.recent if s.completed_at is not None]
         self.assertEqual(len(completed), 1)
 
+    def test_tool_issue_stays_running_not_failed(self) -> None:
+        svc = AgentActivityService()
+        snap = svc.observe(
+            Translated(
+                step_kind="tool_result",
+                text="Tool hit an issue. (1.2s)",
+                tool_name="web_search",
+            )
+        )
+        assert snap is not None
+        self.assertEqual(snap.state, "running")
+        self.assertEqual(snap.phase, "tool_done")
+        self.assertEqual(snap.tool_category, "search")
+        self.assertIn("hit an issue", snap.title)
+
     def test_thought_event_collapses_to_thinking(self) -> None:
         svc = AgentActivityService()
         snap = svc.observe(

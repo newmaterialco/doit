@@ -53,22 +53,10 @@ enum ConversationBuilder {
     ///   1. The user's original request (preserved before the preparation
     ///      pass rewrites `title`).
     ///   2. Attachments uploaded with the task, grouped into one bubble.
-    ///   3. Agent activity — only the actionable / final steps make it
-    ///      into the chat: `final` (the assistant's reply) and
-    ///      `oauth_needed` (carries the auth link button). Intermediate
-    ///      `thought` / `tool_started` / `tool_result` steps are dropped
-    ///      from the timeline by design — they were noisy to read.
-    ///   4. Every interaction the agent has opened on this todo, in
-    ///      timestamp order. Open ones render with their option
-    ///      buttons; closed ones stay as static history with the user's
-    ///      reply synthesised as a user bubble right after.
-    ///   5. While the agent is mid-flight (status active and no `final`
-    ///      step yet), a single light-grey "Thinking…" line stands in
-    ///      for all the hidden activity.
-    ///   6. A "Ready to do this" bubble with an inline "Do it" button
-    ///      when the runner has prepared the task and is parked at
-    ///      `status == .todo` waiting for the user's go-ahead.
-    ///   7. A trailing error bubble if the task has one.
+    ///   3. Everything else — agent finals/oauth, follow-up messages,
+    ///      interactions, and synthesised replies — sorted by timestamp.
+    ///   4. While the agent is mid-flight, a "Thinking…" placeholder.
+    ///   5. Ready-to-run / error bubbles at the end when applicable.
     static func build(
         todo: Todo,
         steps: [TodoStep],
@@ -122,11 +110,6 @@ enum ConversationBuilder {
                 ts: interaction.created_at,
                 tiebreaker: 1
             ))
-            // Closed interactions: turn the user's recorded answer into
-            // a regular chat bubble anchored to `responded_at`, so the
-            // transcript reads as Q&A. We reuse `.userMessage` (keyed by
-            // the interaction id) so the bubble visually matches every
-            // other user-side message.
             if interaction.status != .open,
                let reply = interaction.respondedBubbleText,
                !reply.isEmpty {
@@ -147,11 +130,6 @@ enum ConversationBuilder {
 
         let openInteraction = interactions.last(where: { $0.status == .open })
 
-        // Show the thinking placeholder only when the agent is
-        // genuinely working — paused-for-input / paused-for-auth runs
-        // don't double up with the actionable card. The check is
-        // "no final step *since the latest user turn*" so the
-        // placeholder reappears on multi-turn chats after a follow-up.
         let latestUserTurn: Date = {
             var candidates: [Date] = [todo.created_at]
             candidates.append(contentsOf: messages.map(\.created_at))
@@ -173,10 +151,6 @@ enum ConversationBuilder {
             items.append(.agentThinking(label: thinkingLabel(for: latestActivity)))
         }
 
-        // Ready-to-run card: the runner parks a prepped task at
-        // `status == .todo` until the user confirms. Surfacing the Do-it
-        // button right in the chat lets them confirm without bouncing
-        // back to the task list.
         if todo.status == .todo && openInteraction == nil {
             let summary = todo.preparation_summary?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -202,6 +176,70 @@ private extension ConversationItem {
         case .agentStep, .agentThinking, .agentInteraction, .agentError, .agentReadyToRun:
             return 1
         }
+    }
+}
+
+// MARK: - Agent reply text
+
+/// Normalizes agent reply copy before it hits the chat transcript.
+enum AgentReplyText {
+    private static let markers = [
+        "[[DOIT_ARTIFACT]]", "[[/DOIT_ARTIFACT]]",
+        "[[DOIT_INTERACTION]]", "[[/DOIT_INTERACTION]]",
+        "[[DOIT_TASKS]]", "[[/DOIT_TASKS]]",
+    ]
+
+    static func normalize(_ text: String) -> String {
+        var cleaned = text
+        for marker in markers {
+            cleaned = cleaned.replacingOccurrences(of: marker, with: "")
+        }
+        while cleaned.contains("\n\n\n") {
+            cleaned = cleaned.replacingOccurrences(of: "\n\n\n", with: "\n\n")
+        }
+        cleaned = collapseDoneLeadins(cleaned)
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Fold repeated ``Done —`` openings into one paragraph (matches runner).
+    private static func collapseDoneLeadins(_ text: String) -> String {
+        let stripped = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stripped.isEmpty else { return "" }
+        let chunks = stripped.components(separatedBy: "\n\n")
+        guard chunks.count > 1 else { return stripped }
+        var merged: [String] = []
+        for chunk in chunks {
+            let piece = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !piece.isEmpty else { continue }
+            if merged.isEmpty {
+                merged.append(piece)
+                continue
+            }
+            if hasDoneLeadIn(piece) {
+                let body = stripDoneLeadIn(piece)
+                if !body.isEmpty { merged.append(body) }
+            } else {
+                merged.append(piece)
+            }
+        }
+        return merged.joined(separator: "\n\n")
+    }
+
+    private static func hasDoneLeadIn(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.hasPrefix("done —") || lower.hasPrefix("done -")
+    }
+
+    private static func stripDoneLeadIn(_ text: String) -> String {
+        if text.lowercased().hasPrefix("done —") {
+            return String(text.dropFirst("done —".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if text.lowercased().hasPrefix("done -") {
+            return String(text.dropFirst("done -".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
     }
 }
 
@@ -245,8 +283,6 @@ private func humanizeToolName(_ raw: String) -> String {
         }
     }
     let spaced = s.replacingOccurrences(of: "_", with: " ").lowercased()
-    // Capitalize the first character only — keeps the rest natural ("gmail
-    // send email" → "Gmail send email") instead of title-casing every word.
     guard let first = spaced.first else { return spaced }
     return first.uppercased() + spaced.dropFirst()
 }

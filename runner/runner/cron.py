@@ -116,6 +116,7 @@ async def configure_one_cron_job(
         run_id = await hermes.start_run(
             config_prompt,
             session_id=f"cron-config:{job_id}",
+            session_key=f"doit-user:{user_id}",
             instructions=CRON_CONFIG_INSTRUCTIONS,
         )
         final_text = await asyncio.wait_for(
@@ -257,6 +258,7 @@ async def _run_one_cron_job(
         run_id = await hermes.start_run(
             f"Scheduled task:\n{prompt}",
             session_id=f"cron:{job_id}",
+            session_key=f"doit-user:{user_id}",
             instructions=_CRON_INSTRUCTIONS,
         )
         final = await asyncio.wait_for(

@@ -20,9 +20,11 @@ enum TodosAPI {
         guard !initialTitle.isEmpty else { throw TodosAPIError.empty }
 
         // New todos enter `preparing` so the runner can rephrase the title,
-        // pick a likely connection icon, and ask for clarification before the
-        // user is ever asked to tap "Do it". The raw input is kept verbatim
-        // on `original_title` so we don't lose what the user actually typed.
+        // pick a likely connection icon, and decide whether one clarification
+        // is needed. On success the runner flips the same row to `requested`
+        // and the agent starts working automatically — no second "Do it" tap.
+        // The raw input is kept verbatim on `original_title` so we don't
+        // lose what the user actually typed.
         let row = NewTodo(
             user_id: userID,
             title: initialTitle,

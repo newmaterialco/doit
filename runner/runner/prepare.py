@@ -7,9 +7,9 @@ lightweight Hermes pass that:
     * picks the most likely Composio toolkit slug (for the icon on the card),
     * decides whether one clarifying question is needed before any action,
 
-and then either flips the todo to ``status='todo'`` (ready for the user to
-tap "Do it") or to ``status='needs_input'`` with a ``todo_interactions``
-row carrying ``payload.phase='prepare'``.
+and then either flips the todo to ``status='requested'`` so the execution
+loop picks it up automatically, or to ``status='needs_input'`` with a
+``todo_interactions`` row carrying ``payload.phase='prepare'``.
 
 This module is intentionally pure: the I/O lives in ``runner.runner``. We
 keep the JSON contract, prompt, and parser here so they can be unit-tested
@@ -52,6 +52,8 @@ CONNECTION_SLUGS: frozenset[str] = frozenset(
         "notion",
         "linear",
         "github",
+        "reddit",
+        "hunter",
     }
 )
 

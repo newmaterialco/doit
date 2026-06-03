@@ -36,6 +36,46 @@ _ARTIFACT_KINDS = {"link", "email", "calendar", "text", "audio"}
 # the generated file path.
 TTS_TOOL_NAME = "text_to_speech"
 
+# Hermes built-in tools we surface with their own labels in the activity
+# feed instead of the generic "Using <tool>." text. Memory + session search
+# are the critical observability for the Hermes-native memory roadmap:
+# if the agent never calls them on the second todo of the personal-email
+# scenario, the diagnostic is right there in the live log.
+_MEMORY_TOOL_NAMES = frozenset({"memory", "remember", "memorize"})
+_SESSION_SEARCH_TOOL_NAMES = frozenset({"session_search", "session.search"})
+
+
+def _friendly_tool_label(name: str | None) -> str | None:
+    """Map a Hermes tool name to a short activity-feed label.
+
+    Returns ``None`` when the tool should use the default "Using <name>"
+    wording so we never accidentally re-label a non-memory tool.
+    """
+    if not name:
+        return None
+    lower = name.lower()
+    if lower in _MEMORY_TOOL_NAMES:
+        return "Updating long-term memory"
+    if lower in _SESSION_SEARCH_TOOL_NAMES:
+        return "Searching past tasks for context"
+    return None
+
+
+def _friendly_tool_result_label(name: str | None, is_error: bool) -> str | None:
+    """Counterpart of ``_friendly_tool_label`` for ``tool.completed`` events."""
+    if not name:
+        return None
+    lower = name.lower()
+    if lower in _MEMORY_TOOL_NAMES:
+        return "Memory update failed." if is_error else "Memory updated."
+    if lower in _SESSION_SEARCH_TOOL_NAMES:
+        return (
+            "Couldn't search past tasks."
+            if is_error
+            else "Past-task search complete."
+        )
+    return None
+
 # Anything that smells like a Composio OAuth redirect URL the user must visit.
 # Composio surfaces these via its connection meta-tools; the exact host varies
 # by upstream provider, so we accept any HTTPS URL emitted by a connection tool.
@@ -236,24 +276,41 @@ def translate(event_name: str, data: dict) -> Translated | None:
     if actual_event == "tool.started":
         tool_name = data.get("tool") or data.get("name")
         preview = data.get("preview")
-        text = f"Using {tool_name}."
+        friendly = _friendly_tool_label(str(tool_name) if tool_name else None)
+        text = friendly + "." if friendly else f"Using {tool_name}."
         if preview:
             text = f"{text} {preview}"
+        tts_call = None
+        if str(tool_name or "") == TTS_TOOL_NAME and isinstance(preview, str):
+            spoken = preview.strip()
+            if spoken:
+                tts_call = TTSCall(call_id="hermes-lifecycle", text=spoken)
         return Translated(
             step_kind="tool_started",
             text=text,
             tool_name=str(tool_name) if tool_name else None,
+            tts_call=tts_call,
         )
 
     if actual_event == "tool.completed":
         tool_name = data.get("tool") or data.get("name")
         is_error = bool(data.get("error"))
         duration = data.get("duration")
-        text = "Tool failed." if is_error else "Tool completed."
+        friendly_result = _friendly_tool_result_label(
+            str(tool_name) if tool_name else None,
+            is_error,
+        )
+        if friendly_result is not None:
+            text = friendly_result
+        else:
+            # A tool can fail while the agent is still recovering and choosing a
+            # different path. Treat this as a tool result, not a run-level error;
+            # only explicit run/response failures below flip the todo to failed.
+            text = "Tool hit an issue." if is_error else "Tool completed."
         if isinstance(duration, (int, float)):
             text = f"{text} ({duration:.1f}s)"
         return Translated(
-            step_kind="error" if is_error else "tool_result",
+            step_kind="tool_result",
             text=text,
             tool_name=str(tool_name) if tool_name else None,
         )
@@ -272,8 +329,16 @@ def translate(event_name: str, data: dict) -> Translated | None:
 
     if actual_event == "run.completed":
         text = str(data.get("output") or "").strip()
+        usage_total = extract_usage_total(data.get("usage"))
+        if not text:
+            # Some providers emit a run-level completion event as lifecycle
+            # bookkeeping before (or instead of) a final assistant message.
+            # Treating that empty event as "Done." can race ahead of the real
+            # final that contains artifacts, such as a newly-created Sheet
+            # link. Keep the token accounting, but do not terminate here.
+            return Translated(usage_total=usage_total)
         result = _final_or_interaction(text)
-        result.usage_total = extract_usage_total(data.get("usage"))
+        result.usage_total = usage_total
         return result
 
     # ----- tool start (Hermes-custom event on Chat Completions stream) -----
@@ -301,6 +366,15 @@ def translate(event_name: str, data: dict) -> Translated | None:
                         tool_name=name,
                         tts_call=tts_call,
                     )
+            friendly = _friendly_tool_label(name)
+            if friendly is not None:
+                summary = _summarize_memory_call(name, item)
+                text = f"{friendly}: {summary}" if summary else friendly + "."
+                return Translated(
+                    step_kind="tool_started",
+                    text=text,
+                    tool_name=name,
+                )
             return Translated(
                 step_kind="tool_started",
                 text=_summarize_tool_call(item),
@@ -338,10 +412,16 @@ def translate(event_name: str, data: dict) -> Translated | None:
     if actual_event == "response.completed":
         resp = data.get("response") or {}
         text = _extract_final_text(resp)
+        usage_total = extract_usage_total(resp.get("usage"))
+        if not text:
+            # Tool-call-only response turns can complete with no assistant
+            # message. The runner should keep waiting for the follow-up final
+            # text/artifact event instead of closing the task with "Done.".
+            return Translated(usage_total=usage_total)
         result = _final_or_interaction(text)
         # Hermes fires `response.completed` once per LLM turn, so this is
         # the main live source of usage during a multi-tool-call run.
-        result.usage_total = extract_usage_total(resp.get("usage"))
+        result.usage_total = usage_total
         return result
 
     # ----- chat.completions style final -----
@@ -355,8 +435,6 @@ def translate(event_name: str, data: dict) -> Translated | None:
             return result
 
     # ----- explicit run lifecycle -----
-    if actual_event in ("run.completed", "response.completed"):
-        return Translated(step_kind="final", text="Done.", new_status="done")
     if actual_event in ("run.failed", "response.failed", "error"):
         msg = data.get("error") or data.get("message") or "The run failed."
         return Translated(step_kind="error", text=str(msg), new_status="failed")
@@ -384,7 +462,7 @@ def _final_or_interaction(text: str) -> Translated:
     # Real final: parse artifacts and spawn-task blocks out of the reply.
     artifacts = parse_artifacts(text)
     spawned_tasks = parse_spawned_tasks(text)
-    visible = strip_tasks(strip_artifacts(text)).strip()
+    visible = normalize_visible_reply(strip_tasks(strip_artifacts(text)))
     return Translated(
         step_kind="final",
         text=_truncate(visible, 2000) if visible else "Done.",
@@ -568,6 +646,98 @@ def strip_tasks(text: str) -> str:
     return _TASKS_RE.sub("", text)
 
 
+def collapse_done_leadins(text: str) -> str:
+    """Fold repeated ``Done —`` openings into one closing paragraph.
+
+    Models often emit one ``Done —`` sentence when surfacing an artifact
+    link, then another ``Done —`` block for the human summary. The chat
+    should read as a single reply.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return ""
+    chunks = re.split(
+        r"\n\s*\n(?=Done\s*[—\-]\s*)",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if len(chunks) <= 1:
+        return stripped
+    head = chunks[0].strip()
+    tail_parts: list[str] = []
+    lead_re = re.compile(r"^Done\s*[—\-]\s*", re.IGNORECASE)
+    for chunk in chunks[1:]:
+        piece = lead_re.sub("", chunk.strip(), count=1).strip()
+        if piece:
+            tail_parts.append(piece)
+    if not tail_parts:
+        return head
+    return f"{head}\n\n" + "\n\n".join(tail_parts)
+
+
+def normalize_visible_reply(text: str) -> str:
+    """Tidy chat-visible agent text after stripping structured blocks.
+
+    Artifact / task / interaction markers are removed by ``strip_*`` helpers,
+    but multi-line JSON blocks often leave several consecutive blank lines.
+    The iOS chat renders those as large vertical gaps — especially between
+    inline URLs and the closing paragraph that followed the artifact blocks.
+    """
+    if not text:
+        return ""
+    cleaned = text
+    for marker in (
+        ARTIFACT_OPEN,
+        ARTIFACT_CLOSE,
+        INTERACTION_OPEN,
+        INTERACTION_CLOSE,
+        TASKS_OPEN,
+        TASKS_CLOSE,
+    ):
+        cleaned = cleaned.replace(marker, "")
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = collapse_done_leadins(cleaned.strip())
+    return cleaned.strip()
+
+
+def merge_terminal_translated(
+    prior: Translated | None, new: Translated
+) -> Translated:
+    """Merge multiple terminal completions from one Hermes run.
+
+    Hermes may emit more than one ``response.completed`` / ``run.completed``
+    with assistant text (for example a short artifact line plus a longer
+    summary). The runner drains the stream and persists a single ``final``
+    chat row.
+    """
+    if prior is None:
+        return new
+    prior_raw = (prior.final_text or prior.text or "").strip()
+    new_raw = (new.final_text or new.text or "").strip()
+    if not prior_raw:
+        return new
+    if not new_raw or new_raw in prior_raw:
+        combined_raw = prior_raw
+    elif prior_raw in new_raw:
+        combined_raw = new_raw
+    else:
+        combined_raw = f"{prior_raw}\n\n{new_raw}"
+    artifacts = parse_artifacts(combined_raw)
+    spawned_tasks = parse_spawned_tasks(combined_raw)
+    visible = normalize_visible_reply(strip_tasks(strip_artifacts(combined_raw)))
+    return Translated(
+        step_kind="final",
+        text=_truncate(visible, 2000) if visible else "Done.",
+        new_status="done",
+        final_text=combined_raw,
+        artifacts=artifacts,
+        spawned_tasks=spawned_tasks,
+        usage_total=max(prior.usage_total, new.usage_total),
+    )
+
+
 def _clean_option(option: Any) -> dict[str, Any] | None:
     if not isinstance(option, dict):
         return None
@@ -588,6 +758,45 @@ def _summarize_tool_call(item: dict) -> str:
     if isinstance(args, str) and args:
         return f"{name}({_truncate(args, 200)})"
     return f"{name}(...)"
+
+
+def _summarize_memory_call(name: str, item: dict) -> str:
+    """Short, human-readable summary of a memory or session_search call.
+
+    For the ``memory`` tool we surface the action (add/replace/remove) and
+    a snippet of the entry. For ``session_search`` we surface the query.
+    Bad or empty arguments fall through to an empty string so the caller
+    keeps the default friendly label.
+    """
+    args = item.get("arguments")
+    parsed: dict[str, Any] = {}
+    if isinstance(args, str) and args.strip():
+        try:
+            parsed = json.loads(args)
+        except json.JSONDecodeError:
+            return ""
+    elif isinstance(args, dict):
+        parsed = args
+    if not isinstance(parsed, dict):
+        return ""
+    lower = name.lower()
+    if lower in _SESSION_SEARCH_TOOL_NAMES:
+        query = str(parsed.get("query") or parsed.get("q") or "").strip()
+        return _truncate(query, 120) if query else ""
+    if lower in _MEMORY_TOOL_NAMES:
+        action = str(parsed.get("action") or parsed.get("op") or "").strip().lower()
+        text = (
+            parsed.get("text")
+            or parsed.get("entry")
+            or parsed.get("content")
+            or parsed.get("value")
+            or ""
+        )
+        snippet = _truncate(str(text).strip(), 80)
+        if action and snippet:
+            return f"{action}: {snippet}"
+        return snippet or action
+    return ""
 
 
 def _parse_tts_call(item: dict) -> TTSCall | None:

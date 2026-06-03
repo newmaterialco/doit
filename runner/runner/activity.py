@@ -458,6 +458,7 @@ _TOOL_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("instacart", "instacart"),
     ("twitter", "twitter"),
     ("reddit", "reddit"),
+    ("hunter", "hunter"),
 )
 
 
@@ -513,6 +514,7 @@ _TOKEN_PRETTY_OVERRIDES: dict[str, str] = {
     "instacart": "Instacart",
     "twitter": "Twitter",
     "reddit": "Reddit",
+    "hunter": "Hunter",
 }
 
 
@@ -547,12 +549,18 @@ def _label_for_tool_result(effect: Translated) -> tuple[str, str | None, str]:
     """(title, detail, category) for a freshly completed tool call."""
     tool = effect.tool_name
     base = _humanize_tool_name(tool)
+    raw_text = (effect.text or "").strip()
+    category = _categorize_tool(tool)
+    if "hit an issue" in raw_text.lower() or "tool failed" in raw_text.lower():
+        target = base.split(" ", 1)[1] if " " in base else base
+        title = f"{target} hit an issue"
+        detail = _clip(raw_text, _DETAIL_LIMIT) if raw_text else None
+        return title, detail, category
     # Past-tense-ish: "Searching" -> "Reviewed", "Drafting" -> "Reviewed".
     # We deliberately keep this simple — the iOS card will animate the
     # shimmer off once `state` flips to `tool_done` regardless.
     title = f"Reviewing {base.split(' ', 1)[1]}" if " " in base else f"Reviewed {base}"
-    category = _categorize_tool(tool)
-    detail = _clip(effect.text, _DETAIL_LIMIT) if effect.text else None
+    detail = _clip(raw_text, _DETAIL_LIMIT) if raw_text else None
     return title, detail, category
 
 

@@ -112,6 +112,11 @@ class ApplySpawnedTasksTests(unittest.TestCase):
         call_kw = db.insert_spawned_todo.call_args.kwargs
         self.assertEqual(call_kw["spawned_by_todo_id"], "parent-1")
         self.assertEqual(call_kw["spawn_key"], "k1")
+        # Agent / cron-spawned tasks should still wait for explicit user
+        # action — they must not opt into the auto-run flow used for the
+        # `+` sheet. We rely on insert_spawned_todo's default status="todo"
+        # by not passing a status here.
+        self.assertNotIn("status", call_kw)
 
     def test_skips_existing_title_for_same_cron_source(self) -> None:
         from runner.events import SpawnedTaskRequest

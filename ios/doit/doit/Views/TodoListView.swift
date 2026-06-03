@@ -588,11 +588,11 @@ private struct CronJobCard: View {
     }
 }
 
-/// Three-row task card.
+/// Task card.
 ///
 ///   Row 1: stroked todo circle + "Task" label + (connection icon | spinner)
 ///   Row 2: task title in SF Pro Rounded 20
-///   Row 3: status text + primary action (Do it, Cancel, or inline option)
+///   Row 3: status text + primary action, or input prompt + option pills
 private struct TodoCard: View {
     let todo: Todo
     /// Toolkit logos for the top row (prep slug + artifact providers).
@@ -620,21 +620,23 @@ private struct TodoCard: View {
         VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
             topRow
             Button(action: onOpen) {
-                Text(displayTitle)
-                    .font(.system(size: 20, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color.black)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                HStack(alignment: .center, spacing: 8) {
+                    Text(displayTitle)
+                        .font(.system(size: 20, weight: .regular, design: .rounded))
+                        .foregroundStyle(Color.black)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.22))
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             bottomRow
-
-            if let interaction, interaction.options.count > 1 {
-                extraOptionsRow(for: interaction)
-            }
         }
         .padding(TodoCardStyle.cardPadding)
         .frame(maxWidth: .infinity)
@@ -644,12 +646,7 @@ private struct TodoCard: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(
-                    interaction != nil
-                        ? Color.orange.opacity(0.55)
-                        : Color.black.opacity(0.06),
-                    lineWidth: interaction != nil ? 1.5 : 1
-                )
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
         }
     }
 
@@ -706,37 +703,47 @@ private struct TodoCard: View {
         todo.title
     }
 
-    private var bottomRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(statusText)
-                .font(.system(size: 14, weight: .regular, design: .rounded))
-                .foregroundStyle(TodoCardStyle.muted)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .id(statusText)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                .animation(.smooth(duration: 0.25), value: statusText)
-            primaryAction
-        }
-    }
-
     @ViewBuilder
-    private func extraOptionsRow(for interaction: TodoInteraction) -> some View {
-        // The bottom-right action shows the first option. Render the rest
-        // here so multi-option clarifications (e.g. yes/no/cancel) all stay
-        // tappable without forcing the user into the detail view.
-        let extras = Array(interaction.options.dropFirst())
-        HStack(spacing: 8) {
-            ForEach(extras) { option in
-                PillButton(
-                    label: option.label,
-                    style: pillStyle(for: option.style),
-                    isLoading: isResponding,
-                    action: { onRespond(interaction, option.id, nil) }
-                )
+    private var bottomRow: some View {
+        if let interaction {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(interaction.prompt)
+                    .font(.system(size: 14, weight: .regular, design: .rounded))
+                    .foregroundStyle(TodoCardStyle.muted)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !interaction.options.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(interaction.options) { option in
+                            PillButton(
+                                label: option.label,
+                                style: pillStyle(for: option.style),
+                                isLoading: isResponding,
+                                action: { onRespond(interaction, option.id, nil) }
+                            )
+                        }
+                    }
+                }
             }
-            Spacer(minLength: 0)
+            .id(statusText)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+            .animation(.smooth(duration: 0.25), value: statusText)
+        } else {
+            HStack(alignment: .center, spacing: 10) {
+                Text(statusText)
+                    .font(.system(size: 14, weight: .regular, design: .rounded))
+                    .foregroundStyle(TodoCardStyle.muted)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .id(statusText)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .animation(.smooth(duration: 0.25), value: statusText)
+                primaryAction
+            }
         }
     }
 
@@ -761,7 +768,7 @@ private struct TodoCard: View {
             }
             return "Preparing task..."
         case .todo: return "Ready to get started..."
-        case .requested: return "Queued..."
+        case .requested: return "Starting..."
         case .running: return "Working..."
         case .needs_auth: return "Connect an account to continue"
         case .needs_input: return "Needs your input"
@@ -773,31 +780,22 @@ private struct TodoCard: View {
 
     @ViewBuilder
     private var primaryAction: some View {
-        if let interaction, let primary = interaction.options.first {
+        switch todo.status {
+        case .preparing:
             PillButton(
-                label: primary.label,
-                style: pillStyle(for: primary.style),
-                isLoading: isResponding,
-                action: { onRespond(interaction, primary.id, nil) }
+                label: "Cancel",
+                style: .neutral,
+                action: onCancel
             )
-        } else {
-            switch todo.status {
-            case .preparing:
-                PillButton(
-                    label: "Cancel",
-                    style: .neutral,
-                    action: onCancel
-                )
-            case .todo:
-                PillButton(
-                    label: "Do it",
-                    style: .primary,
-                    icon: "play.fill",
-                    action: onDoIt
-                )
-            default:
-                EmptyView()
-            }
+        case .todo:
+            PillButton(
+                label: "Do it",
+                style: .primary,
+                icon: "play.fill",
+                action: onDoIt
+            )
+        default:
+            EmptyView()
         }
     }
 
@@ -1013,7 +1011,7 @@ private struct EmptyState: View {
     private var subtitle: String {
         switch section {
         case .todo:
-            return "Tap + to add something. Tasks stay here until you mark them done — the agent handles them when you tap \u{201C}Do it\u{201D}."
+            return "Tap + to add something. The agent prepares each task and starts working right away — tap a row to follow along."
         case .scheduled:
             return "Recurring automations like daily email checks will appear here when the agent sets them up."
         case .done:

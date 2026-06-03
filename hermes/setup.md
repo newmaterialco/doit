@@ -61,7 +61,17 @@ python3 -m venv ~/composio-session-venv
 COMPOSIO_API_KEY=ak_... ~/composio-session-venv/bin/python - <<'PY'
 from composio import Composio
 
-session = Composio().create(user_id="<supabase-user-uuid>")
+# Keep in sync with supabase/functions/integrations/index.ts CATALOG and
+# runner/runner/prepare.py CONNECTION_SLUGS.
+TOOLKITS = [
+    "gmail", "googlecalendar", "googledrive", "googledocs", "googlesheets",
+    "slack", "notion", "linear", "github", "reddit", "hunter",
+]
+
+session = Composio().create(
+    user_id="<supabase-user-uuid>",
+    toolkits={"enable": TOOLKITS},
+)
 print(session.mcp.url)
 print(session.mcp.headers)
 PY
@@ -70,6 +80,12 @@ PY
 Paste `session.mcp.url` and `session.mcp.headers` into the profile
 `config.yaml` template below. Do not use the static `connect.composio.dev/mcp`
 URL for this app; it does not carry the per-user session context.
+
+> **Adding a new integration later:** regenerate the session with the updated
+> `TOOLKITS` list above, paste the new MCP URL/headers into the user's
+> `config.yaml`, and restart their Hermes gateway (`sudo systemctl restart
+> hermes-<profile>`). The iOS Connections sheet only handles OAuth; Hermes
+> only sees toolkits that were enabled when the Composio session was created.
 
 You won't connect any apps yet — that happens per user once the iOS app is
 running.
@@ -161,7 +177,8 @@ external provider yet.
   every session start. The agent curates them with the `memory` tool
   (`add`/`replace`/`remove`).
 - The agent can also call `session_search` to find content from prior
-  conversations (FTS5 over `state.db`).
+  conversations (FTS5 over `state.db`). This is what gives cross-todo recall
+  without needing a single long-lived session.
 
 Verify built-in memory is enabled after creating the profile:
 
@@ -176,17 +193,78 @@ anyone reading the profile.
 
 How this lines up with the app:
 
-- The Doit runner uses a stable per-user Hermes `session_id` (`doit-user-<uuid>`)
-  for every `/v1/runs` call, so the agent's memory files and session search
-  span all of the user's todos instead of resetting per task.
+- The Doit runner uses a **per-todo** Hermes `session_id`
+  (`doit-todo-<todo-uuid>` for execution, `doit-prep-<todo-uuid>` for the
+  preparation pass). This is intentional: Hermes' docs are explicit that
+  `USER.md` and `MEMORY.md` are injected as a *frozen* snapshot at session
+  start and never refreshed mid-session. A new session per todo means the
+  next run always sees the latest memory writes (the agent's own
+  `memory.add(...)` calls *and* anything the runner just staged from
+  Settings > Memory).
+- Cross-todo recall still works: `session_search` queries every prior
+  session in the profile's `state.db`, independent of the active
+  `session_id`. The memory files themselves are per-profile and persist
+  across all sessions.
+- Each run also forwards a stable per-user
+  `X-Hermes-Session-Key: doit-user:<uuid>` header. Hermes uses this to
+  scope long-term memory providers (Honcho, Mem0, …) independently of the
+  transcript-scoped `session_id`. We send it from day one so memory stays
+  per-user once an external provider is enabled.
 - The runner mirrors `memories/USER.md` and `memories/MEMORY.md` into the
-  Supabase `memories` table after every run, so Settings > Memory shows what
-  Hermes has actually learned.
+  Supabase `memories` table after every run, so Settings > Memory shows
+  what Hermes has actually learned.
 - When the user adds or edits a memory in the app, the runner writes that
-  entry into the matching Hermes file before the next run so it lands in the
-  next frozen snapshot.
+  entry into the matching Hermes file before the next run *and* surfaces
+  the entry in that run's prompt so the agent curates it via its own
+  `memory` tool (dedupe, replace older notes, etc.).
 - We are not enabling an external memory provider (Mem0, Honcho, etc.) in
-  this phase; built-in memory + session search is the source of truth.
+  this phase; built-in memory + `session_search` is the source of truth.
+
+### Backfilling Settings > Memory from existing profiles
+
+The reverse mirror runs after every todo, so Settings populates itself in
+normal operation. For an existing profile that's been chatting with Hermes
+before the mirror code shipped, you can backfill manually:
+
+```bash
+# From the runner directory on the VM, with the runner venv active.
+. .venv/bin/activate
+python -m runner.mirror_memory_cli --user-id <doit-user-uuid>
+# or do every provisioned user in one go:
+python -m runner.mirror_memory_cli --all
+```
+
+The CLI reads `~/.hermes/profiles/<profile>/memories/{USER,MEMORY}.md`,
+upserts entries it doesn't already know about, and deletes any
+`source='hermes'` rows whose fingerprints are gone from disk. It never
+deletes user-pinned rows.
+
+Use it as a quick diagnostic for "did Hermes actually remember anything
+about me?" without having to run a todo end-to-end.
+
+### Looking ahead: external memory providers (do not enable yet)
+
+The built-in `USER.md` / `MEMORY.md` files cap out at ~1,375 / ~2,200
+characters by design. That's plenty for the kind of facts we care about
+in Phase 1, but eventually you'll want richer semantic recall (older
+threads, larger preference graphs, "find me the doc I shared with X last
+month") — that's what Hermes' external providers are for. Add them only
+after the built-in path is boring and reliable. The expected upgrade is
+roughly:
+
+```bash
+# pick ONE provider per profile; mem0 is the simplest to set up.
+hermes -p <profile> memory setup mem0
+# verify it took
+hermes -p <profile> memory status
+```
+
+When that day comes, keep `USER.md` / `MEMORY.md` as the durable compact
+source of critical facts (personal email, default tone, recurring people)
+and let the external store handle the long tail. The runner's
+`X-Hermes-Session-Key` header is already in place to scope that
+external recall per-user, so no code change is required to plug in a
+provider — only the profile-level `memory setup` step above.
 
 ## 6. Insert the user_hermes mapping into Supabase
 

@@ -30,6 +30,10 @@ All requests are `POST /functions/v1/integrations` with `Authorization: Bearer <
 // -> { "redirect_url": "https://connect.composio.dev/link/...",
 //      "connection_id": "..." }
 
+// connect an API-key toolkit (e.g. Hunter)
+{ "action": "connect", "toolkit": "hunter", "api_key": "..." }
+// -> { "connected": true, "connection_id": "..." }
+
 // drop a connection
 { "action": "disconnect", "connection_id": "..." }
 // -> { "ok": true }

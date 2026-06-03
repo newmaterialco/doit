@@ -9,6 +9,8 @@
 //     -> { toolkits: [{ slug, name, description, connected, connection_id?, connectable? }] }
 //   { action: "connect", toolkit: "gmail" }
 //     -> { redirect_url: "https://...", connection_id: "..." }
+//   { action: "connect", toolkit: "hunter", api_key: "..." }
+//     -> { connected: true, connection_id: "..." }
 //   { action: "disconnect", connection_id: "..." }
 //     -> { ok: true }
 
@@ -22,12 +24,16 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
 // Catalog of services we surface in the iOS Integrations page.
 // `slug` is the Composio toolkit slug (lowercase canonical app name).
+type AuthType = "oauth" | "api_key";
+
 const CATALOG: Array<{
     slug: string;
     name: string;
     description: string;
-    /** When false the toolkit is always available (no OAuth connect flow). */
+    /** When false the toolkit is always available (no connect flow). */
     connectable?: boolean;
+    /** OAuth redirect (default) or user-supplied API key. */
+    auth_type?: AuthType;
 }> = [
     {
         slug: "gmail",
@@ -78,6 +84,12 @@ const CATALOG: Array<{
         slug: "reddit",
         name: "Reddit",
         description: "Browse, post, and comment on subreddits.",
+    },
+    {
+        slug: "hunter",
+        name: "Hunter",
+        description: "Find and verify professional email addresses.",
+        auth_type: "api_key",
     },
 ];
 
@@ -230,6 +242,92 @@ async function initiateConnection(
     return { redirect_url: redirectUrl, connection_id: connectionId };
 }
 
+interface ComposioAuthConfig {
+    id: string;
+}
+
+async function getOrCreateAuthConfig(toolkitSlug: string): Promise<string> {
+    const listRes = await composio(
+        `/api/v3/auth_configs?toolkit_slug=${
+            encodeURIComponent(toolkitSlug)
+        }&limit=5`,
+    );
+    if (!listRes.ok) {
+        const t = await listRes.text();
+        throw new Error(`composio auth_configs list failed: ${listRes.status} ${t}`);
+    }
+    const listData = await listRes.json();
+    const items: ComposioAuthConfig[] = Array.isArray(listData)
+        ? listData
+        : (listData.items ?? listData.data ?? []);
+    if (items.length > 0 && items[0].id) {
+        return items[0].id;
+    }
+
+    const createRes = await composio("/api/v3/auth_configs", {
+        method: "POST",
+        body: JSON.stringify({
+            toolkit: { slug: toolkitSlug },
+            auth_config: {
+                type: "use_custom_auth",
+                authScheme: "API_KEY",
+            },
+        }),
+    });
+    if (!createRes.ok) {
+        const t = await createRes.text();
+        throw new Error(`composio auth_config create failed: ${createRes.status} ${t}`);
+    }
+    const created = await createRes.json();
+    const authConfigId = created.id ?? created.auth_config_id;
+    if (!authConfigId) {
+        throw new Error(
+            `composio auth_config create: missing id in ${JSON.stringify(created)}`,
+        );
+    }
+    return authConfigId;
+}
+
+async function connectApiKey(
+    userId: string,
+    toolkit: string,
+    apiKey: string,
+): Promise<{ connection_id: string }> {
+    const authConfigId = await getOrCreateAuthConfig(toolkit);
+    const conns = await listConnections(userId);
+    for (const c of conns) {
+        const slug = (c.toolkit?.slug ?? c.appName ?? "").toLowerCase();
+        if (slug === toolkit) {
+            await deleteConnection(c.id);
+        }
+    }
+    const res = await composio("/api/v3/connected_accounts", {
+        method: "POST",
+        body: JSON.stringify({
+            auth_config: { id: authConfigId },
+            user_id: userId,
+            connection: {
+                state: {
+                    authScheme: "API_KEY",
+                    val: { generic_api_key: apiKey },
+                },
+            },
+        }),
+    });
+    if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`composio api_key connect failed: ${res.status} ${t}`);
+    }
+    const data = await res.json();
+    const connectionId: string | undefined = data.id ?? data.connection_id;
+    if (!connectionId) {
+        throw new Error(
+            `composio api_key connect: missing id in ${JSON.stringify(data)}`,
+        );
+    }
+    return { connection_id: connectionId };
+}
+
 async function deleteConnection(connectionId: string): Promise<void> {
     const res = await composio(
         `/api/v3/connected_accounts/${encodeURIComponent(connectionId)}`,
@@ -267,7 +365,12 @@ serve(async (req) => {
     }
     const userId = userResp.user.id;
 
-    let body: { action?: string; toolkit?: string; connection_id?: string };
+    let body: {
+        action?: string;
+        toolkit?: string;
+        connection_id?: string;
+        api_key?: string;
+    };
     try {
         body = await req.json();
     } catch {
@@ -307,6 +410,7 @@ serve(async (req) => {
                         slug: t.slug,
                         name: t.name,
                         description: t.description,
+                        auth_type: t.auth_type ?? "oauth",
                         connectable,
                         connected: connectable
                             ? conn?.status === "ACTIVE"
@@ -327,6 +431,18 @@ serve(async (req) => {
                 }
                 if (catalogEntry.connectable === false) {
                     return json({ error: "not_connectable" }, 400);
+                }
+                if (catalogEntry.auth_type === "api_key") {
+                    const apiKey = body.api_key?.trim() ?? "";
+                    if (!apiKey) {
+                        return json({ error: "missing_api_key" }, 400);
+                    }
+                    const result = await connectApiKey(
+                        userId,
+                        body.toolkit,
+                        apiKey,
+                    );
+                    return json({ connected: true, ...result });
                 }
                 const result = await initiateConnection(
                     userId,

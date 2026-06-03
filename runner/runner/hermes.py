@@ -52,7 +52,15 @@ SYSTEM_INSTRUCTIONS = (
     "  personal email\", \"that draft from yesterday\", \"the same person "
     "  as last time\"), call session_search before asking — your memory "
     "  files and prior sessions almost certainly have it.\n\n"
-    "Use Composio tools for any real-world action (email, calendar, etc.). "
+    "Use Composio tools for any real-world action (email, calendar, Reddit, "
+    "Hunter, Slack, etc.). For Reddit tasks — browse subreddits, read posts, search "
+    "posts, comment, or submit posts — use the Reddit Composio tools when "
+    "the account is connected. For prospecting — finding or verifying work "
+    "emails, searching a company domain, enriching leads — use Hunter Composio "
+    "tools when Hunter is connected; do not guess email addresses. "
+    "Do not use web search for actions Reddit tools "
+    "can perform; web search is for general research when no connected tool "
+    "applies. "
     "If a required app is not connected, call the Composio connection "
     "meta-tool to obtain an OAuth URL and clearly surface that URL in your "
     "reply so the user can approve it. After approval, continue and "
@@ -139,12 +147,20 @@ class HermesClient:
         todo_text: str,
         session_id: str | None = None,
         instructions: str | None = None,
+        session_key: str | None = None,
     ) -> str:
         """POST /v1/runs. Returns the new run_id.
 
         ``instructions`` overrides the default execution system prompt so the
         preparation phase can send a strict "no tools, JSON only" prompt
         without touching the regular run flow.
+
+        ``session_key`` is forwarded as the ``X-Hermes-Session-Key`` header.
+        Hermes uses it to scope long-term memory providers (Honcho, Mem0,
+        Supermemory) independently of the transcript-scoped ``session_id``.
+        Built-in MEMORY.md / USER.md are per-profile so the key only matters
+        once an external provider is enabled, but we send it from day one so
+        recall stays per-user when that flip happens.
         """
         body: dict = {
             "input": todo_text,
@@ -152,7 +168,10 @@ class HermesClient:
         }
         if session_id:
             body["session_id"] = session_id
-        resp = await self._client.post("/v1/runs", json=body)
+        headers: dict[str, str] | None = None
+        if session_key:
+            headers = {"X-Hermes-Session-Key": session_key}
+        resp = await self._client.post("/v1/runs", json=body, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         run_id = data.get("run_id") or data.get("id")
