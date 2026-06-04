@@ -23,6 +23,7 @@ struct TodoListView: View {
     @State private var selectedSectionID: Int? = TodoListSection.todo.index
     @State private var scrubbedSectionID: Int?
     @State private var navigationPath = NavigationPath()
+    @State private var deletingTodoIDs: Set<UUID> = []
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -186,7 +187,7 @@ struct TodoListView: View {
 
     @ViewBuilder
     private func todoSectionPage(_ section: TodoListSection) -> some View {
-        let items = store.todos.filter { section.contains($0.status) }
+        let items = sortedTodos(for: section)
         Group {
             if items.isEmpty && store.loadError == nil {
                 EmptyState(section: section)
@@ -194,48 +195,72 @@ struct TodoListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
-                    if let loadError = store.loadError {
-                        Text(loadError)
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    ForEach(items) { todo in
-                        let interaction = store.openInteractions[todo.id]
-                        let activity = store.agentActivityByTodoID[todo.id]
-                        TodoCard(
-                            todo: todo,
-                            connectionSlugs: connectionSlugs(for: todo),
-                            interaction: interaction,
-                            activity: activity,
-                            isResponding: store.respondingInteractionID != nil
-                                && store.respondingInteractionID == interaction?.id,
-                            onOpen: { navigationPath.append(TodoListDestination.todo(todo.id)) },
-                            onDoIt: { Task { await store.request(todo) } },
-                            onCancel: { Task { await store.cancel(todo) } },
-                            onToggleComplete: { Task { await store.toggleComplete(todo) } },
-                            onRespond: { interaction, optionID, text in
-                                Task {
-                                    await store.respond(
-                                        to: interaction,
-                                        todo: todo,
-                                        optionID: optionID,
-                                        text: text
-                                    )
-                                }
-                            }
-                        )
-                        .id(cardRefreshID(for: todo))
-                        .contextMenu {
-                            todoContextMenuAction(for: todo)
+                        if let loadError = store.loadError {
+                            Text(loadError)
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                    }
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, todo in
+                            if let label = doneDividerLabel(for: todo, at: index, in: items) {
+                                DoneTimeDivider(label: label)
+                                    .padding(.vertical, 2)
+                            }
+                            todoCard(for: todo)
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 130)
                     .padding(.bottom, 96)
+                    .animation(.smooth(duration: 0.24), value: items.map(\.id))
                 }
                 .refreshable { await store.loadAll() }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func todoCard(for todo: Todo) -> some View {
+        let interaction = store.openInteractions[todo.id]
+        let activity = store.agentActivityByTodoID[todo.id]
+        let isDeleting = deletingTodoIDs.contains(todo.id)
+        TodoCard(
+            todo: todo,
+            connectionSlugs: connectionSlugs(for: todo),
+            interaction: interaction,
+            activity: activity,
+            isResponding: store.respondingInteractionID != nil
+                && store.respondingInteractionID == interaction?.id,
+            onOpen: { navigationPath.append(TodoListDestination.todo(todo.id)) },
+            onDoIt: { Task { await store.request(todo) } },
+            onCancel: { Task { await store.cancel(todo) } },
+            onToggleComplete: { Task { await store.toggleComplete(todo) } },
+            onRespond: { interaction, optionID, text in
+                Task {
+                    await store.respond(
+                        to: interaction,
+                        todo: todo,
+                        optionID: optionID,
+                        text: text
+                    )
+                }
+            }
+        )
+        .id(cardRefreshID(for: todo))
+        .opacity(isDeleting ? 0 : 1)
+        .scaleEffect(isDeleting ? 0.96 : 1)
+        .offset(x: isDeleting ? 28 : 0)
+        .allowsHitTesting(!isDeleting)
+        .transition(
+            .asymmetric(
+                insertion: .opacity.combined(with: .move(edge: .top)),
+                removal: .opacity
+                    .combined(with: .scale(scale: 0.96))
+                    .combined(with: .move(edge: .trailing))
+            )
+        )
+        .animation(.smooth(duration: 0.24), value: isDeleting)
+        .contextMenu {
+            todoContextMenuAction(for: todo)
         }
     }
 
@@ -386,6 +411,25 @@ struct TodoListView: View {
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
+    private func sortedTodos(for section: TodoListSection) -> [Todo] {
+        let items = store.todos.filter { section.contains($0.status) }
+        guard section == .done else { return items }
+        return items.sorted { lhs, rhs in
+            if lhs.updated_at == rhs.updated_at {
+                return lhs.created_at > rhs.created_at
+            }
+            return lhs.updated_at > rhs.updated_at
+        }
+    }
+
+    private func doneDividerLabel(for todo: Todo, at index: Int, in items: [Todo]) -> String? {
+        guard todo.status == .done else { return nil }
+        let currentBucket = DoneTimeBucket.bucket(for: todo.updated_at)
+        guard index > 0 else { return currentBucket.label }
+        let previousBucket = DoneTimeBucket.bucket(for: items[index - 1].updated_at)
+        return previousBucket == currentBucket ? nil : currentBucket.label
+    }
+
     private func connectionSlugs(for todo: Todo) -> [String] {
         TodoArtifact.connectionSlugs(
             todoSlug: todo.connection_slug,
@@ -436,11 +480,87 @@ struct TodoListView: View {
             }
         } else {
             Button(role: .destructive) {
-                Task { await store.deleteTodo(todo.id) }
+                deleteTodoWithAnimation(todo.id)
             } label: {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    private func deleteTodoWithAnimation(_ id: UUID) {
+        guard !deletingTodoIDs.contains(id) else { return }
+        withAnimation(.smooth(duration: 0.24)) {
+            deletingTodoIDs.insert(id)
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(240))
+            await store.deleteTodo(id)
+            await MainActor.run {
+                deletingTodoIDs.remove(id)
+            }
+        }
+    }
+}
+
+private enum DoneTimeBucket: Equatable {
+    case today
+    case yesterday
+    case pastWeek
+    case pastMonth
+    case earlier
+
+    var label: String {
+        switch self {
+        case .today: return "Today"
+        case .yesterday: return "Yesterday"
+        case .pastWeek: return "Past week"
+        case .pastMonth: return "Past month"
+        case .earlier: return "Earlier"
+        }
+    }
+
+    static func bucket(for date: Date, now: Date = Date()) -> DoneTimeBucket {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            return .today
+        }
+        if calendar.isDateInYesterday(date) {
+            return .yesterday
+        }
+
+        let startOfDate = calendar.startOfDay(for: date)
+        let startOfToday = calendar.startOfDay(for: now)
+        let daysAgo = calendar.dateComponents([.day], from: startOfDate, to: startOfToday).day ?? 0
+        if daysAgo < 7 {
+            return .pastWeek
+        }
+        if daysAgo < 31 {
+            return .pastMonth
+        }
+        return .earlier
+    }
+}
+
+private struct DoneTimeDivider: View {
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            dividerLine
+            Text(label.uppercased())
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .tracking(0.6)
+                .foregroundStyle(Color.black.opacity(0.34))
+            dividerLine
+        }
+        .padding(.horizontal, 2)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var dividerLine: some View {
+        Rectangle()
+            .fill(Color.black.opacity(0.07))
+            .frame(height: 1)
     }
 }
 
@@ -497,43 +617,60 @@ private struct CronJobCard: View {
 
     private static let scheduleSymbol =
         "clock.arrow.trianglehead.counterclockwise.rotate.90"
+    private static let cornerRadius: CGFloat = 18
+    private static let footerBackground = Color(white: 0.975)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
-            HStack(spacing: 8) {
-                Image(systemName: Self.scheduleSymbol)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(TodoCardStyle.muted)
-                    .frame(width: 20, height: 20)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
                 HStack(spacing: 8) {
-                    Text("Scheduled")
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                    Image(systemName: Self.scheduleSymbol)
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(TodoCardStyle.muted)
-                    Spacer(minLength: 8)
-                    topRowTrailing
                         .frame(width: 20, height: 20)
+                    HStack(spacing: 8) {
+                        Text("Scheduled")
+                            .font(.system(size: 16, weight: .medium, design: .rounded))
+                            .foregroundStyle(TodoCardStyle.muted)
+                        Spacer(minLength: 8)
+                        topRowTrailing
+                            .frame(width: 20, height: 20)
+                    }
                 }
-            }
 
-            Button(action: onOpen) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(job.name)
-                        .font(.system(size: 20, weight: .regular, design: .rounded))
-                        .foregroundStyle(Color.black)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Button(action: onOpen) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(job.name)
+                            .font(.system(size: 20, weight: .regular, design: .rounded))
+                            .foregroundStyle(Color.black)
+                            .lineLimit(3)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Text(job.schedulePillText)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color(white: 0.35))
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .background(Capsule().fill(Color(white: 0.92)))
+                        Text(job.schedulePillText)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color(white: 0.35))
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+                            .background(Capsule().fill(Color(white: 0.92)))
+                    }
+                    .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(TodoCardStyle.cardPadding)
+            .background {
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(
+                        topLeading: Self.cornerRadius,
+                        bottomLeading: Self.cornerRadius,
+                        bottomTrailing: Self.cornerRadius,
+                        topTrailing: Self.cornerRadius
+                    ),
+                    style: .continuous
+                )
+                .fill(Color.white)
+            }
 
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -557,15 +694,18 @@ private struct CronJobCard: View {
                     )
                 }
             }
+            .padding(.horizontal, TodoCardStyle.cardPadding)
+            .padding(.vertical, 8)
+            .background(Self.footerBackground)
         }
-        .padding(TodoCardStyle.cardPadding)
         .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white)
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+                .fill(Self.footerBackground)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
                 .stroke(Color.black.opacity(0.06), lineWidth: 1)
         }
     }

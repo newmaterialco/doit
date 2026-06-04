@@ -86,24 +86,27 @@ private struct IslandElapsedText: View {
 
     var body: some View {
         if state.state == "running" {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                pill(elapsedLabel(now: context.date))
-            }
+            timerPill
         } else {
             pill(statusLabel)
         }
     }
 
+    private var timerPill: some View {
+        Text(timerInterval: state.intentStartDate ... Date.distantFuture, countsDown: false)
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Color.white.opacity(0.9))
+            .frame(width: 38, alignment: .trailing)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .monospacedDigit()
+    }
+
     private func pill(_ label: String) -> some View {
         Text(label)
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(Color.black.opacity(0.74))
-            .frame(width: 34, alignment: .center)
-            .padding(.vertical, 3)
-            .background(Color.white.opacity(0.92), in: Capsule())
-            .overlay {
-                Capsule().stroke(Color.black.opacity(0.08), lineWidth: 0.5)
-            }
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Color.white.opacity(0.9))
+            .frame(width: 38, alignment: .trailing)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .contentTransition(.numericText(countsDown: false))
@@ -116,16 +119,6 @@ private struct IslandElapsedText: View {
         case "paused": return "Wait"
         default: return "0:00"
         }
-    }
-
-    private func elapsedLabel(now: Date) -> String {
-        let elapsed = max(0, Int(now.timeIntervalSince(state.intentStartDate)))
-        let minutes = elapsed / 60
-        let seconds = elapsed % 60
-        if minutes > 9 {
-            return "9:59"
-        }
-        return "\(minutes):\(String(format: "%02d", seconds))"
     }
 }
 

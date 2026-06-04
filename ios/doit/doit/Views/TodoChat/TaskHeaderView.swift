@@ -48,6 +48,7 @@ struct TaskHeaderView: View {
     /// artifact. Sorted before drawing so the trunk extends as more
     /// deliverables appear.
     @State private var connectorBranchYs: [CGFloat] = []
+    @State private var isEmailBatchExpanded = false
 
     /// Explicit memberwise init so Xcode's incremental compiler can't
     /// keep a stale synthesized signature around when this view's
@@ -280,7 +281,7 @@ struct TaskHeaderView: View {
             }
 
             if !grouped.emailDrafts.isEmpty {
-                emailDraftsSection(drafts: grouped.emailDrafts)
+                emailArtifactsSection(emails: grouped.emailDrafts)
             }
         }
         .animation(.smooth(duration: 0.25), value: artifacts.map(\.id))
@@ -289,25 +290,65 @@ struct TaskHeaderView: View {
     }
 
     @ViewBuilder
-    private func emailDraftsSection(drafts: [TodoArtifact]) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                ConnectionLogo(slug: drafts.first?.emailProvider ?? "gmail")
-                    .frame(width: 16, height: 16)
-                Text(drafts.count == 1 ? "Draft email" : "Draft emails (\(drafts.count))")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.leading, 4)
+    private func emailArtifactsSection(emails: [TodoArtifact]) -> some View {
+        if emails.count == 1, let email = emails.first {
+            TaskArtifactView(artifact: email)
+                .connectorAnchor()
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    withAnimation(.smooth(duration: 0.25)) {
+                        isEmailBatchExpanded.toggle()
+                    }
+                } label: {
+                    emailBatchPill(emails: emails)
+                }
+                .buttonStyle(.plain)
+                .connectorAnchor()
+                .accessibilityLabel(isEmailBatchExpanded ? "Hide \(emails.count) sent emails" : "Show \(emails.count) sent emails")
 
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(drafts) { artifact in
-                    TaskArtifactView(artifact: artifact)
-                        .connectorAnchor()
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                if isEmailBatchExpanded {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(emails) { artifact in
+                            TaskArtifactView(artifact: artifact)
+                        }
+                    }
+                    .transition(emailBatchExpansionTransition)
                 }
             }
         }
+    }
+
+    private var emailBatchExpansionTransition: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: 8)),
+            removal: .opacity.combined(with: .offset(y: -4))
+        )
+    }
+
+    private func emailBatchPill(emails: [TodoArtifact]) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            ConnectionLogo(slug: emails.first?.emailProvider ?? "gmail")
+                .frame(width: 18, height: 18)
+
+            Text("\(emails.count) emails sent")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary)
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.down")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isEmailBatchExpanded ? 180 : 0))
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
     }
 
     /// Formats a creation timestamp the way iOS apps usually do — anchored
@@ -561,7 +602,7 @@ private struct ArtifactCardShell<Content: View>: View {
 
     var body: some View {
         let card = VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 icon
                     .frame(width: 20, height: 20)
                 Text(title)
@@ -569,8 +610,10 @@ private struct ArtifactCardShell<Content: View>: View {
                     .foregroundStyle(Color.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 trailing
+                    .padding(.top, 2)
             }
             content()
         }
@@ -640,8 +683,8 @@ private struct LinkArtifactCard: View {
     }
 }
 
-/// Email draft preview styled like the chat's Gmail draft card: provider
-/// logo, bold subject, recipients, and the full drafted body in one tile.
+/// Sent email preview styled like the chat's Gmail draft card: provider
+/// logo, bold subject, recipients, and the full body in one tile.
 private struct EmailArtifactCard: View {
     let artifact: TodoArtifact
 
@@ -653,7 +696,7 @@ private struct EmailArtifactCard: View {
                 .padding(.top, 4)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(artifact.title ?? draft?.subject ?? "Email draft")
+                Text(artifact.title ?? draft?.subject ?? "Sent email")
                     .font(.system(size: 17, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
                     .lineLimit(2)

@@ -34,7 +34,7 @@ enum TodoRealtimeHub {
     /// tables) so the store can fetch the single row instead of decoding
     /// the realtime payload itself.
     struct UserFeedHandlers {
-        var onTodoChange: (UUID) async -> Void = { _ in }
+        var onTodoChange: (UUID, Todo?) async -> Void = { _, _ in }
         var onTodoDelete: (UUID) async -> Void = { _ in }
         /// Fires for `todo_interactions` insert/update; `todoID` is the
         /// parent todo, not the interaction id.
@@ -202,13 +202,13 @@ enum TodoRealtimeHub {
         switch action {
         case .insert(let a):
             if let id = uuid(from: a.record, key: "id") {
-                await userHandlers.onTodoChange(id)
+                await userHandlers.onTodoChange(id, todo(from: a.record))
             } else {
                 await userHandlers.onUnknown()
             }
         case .update(let a):
             if let id = uuid(from: a.record, key: "id") {
-                await userHandlers.onTodoChange(id)
+                await userHandlers.onTodoChange(id, todo(from: a.record))
             } else {
                 await userHandlers.onUnknown()
             }
@@ -351,6 +351,36 @@ enum TodoRealtimeHub {
             // nested `payload.steps` history for the stacked activity cards.
             payload: nil,
             started_at: startedAt,
+            updated_at: updatedAt,
+            completed_at: date(from: record["completed_at"]?.stringValue)
+        )
+    }
+
+    private static func todo(from record: [String: AnyJSON]) -> Todo? {
+        guard let id = uuid(from: record, key: "id"),
+              let userID = uuid(from: record, key: "user_id"),
+              let title = record["title"]?.stringValue,
+              let rawStatus = record["status"]?.stringValue,
+              let status = TodoStatus(rawValue: rawStatus),
+              let createdAt = date(from: record["created_at"]?.stringValue),
+              let updatedAt = date(from: record["updated_at"]?.stringValue) else {
+            return nil
+        }
+
+        return Todo(
+            id: id,
+            user_id: userID,
+            title: title,
+            detail: record["detail"]?.stringValue,
+            status: status,
+            hermes_run_id: record["hermes_run_id"]?.stringValue,
+            hermes_session_id: record["hermes_session_id"]?.stringValue,
+            error_message: record["error_message"]?.stringValue,
+            original_title: record["original_title"]?.stringValue,
+            connection_slug: record["connection_slug"]?.stringValue,
+            preparation_summary: record["preparation_summary"]?.stringValue,
+            total_tokens: record["total_tokens"]?.stringValue.flatMap(Int64.init),
+            created_at: createdAt,
             updated_at: updatedAt,
             completed_at: date(from: record["completed_at"]?.stringValue)
         )

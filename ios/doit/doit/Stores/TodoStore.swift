@@ -564,8 +564,15 @@ final class TodoStore {
 
     private func makeUserFeedHandlers() -> TodoRealtimeHub.UserFeedHandlers {
         TodoRealtimeHub.UserFeedHandlers(
-            onTodoChange: { [weak self] id in
-                await self?.refreshTodo(id: id)
+            onTodoChange: { [weak self] id, realtimeTodo in
+                guard let self else { return }
+                if let realtimeTodo {
+                    print("[store] realtime todo id=\(id) status=\(realtimeTodo.status.rawValue) title=\(realtimeTodo.title) slug=\(realtimeTodo.connection_slug ?? "-")")
+                    self.upsertTodo(realtimeTodo)
+                } else {
+                    print("[store] realtime todo id=\(id) missing payload; fetching")
+                }
+                await self.refreshTodo(id: id)
             },
             onTodoDelete: { [weak self] id in
                 await MainActor.run { self?.removeTodoLocal(id: id) }
