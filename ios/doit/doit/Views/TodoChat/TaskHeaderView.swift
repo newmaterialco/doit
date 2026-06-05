@@ -558,7 +558,7 @@ private extension View {
 /// Compact card the agent uses to surface a final deliverable — a created
 /// doc/sheet link, a sent email, a calendar invite, a text result, or a
 /// Hermes-generated spoken summary. Dispatches on `artifact.kind` to one
-/// of five small renderers; unknown or empty payloads short-circuit to
+/// of six small renderers; unknown or empty payloads short-circuit to
 /// nothing so a malformed row never leaves a blank tile in the header.
 struct TaskArtifactView: View {
     let artifact: TodoArtifact
@@ -571,6 +571,7 @@ struct TaskArtifactView: View {
             case .calendar: CalendarArtifactCard(artifact: artifact)
             case .text: TextArtifactCard(artifact: artifact)
             case .audio: AudioArtifactCard(artifact: artifact)
+            case .image: ImageArtifactCard(artifact: artifact)
             }
         }
     }

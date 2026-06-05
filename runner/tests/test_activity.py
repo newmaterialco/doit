@@ -92,6 +92,31 @@ class AgentActivityServiceTests(unittest.TestCase):
         self.assertEqual(fields["hermes_run_id"], "run-1")
         self.assertEqual(fields["payload"]["steps"], [])
 
+    def test_heartbeat_refreshes_latest_snapshot(self) -> None:
+        svc = AgentActivityService()
+        latest = svc.observe(_started("gmail_search", text="Using gmail_search. q=foo"))
+        assert latest is not None
+
+        snap = svc.heartbeat(latest)
+
+        self.assertEqual(snap.phase, latest.phase)
+        self.assertEqual(snap.state, "running")
+        self.assertEqual(snap.title, "Searching Gmail")
+        self.assertEqual(snap.detail, "q=foo")
+        self.assertEqual(snap.tool_name, "gmail_search")
+        self.assertEqual(snap.tool_category, "gmail")
+
+    def test_heartbeat_without_snapshot_uses_neutral_status(self) -> None:
+        svc = AgentActivityService()
+
+        snap = svc.heartbeat()
+
+        self.assertEqual(snap.phase, "thinking")
+        self.assertEqual(snap.state, "running")
+        self.assertEqual(snap.title, "Still working")
+        self.assertEqual(snap.detail, "Still working on this")
+        self.assertEqual(snap.tool_category, "thinking")
+
     def test_tool_started_then_tool_result_flow(self) -> None:
         svc = AgentActivityService()
         snap = svc.observe(_started("gmail_search", text="Using gmail_search. q=foo"))

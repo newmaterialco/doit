@@ -141,7 +141,7 @@ async def configure_one_cron_job(
     result = parse_cron_config(final_text or "", CONNECTION_SLUGS)
     if result is None:
         log.info("cron config produced no result for %s; enabling as-is", job_id)
-        nxt = compute_next_run(schedule)
+        nxt = compute_next_run(schedule, timezone=job.get("timezone"))
         db.update_cron_job(
             job_id,
             {
@@ -202,7 +202,7 @@ async def configure_one_cron_job(
         return
 
     effective_schedule = result.schedule or schedule
-    nxt = compute_next_run(effective_schedule)
+    nxt = compute_next_run(effective_schedule, timezone=job.get("timezone"))
     updates["state"] = "scheduled"
     updates["enabled"] = True
     updates["next_run_at"] = (nxt or datetime.now(UTC)).isoformat()
@@ -289,7 +289,7 @@ async def _run_one_cron_job(
 
     now = datetime.now(UTC)
     schedule = job.get("schedule") or ""
-    nxt = advance_next_run(schedule, after=now)
+    nxt = advance_next_run(schedule, after=now, timezone=job.get("timezone"))
     updates: dict[str, Any] = {
         "last_run_at": now.isoformat(),
         "last_status": status[:200],

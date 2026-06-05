@@ -98,6 +98,11 @@ const CATALOG: Array<{
         name: "LinkedIn",
         description: "Read your profile and post on your behalf.",
     },
+    {
+        slug: "figma",
+        name: "Figma",
+        description: "Browse files, read designs, and export assets.",
+    },
 ];
 
 interface ComposioConnectedAccount {

@@ -377,6 +377,37 @@ class AgentActivityService:
             snap.completed_at = now
         return snap
 
+    def heartbeat(self, latest: ActivitySnapshot | None = None) -> ActivitySnapshot:
+        """Refresh the live row during long gaps between Hermes events.
+
+        Some model calls or tool executions can run for minutes without
+        emitting SSE progress. The iOS app still needs a fresh activity row so
+        the live surfaces don't look stuck on an old placeholder. Reuse the
+        latest meaningful snapshot when we have one; otherwise publish a
+        neutral "still working" state without claiming a specific action.
+        """
+        if latest is not None:
+            return ActivitySnapshot(
+                phase=latest.phase,
+                state=latest.state,
+                title=latest.title,
+                detail=latest.detail,
+                tool_name=latest.tool_name,
+                tool_call_id=latest.tool_call_id,
+                tool_category=latest.tool_category,
+                started_at=self._started_at,
+                recent=list(self._recent),
+            )
+        return ActivitySnapshot(
+            phase="thinking",
+            state="running",
+            title="Still working",
+            detail="Still working on this",
+            tool_category="thinking",
+            started_at=self._started_at,
+            recent=list(self._recent),
+        )
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -469,6 +500,7 @@ _TOOL_CATEGORY_HINTS: tuple[tuple[str, str], ...] = (
     ("reddit", "reddit"),
     ("hunter", "hunter"),
     ("linkedin", "linkedin"),
+    ("figma", "figma"),
 )
 
 
@@ -526,6 +558,7 @@ _TOKEN_PRETTY_OVERRIDES: dict[str, str] = {
     "reddit": "Reddit",
     "hunter": "Hunter",
     "linkedin": "LinkedIn",
+    "figma": "Figma",
 }
 
 

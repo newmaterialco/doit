@@ -475,6 +475,8 @@ private struct AgentInteractionMessage: View {
 
             if let draft = interaction.emailDraft {
                 EmailDraftPreview(draft: draft)
+            } else if let invite = interaction.calendarInvite {
+                CalendarInvitePreview(invite: invite)
             } else if let content = interaction.content {
                 JSONPreview(value: content)
             }
@@ -651,6 +653,171 @@ private struct EmailDraftPreview: View {
                 .strokeBorder(Color.secondary.opacity(0.22), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 3)
+    }
+}
+
+private struct CalendarInviteDraft: Hashable {
+    let title: String
+    let start: Date?
+    let end: Date?
+    let timezone: TimeZone?
+    let location: String?
+    let attendees: [String]
+    let url: URL?
+
+    init?(content: JSONValue) {
+        guard let obj = content.objectValue else { return nil }
+        let rawTitle = obj["title"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let title = rawTitle, !title.isEmpty else { return nil }
+        let start = obj["start"]?.stringValue.flatMap(Self.parseISO8601)
+        let end = obj["end"]?.stringValue.flatMap(Self.parseISO8601)
+        let location = obj["location"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let attendees = obj["attendees"]?.arrayValue?
+            .compactMap { $0.stringValue }
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? []
+        let timezone = obj["timezone"]?.stringValue.flatMap(TimeZone.init(identifier:))
+        let url = obj["url"]?.stringValue.flatMap(URL.init(string:))
+
+        guard start != nil || end != nil || location?.isEmpty == false || !attendees.isEmpty else {
+            return nil
+        }
+
+        self.title = title
+        self.start = start
+        self.end = end
+        self.timezone = timezone
+        self.location = location?.isEmpty == false ? location : nil
+        self.attendees = attendees
+        self.url = url
+    }
+
+    private static func parseISO8601(_ raw: String) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let d = isoFractional.date(from: trimmed) { return d }
+        return isoBasic.date(from: trimmed)
+    }
+
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static let isoBasic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+}
+
+private extension ChatInteractionEnvelope {
+    var calendarInvite: CalendarInviteDraft? {
+        content.flatMap(CalendarInviteDraft.init(content:))
+    }
+}
+
+private struct CalendarInvitePreview: View {
+    let invite: CalendarInviteDraft
+    @Environment(\.openURL) private var openURL
+
+    private let cornerRadius: CGFloat = 20
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .padding(.top, 2)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Calendar invite")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+
+                    Text(invite.title)
+                        .font(.system(size: 19, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                if let when = Self.formatRange(invite.start, invite.end, timezone: invite.timezone) {
+                    Label(when, systemImage: "clock")
+                        .labelStyle(.titleAndIcon)
+                }
+                if let location = invite.location {
+                    Label(location, systemImage: "mappin.and.ellipse")
+                        .labelStyle(.titleAndIcon)
+                }
+                if !invite.attendees.isEmpty {
+                    Label(invite.attendees.joined(separator: ", "), systemImage: "person.2.fill")
+                        .labelStyle(.titleAndIcon)
+                }
+            }
+            .font(.system(size: 15, weight: .regular, design: .rounded))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            if let url = invite.url {
+                Button {
+                    openURL(url)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "calendar.badge.plus")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Open in Calendar")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(Color.blue)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .background(Color.blue.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: 320, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.white)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.22), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 3)
+    }
+
+    private static func formatRange(_ start: Date?, _ end: Date?, timezone: TimeZone?) -> String? {
+        guard let start else { return nil }
+        let startStr = format(start, includeDate: true, timezone: timezone)
+        guard let end else { return startStr }
+
+        var calendar = Calendar.current
+        if let timezone {
+            calendar.timeZone = timezone
+        }
+
+        if calendar.isDate(start, inSameDayAs: end) {
+            return "\(startStr) - \(format(end, includeDate: false, timezone: timezone))"
+        }
+        return "\(startStr) - \(format(end, includeDate: true, timezone: timezone))"
+    }
+
+    private static func format(_ date: Date, includeDate: Bool, timezone: TimeZone?) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = includeDate ? .medium : .none
+        formatter.timeStyle = .short
+        if let timezone {
+            formatter.timeZone = timezone
+        }
+        return formatter.string(from: date)
     }
 }
 
@@ -876,6 +1043,7 @@ private struct ChatComposer: View {
             .accessibilityLabel("Send")
         } else {
             Button {
+                playLightHaptic()
                 Task { await startRecording() }
             } label: {
                 Image(systemName: "mic.fill")
@@ -893,6 +1061,7 @@ private struct ChatComposer: View {
     private var recordingPill: some View {
         HStack(spacing: 12) {
             Button {
+                playLightHaptic()
                 cancelRecording()
             } label: {
                 Image(systemName: "xmark")
@@ -909,6 +1078,7 @@ private struct ChatComposer: View {
                 .frame(height: 36)
 
             Button {
+                playLightHaptic()
                 Task { await acceptRecording() }
             } label: {
                 Image(systemName: "checkmark")
@@ -956,6 +1126,10 @@ private struct ChatComposer: View {
         draft = .empty
         mentionQuery = nil
         isFocused = false
+    }
+
+    private func playLightHaptic() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private func startRecording() async {

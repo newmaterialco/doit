@@ -79,6 +79,12 @@ struct NewTodo: Encodable, Sendable {
     let detail: String?
     let status: TodoStatus
     let original_title: String
+    /// IANA timezone identifier (e.g. `America/Los_Angeles`) reported by the
+    /// device when this todo was created. The runner uses this to set the
+    /// timezone of any cron job promoted from this todo, so a "9 AM daily"
+    /// schedule fires at 9 AM in the location the user typed it — and stays
+    /// pinned to that location even if they later travel.
+    let client_timezone: String?
 }
 
 enum StepKind: String, Codable, Sendable {

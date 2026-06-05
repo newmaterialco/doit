@@ -6,7 +6,14 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AuthModel.self) private var auth
     @Environment(TodoStore.self) private var store
+    @AppStorage("settings.modelDisplayName") private var cachedModelDisplayName = ""
+    @State private var modelCatalog: [AgentModelProviderOption] = []
+    @State private var modelSetting: AgentModelSetting?
     @State private var selectedModelName: String?
+    @State private var modelSettingsLoading = true
+    @State private var modelSettingsSaving = false
+    @State private var modelSettingsError: String?
+    @State private var showModelPicker = false
     @State private var activeRoute: SettingsRoute?
     @State private var displayedRoute: SettingsRoute?
 
@@ -15,23 +22,36 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
-                ZStack(alignment: .topLeading) {
-                    settingsRoot(minHeight: proxy.size.height - 96)
-                        .offset(x: activeRoute == nil ? 0 : -proxy.size.width)
+                ZStack {
+                    ZStack(alignment: .topLeading) {
+                        settingsRoot(minHeight: proxy.size.height - 96)
+                            .offset(x: activeRoute == nil ? 0 : -proxy.size.width)
 
-                    if let displayedRoute {
-                        settingsDestination(displayedRoute)
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .background(Color.white)
-                            .offset(x: activeRoute == nil ? proxy.size.width : 0)
+                        if let displayedRoute {
+                            settingsDestination(displayedRoute)
+                                .frame(width: proxy.size.width, height: proxy.size.height)
+                                .background(Color.white)
+                                .offset(x: activeRoute == nil ? proxy.size.width : 0)
+                        }
+                    }
+                    .clipped()
+                    .animation(settingsNavigationAnimation, value: activeRoute)
+
+                    if showModelPicker {
+                        modelPickerBackdrop
+                            .transition(.opacity)
+                            .zIndex(2)
+
+                        modelPickerPanel(height: modelPickerHeight(for: proxy.size.height))
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .zIndex(3)
                     }
                 }
-                .clipped()
-                .animation(settingsNavigationAnimation, value: activeRoute)
+                .animation(settingsNavigationAnimation, value: showModelPicker)
             }
             .background(Color.white)
             .toolbar(.hidden, for: .navigationBar)
-            .task { await loadSelectedModelName() }
+            .task { await loadModelSettings() }
         }
     }
 
@@ -78,7 +98,7 @@ struct SettingsView: View {
                         .padding(.top, 30)
 
                     SettingsGroup {
-                        settingsRouteButton(.model, value: selectedModelName)
+                        modelSettingsButton
                         SettingsDivider(leadingPadding: 66)
                         settingsRouteButton(.connections)
                         SettingsDivider(leadingPadding: 66)
@@ -110,6 +130,22 @@ struct SettingsView: View {
 
             settingsHeader
         }
+    }
+
+    private var modelSettingsButton: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            presentModelPicker()
+        } label: {
+            SettingsRow(
+                icon: "square.3.layers.3d.middle.filled",
+                title: "Model",
+                value: displayedModelName,
+                trailingSystemName: "ellipsis",
+                trailingRotation: .degrees(90)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func settingsRouteButton(_ route: SettingsRoute, value: String? = nil) -> some View {
@@ -158,6 +194,41 @@ struct SettingsView: View {
         }
     }
 
+    private var modelPickerBackdrop: some View {
+        Color.black.opacity(0.16)
+            .ignoresSafeArea(.all)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                dismissModelPicker()
+            }
+    }
+
+    private func modelPickerPanel(height: CGFloat) -> some View {
+        VStack {
+            Spacer()
+            ModelPickerCard(
+                catalog: modelCatalog,
+                selectedSetting: modelSetting,
+                loading: modelSettingsLoading,
+                saving: modelSettingsSaving,
+                error: modelSettingsError,
+                height: height,
+                onClose: {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    dismissModelPicker()
+                },
+                onSelect: { provider, model in
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Task { await saveModelSelection(provider: provider, model: model) }
+                }
+            )
+            .padding(.horizontal, 18)
+            .padding(.bottom, 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var settingsHeader: some View {
         ZStack {
             Text("Settings")
@@ -187,22 +258,86 @@ struct SettingsView: View {
         .zIndex(1)
     }
 
-    private func loadSelectedModelName() async {
+    private func loadModelSettings() async {
+        modelSettingsLoading = true
+        defer { modelSettingsLoading = false }
         do {
             let response = try await AgentSettingsAPI.getModelSettings()
+            modelCatalog = response.catalog
+            modelSetting = response.setting
             guard let setting = response.setting else {
                 selectedModelName = nil
+                cachedModelDisplayName = ""
+                modelSettingsError = nil
                 return
             }
 
-            selectedModelName = response.catalog
-                .first { $0.id == setting.provider }?
-                .models
-                .first { $0.id == setting.model }?
-                .name ?? setting.model
+            let name = displayName(for: setting, in: response.catalog)
+            selectedModelName = name
+            cachedModelDisplayName = name
+            modelSettingsError = nil
         } catch {
             selectedModelName = nil
+            modelSettingsError = "Couldn't load model settings: \(error.localizedDescription)"
         }
+    }
+
+    private func presentModelPicker() {
+        if modelCatalog.isEmpty && !modelSettingsLoading {
+            Task { await loadModelSettings() }
+        }
+        withAnimation(settingsNavigationAnimation) {
+            showModelPicker = true
+        }
+    }
+
+    private func dismissModelPicker() {
+        withAnimation(settingsNavigationAnimation) {
+            showModelPicker = false
+        }
+    }
+
+    private func saveModelSelection(
+        provider: AgentModelProviderOption,
+        model: AgentModelOption
+    ) async {
+        guard !modelSettingsSaving else { return }
+        modelSettingsSaving = true
+        defer { modelSettingsSaving = false }
+
+        do {
+            let updated = try await AgentSettingsAPI.updateModelSettings(
+                provider: provider.id,
+                model: model.id
+            )
+            modelSetting = updated
+            let name = "\(provider.name) - \(model.name)"
+            selectedModelName = name
+            cachedModelDisplayName = name
+            modelSettingsError = nil
+            dismissModelPicker()
+        } catch {
+            modelSettingsError = "Couldn't save model settings: \(error.localizedDescription)"
+        }
+    }
+
+    private var displayedModelName: String? {
+        selectedModelName ?? (cachedModelDisplayName.isEmpty ? nil : cachedModelDisplayName)
+    }
+
+    private func displayName(
+        for setting: AgentModelSetting,
+        in catalog: [AgentModelProviderOption]
+    ) -> String {
+        guard let provider = catalog.first(where: { $0.id == setting.provider }) else {
+            return setting.model
+        }
+        let modelName = provider.models.first { $0.id == setting.model }?.name ?? setting.model
+        return "\(provider.name) - \(modelName)"
+    }
+
+    private func modelPickerHeight(for containerHeight: CGFloat) -> CGFloat {
+        min(UIScreen.main.bounds.height * 0.5, containerHeight - 36)
     }
 
     private func close() {
@@ -214,7 +349,7 @@ struct SettingsView: View {
     }
 
     private var settingsNavigationAnimation: Animation {
-        .spring(response: 0.36, dampingFraction: 0.84)
+        .spring(response: 0.36, dampingFraction: 0.78)
     }
 
     private var joinedSubtitle: String {
@@ -239,7 +374,6 @@ struct SettingsView: View {
 private enum SettingsRoute: Hashable {
     case userProfile(displayName: String, avatarImageData: Data?, avatarURL: URL?)
     case agentProfile(lastRunText: String)
-    case model
     case connections
     case memory
 
@@ -249,7 +383,6 @@ private enum SettingsRoute: Hashable {
             return "You"
         case .agentProfile:
             return "doit"
-        case .model: return "Model"
         case .connections: return "Connections"
         case .memory: return "Memory"
         }
@@ -259,7 +392,6 @@ private enum SettingsRoute: Hashable {
         switch self {
         case .userProfile: return "person.crop.circle"
         case .agentProfile: return "sparkles"
-        case .model: return "square.3.layers.3d.middle.filled"
         case .connections: return "arrow.left.arrow.right"
         case .memory: return "book.pages"
         }
@@ -276,8 +408,6 @@ private enum SettingsRoute: Hashable {
             )
         case .agentProfile(let lastRunText):
             AgentProfileView(lastRunText: lastRunText)
-        case .model:
-            ModelSettingsView()
         case .connections:
             IntegrationsView()
         case .memory:
@@ -322,6 +452,8 @@ private struct SettingsRow: View {
     let title: String
     var value: String?
     var showsChevron = true
+    var trailingSystemName = "chevron.right"
+    var trailingRotation: Angle = .zero
 
     var body: some View {
         HStack(spacing: 12) {
@@ -344,9 +476,10 @@ private struct SettingsRow: View {
             }
 
             if showsChevron {
-                Image(systemName: "chevron.right")
+                Image(systemName: trailingSystemName)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color(white: 0.72))
+                    .rotationEffect(trailingRotation)
             }
         }
         .frame(minHeight: 54)
@@ -382,6 +515,191 @@ private struct PersonRow: View {
         }
         .frame(minHeight: 78)
         .padding(.horizontal, 20)
+    }
+}
+
+private struct ModelPickerCard: View {
+    let catalog: [AgentModelProviderOption]
+    let selectedSetting: AgentModelSetting?
+    let loading: Bool
+    let saving: Bool
+    let error: String?
+    let height: CGFloat
+    let onClose: () -> Void
+    let onSelect: (AgentModelProviderOption, AgentModelOption) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Select a model")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(white: 0.1))
+
+                Spacer()
+
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(white: 0.55))
+                        .frame(width: 34, height: 34)
+                        .background(Color(white: 0.95), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close model picker")
+            }
+            .padding(.leading, 22)
+            .padding(.trailing, 16)
+            .padding(.top, 22)
+            .padding(.bottom, 16)
+
+            SettingsDivider()
+
+            Group {
+                if loading && catalog.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            if let error {
+                                Text(error)
+                                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.red)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 14)
+                                SettingsDivider(leadingPadding: 20)
+                            }
+
+                            ForEach(catalog) { provider in
+                                ForEach(provider.models) { model in
+                                    ModelPickerRow(
+                                        provider: provider,
+                                        model: model,
+                                        isSelected: selectedSetting?.provider == provider.id
+                                            && selectedSetting?.model == model.id,
+                                        saving: saving,
+                                        onSelect: { onSelect(provider, model) }
+                                    )
+                                    SettingsDivider(leadingPadding: 72)
+                                }
+                            }
+                        }
+                    }
+                    .scrollIndicators(.hidden)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(height: height)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
+    }
+}
+
+private struct ModelPickerRow: View {
+    let provider: AgentModelProviderOption
+    let model: AgentModelOption
+    let isSelected: Bool
+    let saving: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 14) {
+                ModelProviderLogo(providerID: provider.id)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(provider.name) - \(model.name)")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(white: 0.14))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
+
+                    HStack(spacing: 7) {
+                        Text(priceLabel(for: model.label))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color(white: 0.72))
+
+                        Circle()
+                            .fill(Color(white: 0.78))
+                            .frame(width: 3, height: 3)
+
+                        Text(model.label)
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color(white: 0.52))
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                if saving && isSelected {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.green)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(saving)
+    }
+
+    private func priceLabel(for label: String) -> String {
+        switch label {
+        case "Premium":
+            return "$$$"
+        case "Strong", "Legacy Strong", "Balanced":
+            return "$$"
+        case "Efficient", "Budget":
+            return "$"
+        default:
+            return "$$"
+        }
+    }
+
+    private func labelColor(_ label: String) -> Color {
+        switch label {
+        case "Premium": return .purple
+        case "Strong", "Legacy Strong": return .blue
+        case "Efficient", "Balanced": return .green
+        case "Budget": return .orange
+        default: return .secondary
+        }
+    }
+}
+
+private struct ModelProviderLogo: View {
+    let providerID: String
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(Color(white: 0.96))
+
+            if providerID == "openai" || providerID == "anthropic" {
+                Image(providerID)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(7)
+            } else {
+                Text(providerID.prefix(1).uppercased())
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(white: 0.32))
+            }
+        }
+        .frame(width: 38, height: 38)
+        .overlay {
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(Color(white: 0.9), lineWidth: 1)
+        }
     }
 }
 
@@ -426,9 +744,6 @@ struct ProfileAvatar: View {
         .overlay {
             Circle()
                 .stroke(Color(white: 0.9), lineWidth: 1)
-        }
-        .transaction { transaction in
-            transaction.animation = nil
         }
     }
 

@@ -35,6 +35,7 @@ TOOLKITS = [
     "reddit",
     "hunter",
     "linkedin",
+    "figma",
 ]
 
 API_KEY_TOOLKITS = {"hunter"}

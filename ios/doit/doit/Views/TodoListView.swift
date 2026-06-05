@@ -20,120 +20,128 @@ struct TodoListView: View {
 
     @State private var showAddSheet = false
     @State private var showSettings = false
+    @State private var settingsSheetIsVisible = false
     @State private var selectedSectionID: Int? = TodoListSection.todo.index
     @State private var scrubbedSectionID: Int?
     @State private var navigationPath = NavigationPath()
     @State private var deletingTodoIDs: Set<UUID> = []
 
     var body: some View {
-        NavigationStack(path: $navigationPath) {
-            ZStack {
-                Color(red: 0.98, green: 0.98, blue: 0.98)
-                    .ignoresSafeArea()
+        ZStack(alignment: .top) {
+            NavigationStack(path: $navigationPath) {
+                ZStack {
+                    Color(red: 0.98, green: 0.98, blue: 0.98)
+                        .ignoresSafeArea()
 
-                Group {
-                    GeometryReader { proxy in
-                        ScrollView(.horizontal) {
-                            LazyHStack(spacing: 0) {
-                                sectionPage(.todo)
-                                    .frame(width: proxy.size.width, height: proxy.size.height)
-                                    .id(TodoListSection.todo.index)
-                                sectionPage(.scheduled)
-                                    .frame(width: proxy.size.width, height: proxy.size.height)
-                                    .id(TodoListSection.scheduled.index)
-                                sectionPage(.done)
-                                    .frame(width: proxy.size.width, height: proxy.size.height)
-                                    .id(TodoListSection.done.index)
+                    Group {
+                        GeometryReader { proxy in
+                            ScrollView(.horizontal) {
+                                LazyHStack(spacing: 0) {
+                                    sectionPage(.todo)
+                                        .frame(width: proxy.size.width, height: proxy.size.height)
+                                        .id(TodoListSection.todo.index)
+                                    sectionPage(.scheduled)
+                                        .frame(width: proxy.size.width, height: proxy.size.height)
+                                        .id(TodoListSection.scheduled.index)
+                                    sectionPage(.done)
+                                        .frame(width: proxy.size.width, height: proxy.size.height)
+                                        .id(TodoListSection.done.index)
+                                }
+                                .scrollTargetLayout()
                             }
-                            .scrollTargetLayout()
+                            .scrollTargetBehavior(.paging)
+                            .scrollIndicators(.hidden)
+                            .scrollPosition(id: $selectedSectionID)
+                            .ignoresSafeArea(.container, edges: [.top, .bottom])
                         }
-                        .scrollTargetBehavior(.paging)
-                        .scrollIndicators(.hidden)
-                        .scrollPosition(id: $selectedSectionID)
                         .ignoresSafeArea(.container, edges: [.top, .bottom])
-                    }
-                    .ignoresSafeArea(.container, edges: [.top, .bottom])
 
-                    VStack {
-                        topControls
-                        Spacer()
-                        bottomControls
+                        VStack {
+                            topControls
+                            Spacer()
+                            bottomControls
+                        }
+                    }
+                    .offset(y: settingsHomeOffset)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationDestination(for: TodoListDestination.self) { destination in
+                    switch destination {
+                    case .todo(let id):
+                        TodoDetailView(todoID: id)
+                    case .cronJob(let id):
+                        CronJobDetailView(jobID: id)
                     }
                 }
-                .offset(y: showSettings ? UIScreen.main.bounds.height : 0)
-
-                if showSettings {
-                    SettingsTopOverlay(onDismiss: dismissSettings)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(10)
+                .toolbar(.hidden, for: .navigationBar)
+                .onChange(of: selectedSectionID) { _, newValue in
+                    guard newValue != nil else { return }
+                    playSectionHaptic()
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .id("todo-list-navigation-v2")
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(for: TodoListDestination.self) { destination in
-                switch destination {
-                case .todo(let id):
-                    TodoDetailView(todoID: id)
-                case .cronJob(let id):
-                    CronJobDetailView(jobID: id)
+                .sheet(isPresented: $showAddSheet) {
+                    AddTodoView(userID: userID) { newTodo in
+                        // The store owns the list; insert there so realtime
+                        // reconciliation can update the same row in place when
+                        // the runner's prep pass finishes.
+                        store.insertOptimistic(newTodo)
+                        selectedSectionID = TodoListSection.todo.index
+                    }
                 }
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .onChange(of: selectedSectionID) { _, newValue in
-                guard newValue != nil else { return }
-                playSectionHaptic()
-            }
-            .sheet(isPresented: $showAddSheet) {
-                AddTodoView(userID: userID) { newTodo in
-                    // The store owns the list; insert there so realtime
-                    // reconciliation can update the same row in place when
-                    // the runner's prep pass finishes.
-                    store.insertOptimistic(newTodo)
-                    selectedSectionID = TodoListSection.todo.index
+                .onChange(of: navigationPath.count) { _, count in
+                    if count == 0 {
+                        TodoRealtimeHub.endTodoWatch()
+                        TodoRealtimeHub.endCronJobWatch()
+                    }
                 }
-            }
-            .onChange(of: navigationPath.count) { _, count in
-                if count == 0 {
-                    TodoRealtimeHub.endTodoWatch()
-                    TodoRealtimeHub.endCronJobWatch()
-                }
-            }
-            .onChange(of: scenePhase) { oldPhase, newPhase in
-                print("[list] scenePhase \(oldPhase)→\(newPhase)")
-                guard newPhase == .active else { return }
-                Task { await store.loadAll() }
-            }
-            .onChange(of: store.cronJobs.count) { _, _ in
-                // If the runner's prep pass converted the new todo into a
-                // cron job, the placeholder todo row vanishes and a cron
-                // job arrives. Move the user to the "Scheduled" section so
-                // they can see where their input landed.
-                guard let pending = store.pendingNewTodoID else { return }
-                if !store.todos.contains(where: { $0.id == pending }) {
-                    store.pendingNewTodoID = nil
-                    selectedSectionID = TodoListSection.scheduled.index
-                }
-            }
-            .onChange(of: push.pendingTodoID) { _, newID in
-                guard let id = newID else { return }
-                // Push tap → open that todo. Refresh its row first so the
-                // detail view doesn't render against a stale list snapshot.
-                Task { await store.refreshTodo(id: id) }
-                navigationPath.append(TodoListDestination.todo(id))
-                push.pendingTodoID = nil
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .todoRemoteUpdate)) { note in
-                // Foreground push: refresh only the affected row instead of
-                // reloading the whole list. Falls back to a full reload if
-                // the payload didn't carry a todo id.
-                if let id = TodoRemoteUpdate.todoID(from: note) {
-                    print("[list] push refresh todo=\(id)")
-                    Task { await store.refreshTodo(id: id) }
-                } else {
-                    print("[list] push refresh (no id) → full reload")
+                .onChange(of: scenePhase) { oldPhase, newPhase in
+                    print("[list] scenePhase \(oldPhase)→\(newPhase)")
+                    guard newPhase == .active else { return }
                     Task { await store.loadAll() }
                 }
+                .onChange(of: store.cronJobs.count) { _, _ in
+                    // If the runner's prep pass converted the new todo into a
+                    // cron job, the placeholder todo row vanishes and a cron
+                    // job arrives. Move the user to the "Scheduled" section so
+                    // they can see where their input landed.
+                    guard let pending = store.pendingNewTodoID else { return }
+                    if !store.todos.contains(where: { $0.id == pending }) {
+                        store.pendingNewTodoID = nil
+                        selectedSectionID = TodoListSection.scheduled.index
+                    }
+                }
+                .onChange(of: push.pendingTodoID) { _, newID in
+                    guard let id = newID else { return }
+                    // Push tap → open that todo. Refresh its row first so the
+                    // detail view doesn't render against a stale list snapshot.
+                    Task { await store.refreshTodo(id: id) }
+                    navigationPath.append(TodoListDestination.todo(id))
+                    push.pendingTodoID = nil
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .todoRemoteUpdate)) { note in
+                    // Foreground push: refresh only the affected row instead of
+                    // reloading the whole list. Falls back to a full reload if
+                    // the payload didn't carry a todo id.
+                    if let id = TodoRemoteUpdate.todoID(from: note) {
+                        print("[list] push refresh todo=\(id)")
+                        Task { await store.refreshTodo(id: id) }
+                    } else {
+                        print("[list] push refresh (no id) → full reload")
+                        Task { await store.loadAll() }
+                    }
+                }
+            }
+
+            if showSettings {
+                Color.white
+                    .ignoresSafeArea()
+                    .opacity(settingsSheetIsVisible ? 1 : 0)
+                    .animation(settingsPresentationAnimation, value: settingsSheetIsVisible)
+                    .zIndex(9)
+
+                SettingsTopOverlay(onDismiss: dismissSettings)
+                    .offset(y: settingsSheetOffset)
+                    .zIndex(10)
             }
         }
     }
@@ -160,9 +168,7 @@ struct TodoListView: View {
 
                 Button {
                     playFirmHaptic()
-                    withAnimation(settingsPresentationAnimation) {
-                        showSettings = true
-                    }
+                    presentSettings()
                 } label: {
                     ProfileAvatar(
                         kind: .user(
@@ -245,7 +251,6 @@ struct TodoListView: View {
                 navigationPath.append(TodoListDestination.todo(todo.id))
             },
             onDoIt: { Task { await store.request(todo) } },
-            onCancel: { Task { await store.cancel(todo) } },
             onToggleComplete: { Task { await store.toggleComplete(todo) } },
             onRespond: { interaction, optionID, text in
                 Task {
@@ -434,9 +439,31 @@ struct TodoListView: View {
         .spring(response: 0.36, dampingFraction: 0.78)
     }
 
+    private var settingsSheetOffset: CGFloat {
+        settingsSheetIsVisible ? 0 : -UIScreen.main.bounds.height
+    }
+
+    private var settingsHomeOffset: CGFloat {
+        settingsSheetIsVisible ? UIScreen.main.bounds.height : 0
+    }
+
+    private func presentSettings() {
+        showSettings = true
+        DispatchQueue.main.async {
+            withAnimation(settingsPresentationAnimation) {
+                settingsSheetIsVisible = true
+            }
+        }
+    }
+
     private func dismissSettings() {
         withAnimation(settingsPresentationAnimation) {
-            showSettings = false
+            settingsSheetIsVisible = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            if !settingsSheetIsVisible {
+                showSettings = false
+            }
         }
     }
 
@@ -669,12 +696,9 @@ private struct SettingsTopOverlay: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.white
-                .ignoresSafeArea()
-            SettingsView(onDismiss: onDismiss)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        SettingsView(onDismiss: onDismiss)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white)
     }
 }
 
@@ -816,7 +840,6 @@ private struct TodoCard: View {
     let isResponding: Bool
     let onOpen: () -> Void
     let onDoIt: () -> Void
-    let onCancel: () -> Void
     let onToggleComplete: () -> Void
     let onRespond: (_ interaction: TodoInteraction, _ optionID: String?, _ text: String?) -> Void
 
@@ -1023,12 +1046,6 @@ private struct TodoCard: View {
     @ViewBuilder
     private var primaryAction: some View {
         switch todo.status {
-        case .preparing:
-            PillButton(
-                label: "Cancel",
-                style: .neutral,
-                action: onCancel
-            )
         case .todo:
             PillButton(
                 label: "Do it",

@@ -14,6 +14,11 @@ enum ArtifactKind: String, Codable, Sendable, CaseIterable {
     /// AVPlayer-backed card at the top of the detail view with the long-
     /// form spoken text shown underneath the controls.
     case audio
+    /// Visual deliverable (Figma export, generated mockup, browser
+    /// screenshot, chart) uploaded by the runner to the private
+    /// `todo-images` Supabase Storage bucket. Renders as an inline
+    /// preview card with optional caption metadata.
+    case image
 }
 
 /// One user-visible deliverable produced by the agent — a created Google
@@ -52,6 +57,7 @@ struct TodoArtifact: Codable, Identifiable, Hashable, Sendable {
         case .calendar: return calendarEvent != nil
         case .text: return !(text ?? "").isEmpty
         case .audio: return audio != nil
+        case .image: return image != nil
         }
     }
 
@@ -172,6 +178,59 @@ struct TodoArtifact: Codable, Identifiable, Hashable, Sendable {
         )
     }
 
+    // MARK: - image
+
+    /// Parsed view of an `image` artifact. The bytes live in the private
+    /// `todo-images` Supabase Storage bucket; the UI signs `storagePath`
+    /// on demand to fetch a short-lived URL it can hand to `AsyncImage`.
+    /// Optional `width`/`height` come from the runner so the card can
+    /// reserve space before the bytes load; `prompt` and `description`
+    /// caption the image when present.
+    struct ImageRef: Hashable, Sendable {
+        let bucket: String
+        let storagePath: String
+        let mimeType: String?
+        let provider: String?
+        let prompt: String?
+        let description: String?
+        let width: Double?
+        let height: Double?
+        let byteSize: Int?
+        let sourceURL: URL?
+    }
+
+    /// Parsed image payload (only populated when `kind == .image`).
+    /// Returns `nil` when the row is missing `storage_path`, which
+    /// happens if the runner couldn't upload the bytes — the card is
+    /// skipped rather than rendered with a broken state.
+    var image: ImageRef? {
+        guard let obj = object else { return nil }
+        guard let path = obj["storage_path"]?.stringValue,
+              !path.isEmpty else { return nil }
+        let bucket = obj["bucket"]?.stringValue ?? "todo-images"
+        let mime = obj["mime_type"]?.stringValue
+        let provider = obj["provider"]?.stringValue
+        let prompt = obj["prompt"]?.stringValue
+        let description = obj["description"]?.stringValue
+            ?? obj["alt_text"]?.stringValue
+        let width = obj["width"]?.numberValue
+        let height = obj["height"]?.numberValue
+        let byteSize: Int? = obj["byte_size"]?.numberValue.map { Int($0) }
+        let sourceURL = obj["source_url"]?.stringValue.flatMap(URL.init(string:))
+        return ImageRef(
+            bucket: bucket,
+            storagePath: path,
+            mimeType: mime,
+            provider: provider,
+            prompt: prompt,
+            description: description,
+            width: width,
+            height: height,
+            byteSize: byteSize,
+            sourceURL: sourceURL
+        )
+    }
+
     // MARK: - Internals
 
     /// ISO 8601 parser that accepts both the fractional-second variant
@@ -214,7 +273,9 @@ extension TodoArtifact {
         }
         let deduped = deduplicatedForDisplay(sorted)
         let audio = deduped.filter { $0.kind == .audio }
-        let others = deduped.filter { $0.kind != .email && $0.kind != .audio }
+        let others = deduped.filter {
+            $0.kind != .email && $0.kind != .audio
+        }
         let primary = audio + others
         let emails = deduped.filter { $0.kind == .email }
         return (primary, emails)
@@ -290,6 +351,10 @@ extension TodoArtifact {
         case .audio:
             if let clip = audio {
                 return "audio|\(clip.storagePath)"
+            }
+        case .image:
+            if let ref = image {
+                return "image|\(ref.storagePath)"
             }
         }
 

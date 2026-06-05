@@ -669,7 +669,12 @@ async def prepare_one_todo(
     if result.is_cron and result.schedule:
         from datetime import UTC, datetime
 
-        nxt = compute_next_run(result.schedule)
+        # Pin the new cron job to the timezone the user was in when they
+        # typed the schedule. This keeps "9 AM daily" anchored to that
+        # location for the lifetime of the job, even if the user later
+        # travels. ``None`` falls through to legacy UTC evaluation.
+        client_timezone = todo.get("client_timezone") or None
+        nxt = compute_next_run(result.schedule, timezone=client_timezone)
         name = result.title or raw_title
         prompt_text = detail.strip() or raw_title
         if result.summary and result.summary not in prompt_text:
@@ -686,6 +691,7 @@ async def prepare_one_todo(
             "state": "configuring",
             "enabled": False,
             "next_run_at": (nxt or datetime.now(UTC)).isoformat(),
+            "timezone": client_timezone,
         }
         inserted = db.insert_cron_job(job_fields)
         if inserted:
@@ -812,6 +818,20 @@ async def _consume_run(
     # todo card status line, the detail-view animated cards, and the
     # Live Activity widget. `todo_steps` keeps the historic audit log.
     activity = AgentActivityService()
+    latest_activity: ActivitySnapshot | None = None
+    heartbeat_task: asyncio.Task | None = None
+
+    async def activity_heartbeat() -> None:
+        while True:
+            await asyncio.sleep(25)
+            _write_activity(
+                db,
+                todo_id=todo_id,
+                user_id=user_id,
+                snapshot=activity.heartbeat(latest_activity),
+                hermes_run_id=run_id,
+            )
+
     _write_activity(
         db,
         todo_id=todo_id,
@@ -819,226 +839,242 @@ async def _consume_run(
         snapshot=activity.initial(phase="starting", title="Starting agent…"),
         hermes_run_id=run_id,
     )
+    heartbeat_task = asyncio.create_task(activity_heartbeat())
 
-    async for ev in hermes.stream_events(run_id):
-        effect = translate(ev.event, ev.data)
-        if effect is None:
-            continue
-        defer_final = (
-            effect.step_kind == "final" and effect.new_status == "done"
-        )
-        if effect.step_kind and not defer_final:
-            db.insert_step(
-                todo_id=todo_id,
-                user_id=user_id,
-                kind=effect.step_kind,
-                text=effect.text,
-                url=effect.url,
-                tool_name=effect.tool_name,
-            )
-        # Update the live activity snapshot for every event the translator
-        # recognized. Terminal events also write a closing snapshot below
-        # so the UI doesn't sit on stale "Working on..." copy.
-        snap = activity.observe(effect, event_name=ev.event, raw_data=ev.data)
-        if snap is not None:
-            _write_activity(
-                db,
-                todo_id=todo_id,
-                user_id=user_id,
-                snapshot=snap,
-                hermes_run_id=run_id,
-            )
-        # Persist artifacts before any terminal `break` below so a `done`
-        # event that also carries deliverables still lands them in the DB.
-        artifact_text = _first_text_artifact_body(effect.artifacts) or effect.text
-        for artifact in effect.artifacts:
-            if await _maybe_persist_audio_link_artifact(
-                db,
-                todo_id=todo_id,
-                user_id=user_id,
-                run_id=run_id,
-                artifact=artifact,
-                fallback_text=artifact_text,
-            ):
+    try:
+        async for ev in hermes.stream_events(run_id):
+            effect = translate(ev.event, ev.data)
+            if effect is None:
                 continue
-            db.upsert_artifact(
-                todo_id=todo_id,
-                user_id=user_id,
-                key=artifact.key,
-                kind=artifact.kind,
-                title=artifact.title,
-                payload=artifact.payload,
-                hermes_run_id=run_id,
+            defer_final = (
+                effect.step_kind == "final" and effect.new_status == "done"
             )
-        if effect.tts_call is not None:
-            pending_tts[effect.tts_call.call_id] = effect.tts_call
-            pending_tts_started_at[effect.tts_call.call_id] = time.time() - 10
-        if effect.tts_result is not None:
-            _persist_tts_audio(
-                db,
-                todo_id=todo_id,
-                user_id=user_id,
-                run_id=run_id,
-                result=effect.tts_result,
-                call=pending_tts.get(effect.tts_result.call_id),
-            )
-            lifecycle_tts_uploaded = True
-        if (
-            effect.step_kind == "tool_result"
-            and effect.tool_name == "text_to_speech"
-            and not lifecycle_tts_uploaded
-        ):
-            call = pending_tts.get("hermes-lifecycle")
-            started_at = pending_tts_started_at.get("hermes-lifecycle", time.time() - 60)
-            file_path = _find_latest_hermes_tts_audio(
-                cfg,
-                profile_name=profile_name,
-                since=started_at,
-            )
-            if file_path:
+            if effect.step_kind and not defer_final:
+                db.insert_step(
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    kind=effect.step_kind,
+                    text=effect.text,
+                    url=effect.url,
+                    tool_name=effect.tool_name,
+                )
+            # Update the live activity snapshot for every event the translator
+            # recognized. Terminal events also write a closing snapshot below
+            # so the UI doesn't sit on stale "Working on..." copy.
+            snap = activity.observe(effect, event_name=ev.event, raw_data=ev.data)
+            if snap is not None:
+                latest_activity = snap
+                _write_activity(
+                    db,
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    snapshot=snap,
+                    hermes_run_id=run_id,
+                )
+            # Persist artifacts before any terminal `break` below so a `done`
+            # event that also carries deliverables still lands them in the DB.
+            artifact_text = _first_text_artifact_body(effect.artifacts) or effect.text
+            for artifact in effect.artifacts:
+                if await _maybe_persist_audio_link_artifact(
+                    db,
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    artifact=artifact,
+                    fallback_text=artifact_text,
+                ):
+                    continue
+                if await _maybe_persist_image_artifact(
+                    db,
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    run_id=run_id,
+                    artifact=artifact,
+                ):
+                    continue
+                db.upsert_artifact(
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    key=artifact.key,
+                    kind=artifact.kind,
+                    title=artifact.title,
+                    payload=artifact.payload,
+                    hermes_run_id=run_id,
+                )
+            if effect.tts_call is not None:
+                pending_tts[effect.tts_call.call_id] = effect.tts_call
+                pending_tts_started_at[effect.tts_call.call_id] = time.time() - 10
+            if effect.tts_result is not None:
                 _persist_tts_audio(
                     db,
                     todo_id=todo_id,
                     user_id=user_id,
                     run_id=run_id,
-                    result=TTSResult(
-                        call_id="hermes-lifecycle",
-                        file_path=str(file_path),
-                        provider="elevenlabs",
-                    ),
-                    call=call,
+                    result=effect.tts_result,
+                    call=pending_tts.get(effect.tts_result.call_id),
                 )
                 lifecycle_tts_uploaded = True
-            else:
-                log.warning(
-                    "text_to_speech completed but no local audio file found "
-                    "todo=%s run=%s profile=%s since=%.3f",
-                    todo_id, run_id, profile_name, started_at,
+            if (
+                effect.step_kind == "tool_result"
+                and effect.tool_name == "text_to_speech"
+                and not lifecycle_tts_uploaded
+            ):
+                call = pending_tts.get("hermes-lifecycle")
+                started_at = pending_tts_started_at.get("hermes-lifecycle", time.time() - 60)
+                file_path = _find_latest_hermes_tts_audio(
+                    cfg,
+                    profile_name=profile_name,
+                    since=started_at,
                 )
-        if effect.spawned_tasks and effect.new_status == "done":
-            spawned_count = apply_spawned_tasks(
-                db,
-                user_id,
-                effect.spawned_tasks,
-                source_todo_id=todo_id,
-            )
-            if spawned_count > 0:
-                await pusher.send(
-                    db.list_apns_tokens(user_id),
-                    PushPayload(
-                        title="New tasks ready",
-                        body=f"{spawned_count} task(s) from your agent run",
+                if file_path:
+                    _persist_tts_audio(
+                        db,
                         todo_id=todo_id,
-                        kind="tasks_spawned",
-                    ),
-                )
-        # Mid-stream `response.completed` events carry per-turn usage; we
-        # increment as they arrive so the iOS pill counter ticks upward
-        # while the agent is still working. We deliberately skip events
-        # that also carry `new_status` because those terminal events tend
-        # to repeat the run-cumulative total — we let the post-stream
-        # backfill (`get_run`) reconcile those instead of double-counting.
-        if effect.usage_total > 0 and effect.new_status is None:
-            db.increment_todo_tokens(todo_id, effect.usage_total)
-            live_total += effect.usage_total
-        if effect.new_status:
-            fields: dict = {"status": effect.new_status}
-            if effect.new_status == "done":
-                fields["completed_at"] = "now()"
-            elif effect.new_status == "failed":
-                fields["error_message"] = effect.text or "Agent reported a failure."
-            # Supabase REST can't take SQL like "now()" — drop it and let the
-            # trigger keep updated_at fresh; we don't strictly need completed_at
-            # to be wall-clock-accurate for the prototype.
-            fields.pop("completed_at", None)
-            db.update_todo(todo_id, fields)
-
-            if effect.new_status == "needs_auth" and effect.url:
-                await pusher.send(
-                    db.list_apns_tokens(user_id),
-                    PushPayload(
-                        title="Connect an account",
-                        body="Tap to authorize so the agent can finish.",
-                        todo_id=todo_id,
-                        kind="oauth_needed",
-                    ),
-                )
-                _write_activity(
-                    db,
-                    todo_id=todo_id,
-                    user_id=user_id,
-                    snapshot=activity.mark_terminal(
-                        state="paused",
-                        phase="needs_auth",
-                        title="Connect an account to continue",
-                        detail=effect.text,
-                    ),
-                    hermes_run_id=run_id,
-                )
-                # The run usually pauses here in practice; we stop consuming
-                # so the next "Do it" can resume cleanly with fresh creds.
-                await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
-                return "needs_auth"
-
-            if effect.new_status == "needs_input" and effect.interaction is not None:
-                # Replace any previously-open interaction so the UI only ever
-                # shows one actionable card at a time.
-                db.supersede_open_interactions(todo_id)
-                db.insert_interaction(
-                    todo_id=todo_id,
-                    user_id=user_id,
-                    kind=effect.interaction.kind,
-                    prompt=effect.interaction.prompt,
-                    payload=effect.interaction.payload,
-                    hermes_run_id=run_id,
-                )
-                await pusher.send(
-                    db.list_apns_tokens(user_id),
-                    PushPayload(
-                        title="Needs your input",
-                        body=effect.interaction.prompt[:160],
-                        todo_id=todo_id,
-                        kind="needs_input",
-                    ),
-                )
-                _write_activity(
-                    db,
-                    todo_id=todo_id,
-                    user_id=user_id,
-                    snapshot=activity.mark_terminal(
-                        state="paused",
-                        phase="needs_input",
-                        title="Needs your input",
-                        detail=effect.interaction.prompt,
-                    ),
-                    hermes_run_id=run_id,
-                )
-                await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
-                return "needs_input"
-
-            if effect.new_status in ("done", "failed"):
-                terminal = effect.new_status
-                if effect.new_status == "done" and effect.step_kind == "final":
-                    pending_final = merge_terminal_translated(
-                        pending_final, effect
+                        user_id=user_id,
+                        run_id=run_id,
+                        result=TTSResult(
+                            call_id="hermes-lifecycle",
+                            file_path=str(file_path),
+                            provider="elevenlabs",
+                        ),
+                        call=call,
                     )
+                    lifecycle_tts_uploaded = True
+                else:
+                    log.warning(
+                        "text_to_speech completed but no local audio file found "
+                        "todo=%s run=%s profile=%s since=%.3f",
+                        todo_id, run_id, profile_name, started_at,
+                    )
+            if effect.spawned_tasks and effect.new_status == "done":
+                spawned_count = apply_spawned_tasks(
+                    db,
+                    user_id,
+                    effect.spawned_tasks,
+                    source_todo_id=todo_id,
+                )
+                if spawned_count > 0:
+                    await pusher.send(
+                        db.list_apns_tokens(user_id),
+                        PushPayload(
+                            title="New tasks ready",
+                            body=f"{spawned_count} task(s) from your agent run",
+                            todo_id=todo_id,
+                            kind="tasks_spawned",
+                        ),
+                    )
+            # Mid-stream `response.completed` events carry per-turn usage; we
+            # increment as they arrive so the iOS pill counter ticks upward
+            # while the agent is still working. We deliberately skip events
+            # that also carry `new_status` because those terminal events tend
+            # to repeat the run-cumulative total — we let the post-stream
+            # backfill (`get_run`) reconcile those instead of double-counting.
+            if effect.usage_total > 0 and effect.new_status is None:
+                db.increment_todo_tokens(todo_id, effect.usage_total)
+                live_total += effect.usage_total
+            if effect.new_status:
+                fields: dict = {"status": effect.new_status}
+                if effect.new_status == "done":
+                    fields["completed_at"] = "now()"
                 elif effect.new_status == "failed":
+                    fields["error_message"] = effect.text or "Agent reported a failure."
+                # Supabase REST can't take SQL like "now()" — drop it and let the
+                # trigger keep updated_at fresh; we don't strictly need completed_at
+                # to be wall-clock-accurate for the prototype.
+                fields.pop("completed_at", None)
+                db.update_todo(todo_id, fields)
+
+                if effect.new_status == "needs_auth" and effect.url:
+                    await pusher.send(
+                        db.list_apns_tokens(user_id),
+                        PushPayload(
+                            title="Connect an account",
+                            body="Tap to authorize so the agent can finish.",
+                            todo_id=todo_id,
+                            kind="oauth_needed",
+                        ),
+                    )
                     _write_activity(
                         db,
                         todo_id=todo_id,
                         user_id=user_id,
                         snapshot=activity.mark_terminal(
-                            state="failed",
-                            phase="failed",
-                            title="Failed",
+                            state="paused",
+                            phase="needs_auth",
+                            title="Connect an account to continue",
                             detail=effect.text,
                         ),
                         hermes_run_id=run_id,
                     )
-                    break
-                # Keep draining so a later ``run.completed`` / duplicate
-                # ``response.completed`` can be merged into one chat reply.
-                continue
+                    # The run usually pauses here in practice; we stop consuming
+                    # so the next "Do it" can resume cleanly with fresh creds.
+                    await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
+                    return "needs_auth"
+
+                if effect.new_status == "needs_input" and effect.interaction is not None:
+                    # Replace any previously-open interaction so the UI only ever
+                    # shows one actionable card at a time.
+                    db.supersede_open_interactions(todo_id)
+                    db.insert_interaction(
+                        todo_id=todo_id,
+                        user_id=user_id,
+                        kind=effect.interaction.kind,
+                        prompt=effect.interaction.prompt,
+                        payload=effect.interaction.payload,
+                        hermes_run_id=run_id,
+                    )
+                    await pusher.send(
+                        db.list_apns_tokens(user_id),
+                        PushPayload(
+                            title="Needs your input",
+                            body=effect.interaction.prompt[:160],
+                            todo_id=todo_id,
+                            kind="needs_input",
+                        ),
+                    )
+                    _write_activity(
+                        db,
+                        todo_id=todo_id,
+                        user_id=user_id,
+                        snapshot=activity.mark_terminal(
+                            state="paused",
+                            phase="needs_input",
+                            title="Needs your input",
+                            detail=effect.interaction.prompt,
+                        ),
+                        hermes_run_id=run_id,
+                    )
+                    await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
+                    return "needs_input"
+
+                if effect.new_status in ("done", "failed"):
+                    terminal = effect.new_status
+                    if effect.new_status == "done" and effect.step_kind == "final":
+                        pending_final = merge_terminal_translated(
+                            pending_final, effect
+                        )
+                    elif effect.new_status == "failed":
+                        _write_activity(
+                            db,
+                            todo_id=todo_id,
+                            user_id=user_id,
+                            snapshot=activity.mark_terminal(
+                                state="failed",
+                                phase="failed",
+                                title="Failed",
+                                detail=effect.text,
+                            ),
+                            hermes_run_id=run_id,
+                        )
+                        break
+                    # Keep draining so a later ``run.completed`` / duplicate
+                    # ``response.completed`` can be merged into one chat reply.
+                    continue
+    finally:
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
 
     if pending_final is not None:
         db.insert_step(
@@ -1074,11 +1110,13 @@ async def _consume_run(
                 state="completed",
                 phase="done",
                 title="Done",
+                detail="Done.",
             ),
             hermes_run_id=run_id,
         )
-
     if terminal is None:
+        # If the stream ends without an explicit terminal event, treat the
+        # run as successful rather than leaving the todo stuck in running.
         db.insert_step(
             todo_id=todo_id,
             user_id=user_id,
@@ -1092,20 +1130,17 @@ async def _consume_run(
             user_id=user_id,
             snapshot=activity.mark_terminal(
                 state="completed",
-                phase="final",
+                phase="done",
                 title="Done",
+                detail="Done.",
             ),
             hermes_run_id=run_id,
         )
         terminal = "done"
-
     if terminal in ("done", "failed"):
         db.supersede_open_interactions(todo_id)
-
-    await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
-
+        await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
     return terminal
-
 
 _AUDIO_MIME_BY_EXT: dict[str, str] = {
     ".mp3": "audio/mpeg",
@@ -1120,6 +1155,30 @@ _AUDIO_MIME_BY_EXT: dict[str, str] = {
 
 
 _AUDIO_LINK_HINTS = ("audio", "spoken", "speech", "recording", "voice")
+
+
+_IMAGE_MIME_BY_EXT: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+}
+
+
+_IMAGE_EXT_BY_MIME: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+}
 
 
 def _candidate_hermes_audio_dirs(
@@ -1384,6 +1443,154 @@ def _persist_tts_audio(
         payload=payload,
         hermes_run_id=run_id,
     )
+
+
+def _extension_for_image_response(url: str, content_type: str | None) -> str:
+    """Pick a storage extension from HTTP content-type or URL suffix."""
+    ctype = (content_type or "").split(";", 1)[0].strip().lower()
+    if ctype in _IMAGE_EXT_BY_MIME:
+        return _IMAGE_EXT_BY_MIME[ctype]
+    path = httpx.URL(url).path.lower()
+    ext = os.path.splitext(path)[1]
+    if ext in _IMAGE_MIME_BY_EXT:
+        return ext
+    return ".png"
+
+
+async def _maybe_persist_image_artifact(
+    db: DB,
+    *,
+    todo_id: str,
+    user_id: str,
+    run_id: str,
+    artifact: ArtifactRequest,
+) -> bool:
+    """Persist an ``image`` artifact by uploading its bytes to Supabase Storage.
+
+    The agent emits ``[[DOIT_ARTIFACT]]`` blocks of ``type: "image"`` that
+    carry one of:
+
+      * ``payload.url`` — http(s) URL to download (Figma render URLs,
+        Composio file URLs, generated-image URLs from a model). The URL
+        usually expires, so we re-host it in our private bucket.
+      * ``payload.file_path`` — local path on the runner host (for image
+        tools that drop bytes into a cache dir, like Hermes built-ins).
+      * ``payload.bucket`` + ``payload.storage_path`` — already-hosted
+        in our bucket; pass through unchanged so the agent can emit the
+        same artifact twice without re-uploading.
+
+    Returns True when the artifact was recognized as an image; the caller
+    must skip the generic ``upsert_artifact`` path. We always claim the
+    artifact (return True) once we recognize it, even on download/upload
+    failure, to avoid persisting a half-formed image row the iOS card
+    would skip anyway.
+    """
+    if artifact.kind != "image":
+        return False
+    payload = dict(artifact.payload or {})
+    bucket = str(payload.get("bucket") or "").strip()
+    storage_path = str(payload.get("storage_path") or "").strip()
+    if bucket == "todo-images" and storage_path:
+        # Already hosted in the right place — just persist as-is.
+        db.upsert_artifact(
+            todo_id=todo_id,
+            user_id=user_id,
+            key=artifact.key,
+            kind="image",
+            title=artifact.title,
+            payload=payload,
+            hermes_run_id=run_id,
+        )
+        return True
+
+    image_bytes: bytes | None = None
+    mime: str | None = None
+    ext: str | None = None
+    source_url: str | None = None
+
+    file_path = payload.get("file_path") or payload.get("path")
+    if isinstance(file_path, str) and file_path.strip():
+        expanded = os.path.expanduser(os.path.expandvars(file_path.strip()))
+        if os.path.isfile(expanded):
+            try:
+                with open(expanded, "rb") as f:
+                    image_bytes = f.read()
+                ext = os.path.splitext(expanded)[1].lower() or ".png"
+                mime = _IMAGE_MIME_BY_EXT.get(ext, "application/octet-stream")
+            except Exception as e:
+                log.error(
+                    "image read failed todo=%s run=%s path=%s: %s",
+                    todo_id, run_id, expanded, e,
+                )
+        else:
+            log.warning(
+                "image artifact file missing todo=%s run=%s path=%s",
+                todo_id, run_id, expanded,
+            )
+
+    if image_bytes is None:
+        url_raw = payload.get("url") or payload.get("source_url")
+        if isinstance(url_raw, str) and url_raw.startswith(("http://", "https://")):
+            source_url = url_raw
+            try:
+                async with httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0),
+                ) as client:
+                    resp = await client.get(url_raw)
+                    resp.raise_for_status()
+                    image_bytes = resp.content
+                ext = _extension_for_image_response(
+                    url_raw, resp.headers.get("content-type")
+                )
+                mime = _IMAGE_MIME_BY_EXT.get(ext, "application/octet-stream")
+            except Exception as e:
+                log.warning(
+                    "image download failed todo=%s run=%s url=%s: %s",
+                    todo_id, run_id, url_raw[:160], e,
+                )
+
+    if not image_bytes or not ext or not mime:
+        log.warning(
+            "image artifact dropped todo=%s run=%s key=%s (no bytes)",
+            todo_id, run_id, artifact.key,
+        )
+        return True
+
+    storage_path = db.upload_todo_image(
+        user_id=user_id,
+        todo_id=todo_id,
+        filename=f"{uuid.uuid4().hex}{ext}",
+        data=image_bytes,
+        mime_type=mime,
+    )
+    if not storage_path:
+        return True
+
+    new_payload: dict[str, Any] = {
+        "bucket": "todo-images",
+        "storage_path": storage_path,
+        "mime_type": mime,
+        "byte_size": len(image_bytes),
+    }
+    # Carry through descriptive metadata the agent included so the iOS
+    # card can show provider/prompt/dimensions without a follow-up call.
+    for key in ("provider", "prompt", "width", "height", "alt_text", "description"):
+        if key in payload and payload[key] not in (None, ""):
+            new_payload[key] = payload[key]
+    if source_url:
+        new_payload["source_url"] = source_url
+
+    db.upsert_artifact(
+        todo_id=todo_id,
+        user_id=user_id,
+        key=artifact.key,
+        kind="image",
+        title=artifact.title,
+        payload=new_payload,
+        hermes_run_id=run_id,
+    )
+    return True
 
 
 async def _reconcile_run_tokens(

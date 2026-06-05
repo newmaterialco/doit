@@ -39,6 +39,9 @@ struct CronJob: Codable, Identifiable, Hashable, Sendable {
     var last_status: String?
     var original_prompt: String?
     var configuration_summary: String?
+    /// IANA timezone the job's wall-clock cron expression is evaluated in
+    /// (e.g. `America/Los_Angeles`). `nil` means legacy UTC evaluation.
+    var timezone: String?
     let created_at: Date
     let updated_at: Date
 
@@ -46,7 +49,8 @@ struct CronJob: Codable, Identifiable, Hashable, Sendable {
     var schedulePillText: String {
         SchedulePillFormatter.format(
             schedule: schedule,
-            display: schedule_display
+            display: schedule_display,
+            timezone: timezone
         )
     }
 

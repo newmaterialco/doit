@@ -2,11 +2,60 @@ import Foundation
 
 /// Formats cron schedule strings into short UI pill labels.
 enum SchedulePillFormatter {
-    static func format(schedule: String, display: String?) -> String {
+    static func format(
+        schedule: String,
+        display: String?,
+        timezone: String? = nil
+    ) -> String {
+        let base: String
         if let display, !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return normalizeDisplay(display)
+            base = normalizeDisplay(display)
+        } else {
+            base = inferFromSchedule(schedule)
         }
-        return inferFromSchedule(schedule)
+        return appendTimezoneSuffix(base, schedule: schedule, timezone: timezone)
+    }
+
+    /// Tag the pill with a short timezone hint when the job is anchored to
+    /// a specific IANA timezone AND the schedule actually has a wall-clock
+    /// component. Relative intervals like `every 2h` need no tag because
+    /// they fire on a duration regardless of timezone.
+    private static func appendTimezoneSuffix(
+        _ base: String,
+        schedule: String,
+        timezone: String?
+    ) -> String {
+        guard let timezone, !timezone.isEmpty else { return base }
+        guard let tz = TimeZone(identifier: timezone) else { return base }
+        guard hasWallClockComponent(schedule: schedule) else { return base }
+        let abbreviation = tz.abbreviation() ?? timezone
+        // If the existing label already mentions the abbreviation, skip.
+        if base.localizedCaseInsensitiveContains(" \(abbreviation)") {
+            return base
+        }
+        return "\(base) \(abbreviation)"
+    }
+
+    private static func hasWallClockComponent(schedule: String) -> Bool {
+        let s = schedule.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if s.hasPrefix("every ") || s.hasSuffix("m") || s.hasSuffix("h") || s.hasSuffix("d") {
+            // Cheap check first; fall through for "every 1d" etc. which is
+            // still relative.
+            let relative = try? NSRegularExpression(pattern: #"^(every\s+)?\d+\s*[mhd]\s*$"#)
+            if let relative,
+               relative.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil {
+                return false
+            }
+        }
+        // 5-field cron expressions with a numeric hour or minute have a
+        // wall-clock anchor.
+        let parts = schedule.split(separator: " ")
+        if parts.count == 5 {
+            let minute = String(parts[0])
+            let hour = String(parts[1])
+            return Int(minute) != nil || Int(hour) != nil
+        }
+        return false
     }
 
     private static func normalizeDisplay(_ text: String) -> String {

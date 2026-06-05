@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UIKit
 
 struct AddTodoView: View {
     let userID: UUID
@@ -105,6 +106,7 @@ struct AddTodoView: View {
 
             HStack {
                 Button {
+                    playLightHaptic()
                     dismiss()
                 } label: {
                     Image(systemName: "xmark")
@@ -206,6 +208,7 @@ struct AddTodoView: View {
 
     private var micButton: some View {
         Button {
+            playLightHaptic()
             Task { await startRecording() }
         } label: {
             Image(systemName: "mic.fill")
@@ -267,6 +270,7 @@ struct AddTodoView: View {
     private var recordingPill: some View {
         HStack(spacing: 12) {
             Button {
+                playLightHaptic()
                 cancelRecording()
             } label: {
                 Image(systemName: "xmark")
@@ -283,6 +287,7 @@ struct AddTodoView: View {
                 .frame(height: 36)
 
             Button {
+                playLightHaptic()
                 Task { await acceptRecording() }
             } label: {
                 Image(systemName: "checkmark")
@@ -332,6 +337,10 @@ struct AddTodoView: View {
         guard canCreate else { return }
         saving = true
         Task { await save() }
+    }
+
+    private func playLightHaptic() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private func save() async {

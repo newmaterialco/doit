@@ -814,6 +814,45 @@ class DB:
             )
             return None
 
+    def upload_todo_image(
+        self,
+        *,
+        user_id: str,
+        todo_id: str,
+        filename: str,
+        data: bytes,
+        mime_type: str,
+    ) -> str | None:
+        """Upload an agent-produced image to the private ``todo-images`` bucket.
+
+        Same per-user folder layout as ``upload_todo_audio`` so the same
+        RLS shape applies: ``<user_id>/<todo_id>/<filename>``. Returns
+        the relative storage path on success or ``None`` on failure.
+        """
+        if not data:
+            log.warning(
+                "upload_todo_image(user=%s, todo=%s) skipped: empty data",
+                user_id, todo_id,
+            )
+            return None
+        storage_path = f"{user_id}/{todo_id}/{filename}"
+        try:
+            self._client.storage.from_("todo-images").upload(
+                path=storage_path,
+                file=data,
+                file_options={
+                    "content-type": mime_type,
+                    "upsert": "false",
+                },
+            )
+            return storage_path
+        except Exception as e:
+            log.error(
+                "upload_todo_image(user=%s, todo=%s) failed: %s",
+                user_id, todo_id, e,
+            )
+            return None
+
     def upsert_artifact(
         self,
         *,

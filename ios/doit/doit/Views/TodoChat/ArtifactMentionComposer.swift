@@ -84,6 +84,14 @@ extension ArtifactReference {
             )
         case .audio:
             return nil
+        case .image:
+            guard let ref = artifact.image else { return nil }
+            self = ArtifactReference(
+                id: artifact.id,
+                title: artifact.title ?? ref.prompt ?? "Image",
+                providerSlug: ref.provider,
+                url: ref.sourceURL
+            )
         }
     }
 }

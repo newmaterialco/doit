@@ -55,6 +55,7 @@ CONNECTION_SLUGS: frozenset[str] = frozenset(
         "reddit",
         "hunter",
         "linkedin",
+        "figma",
     }
 )
 
@@ -123,6 +124,10 @@ PREP_INSTRUCTIONS = (
     "  * \"Send an email to John\" → kind=task (no schedule fields)\n"
     "  If the input mentions daily/hourly/weekly/every/each/recurring, "
     "kind MUST be cron — never kind=task for those.\n"
+    "- Wall-clock cron times (e.g. \"0 9 * * *\") are evaluated in the "
+    "user's local timezone — the runner pins each new cron job to the "
+    "timezone the user is in when they create it. Treat \"9am\" as 9am "
+    "local; do NOT convert to UTC.\n"
     "- Use \"tasks\" ONLY when the user's single input clearly contains "
     "multiple independent todos that should each get their own card. "
     "The first task stays on the original row; extras become separate "

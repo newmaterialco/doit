@@ -65,7 +65,7 @@ from composio import Composio
 # runner/runner/prepare.py CONNECTION_SLUGS.
 TOOLKITS = [
     "gmail", "googlecalendar", "googledrive", "googledocs", "googlesheets",
-    "slack", "notion", "linear", "github", "reddit", "hunter", "linkedin",
+    "slack", "notion", "linear", "github", "reddit", "hunter", "linkedin", "figma",
 ]
 
 session = Composio().create(

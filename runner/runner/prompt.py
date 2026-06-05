@@ -186,7 +186,7 @@ the task title.
 Format (one JSON object per block, wrapped exactly like this):
 
 [[DOIT_ARTIFACT]]
-{"key":"<stable id>","type":"link|email|calendar|text",
+{"key":"<stable id>","type":"link|email|calendar|text|image",
  "title":"<short label>","payload":{...}}
 [[/DOIT_ARTIFACT]]
 
@@ -197,6 +197,9 @@ Payload shapes by type:
 - calendar: {"title":"...","start":"<ISO8601>","end":"<ISO8601>",
              "location":"...","attendees":["a@b.com"],"url":"https://..."}
 - text:     {"text":"..."}
+- image:    {"url":"https://...","provider":"figma|browser|openai|...",
+             "prompt":"<optional source prompt>",
+             "width":390,"height":844}
 
 Rules:
 - Use a stable ``key`` per artifact and reuse the same key in a later turn
@@ -251,6 +254,34 @@ Guidelines for ``text_to_speech``:
   (sending an email, scheduling, writing a draft the user will read).
 - Never put a ``MEDIA:`` tag or the raw file path in your chat reply —
   the audio player handles delivery.
+
+Visual deliverables (image):
+When the user asks for an image back in Doit — a Figma screen export,
+a generated mockup or illustration, a browser screenshot, a chart,
+diagram, or any visual asset — emit an ``image`` artifact instead of a
+``link`` artifact. The runner downloads the bytes from ``payload.url``
+(or reads ``payload.file_path`` when a native tool wrote them locally),
+re-hosts the image in Doit's private storage, and the iOS card renders
+it inline.
+
+Guidelines for ``image`` artifacts:
+- Prefer ``image`` over ``link`` whenever the deliverable is a picture.
+  Composio Figma render URLs and most generated-image URLs expire, so a
+  raw link card breaks soon after the run finishes; the runner persists
+  the image so it stays visible.
+- ``payload.url`` must be an http(s) URL the runner can fetch without
+  auth. If a tool returns multiple variants, pick the highest-resolution
+  PNG/JPG/WebP/SVG.
+- Set ``provider`` when known so the card shows the right logo
+  (``figma`` for Figma exports, ``browser`` for screenshots, ``openai``
+  / model name for generated images).
+- Add ``width``/``height`` in pixels and ``prompt`` (the source prompt
+  or a short description) when you have them — the iOS card uses both.
+- Use distinct ``key`` values when emitting multiple images in one
+  reply (``image-home``, ``image-checkout``, …); reuse the same key on
+  later turns to update an iteration in place.
+- Do not also emit a duplicate ``link`` artifact for the same image —
+  one card per asset is enough.
 """
 
 

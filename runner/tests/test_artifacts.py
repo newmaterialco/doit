@@ -79,6 +79,25 @@ class ParseArtifactsTests(unittest.TestCase):
         text = wrap('{"key":"weird","type":"video","payload":{"url":"x"}}')
         self.assertEqual(parse_artifacts(text), [])
 
+    def test_image_artifact_is_recognized(self) -> None:
+        # Images go through a dedicated runner persistence path; the
+        # parser just needs to round-trip the block intact so that
+        # downstream code can decide what to do with the URL/file_path.
+        text = wrap(
+            '{"key":"image-home","type":"image","title":"Home screen",'
+            '"payload":{"url":"https://figma-alpha-api.s3.amazonaws.com/img/abc.png",'
+            '"provider":"figma","width":390,"height":844,'
+            '"prompt":"Mobile home screen"}}'
+        )
+        result = parse_artifacts(text)
+        self.assertEqual(len(result), 1)
+        artifact = result[0]
+        self.assertEqual(artifact.kind, "image")
+        self.assertEqual(artifact.key, "image-home")
+        self.assertEqual(artifact.payload["provider"], "figma")
+        self.assertEqual(artifact.payload["width"], 390)
+        self.assertIn("figma-alpha-api", artifact.payload["url"])
+
     def test_malformed_json_is_skipped(self) -> None:
         # First block is unparseable; the second is fine. The good one
         # should still come through.

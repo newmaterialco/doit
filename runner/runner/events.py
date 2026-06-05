@@ -35,7 +35,7 @@ ACTIVITY_CLOSE = "[[/DOIT_ACTIVITY]]"
 
 # Kinds we know how to render on iOS. Anything else is dropped on the floor
 # rather than persisted with an unknown kind, since the UI has no fallback.
-_ARTIFACT_KINDS = {"link", "email", "calendar", "text", "audio"}
+_ARTIFACT_KINDS = {"link", "email", "calendar", "text", "audio", "image"}
 
 # Name of the Hermes built-in tool we promote to an audio artifact. The
 # runner watches for `function_call` items with this name, captures the

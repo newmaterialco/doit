@@ -30,7 +30,8 @@ enum TodosAPI {
             title: initialTitle,
             detail: (detail?.isEmpty ?? true) ? nil : detail,
             status: .preparing,
-            original_title: originalTitle
+            original_title: originalTitle,
+            client_timezone: TimeZone.current.identifier
         )
         let result: [Todo] = try await Supa.client
             .from("todos")
