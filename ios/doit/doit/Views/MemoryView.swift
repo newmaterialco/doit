@@ -58,6 +58,8 @@ struct MemoryView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.white)
         .navigationTitle("Memory")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

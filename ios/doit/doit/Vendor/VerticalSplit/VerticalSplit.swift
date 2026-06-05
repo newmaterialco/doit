@@ -168,14 +168,23 @@ public struct VerticalSplit<
                 }
             }
             .onEnded { value in
-                if value.translation.height < 2 {
+                if value.translation.height < 2, hideTop || hideBottom {
+                    let targetSplit: SplitDetent = .fraction(0.5)
+                    let targetPartition = getSnappedPartition(for: notches / 2)
+
                     withTransaction(transaction) {
-                        if hideTop {
-                            hideTop = false
-                        } else {
-                            hideBottom = false
-                        }
+                        hideTop = false
+                        hideBottom = false
+                        partition = targetPartition
+                        topHeight = cardHeight + targetPartition
+                        overscroll = 0
+                        translationBeforeOverscroll = 0
                     }
+                    initialPartition = nil
+                    initialMinimal = false
+                    initialTop = false
+                    detent = targetSplit
+                    return
                 }
                 let translation = (initialPartition ?? 0) + value.translation.height
                 let minimalAdjustment = (initialMinimal ? (initialTop ? 8 - lil : lil - 8 - bottomExtraOffset) : 0)

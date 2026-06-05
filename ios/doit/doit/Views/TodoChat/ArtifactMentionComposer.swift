@@ -178,6 +178,22 @@ struct MentionDraft: Equatable {
         return MentionDraft(tokens: Self.normalized(appended))
     }
 
+    func appendingPlainText(_ text: String) -> MentionDraft {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return self }
+
+        var updated = tokens
+        if case .text(let last) = updated.last,
+           !last.isEmpty,
+           !last.hasSuffix(" "),
+           !last.hasSuffix("\n"),
+           !last.hasSuffix("\t") {
+            updated.append(.text(" "))
+        }
+        updated.append(.text(trimmed))
+        return MentionDraft(tokens: Self.normalized(updated))
+    }
+
     private static func normalized(_ tokens: [Token]) -> [Token] {
         tokens.reduce(into: [Token]()) { result, token in
             switch (result.last, token) {
@@ -394,7 +410,6 @@ struct MentionTextView: UIViewRepresentable {
     @Binding var mentionQuery: String?
     let placeholder: String
     let isEnabled: Bool
-    let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -412,8 +427,8 @@ struct MentionTextView: UIViewRepresentable {
         tv.textContainerInset = UIEdgeInsets(top: 9, left: 12, bottom: 9, right: 12)
         tv.textContainer.lineFragmentPadding = 0
         tv.tintColor = UIColor.tintColor
-        tv.returnKeyType = .send
-        tv.enablesReturnKeyAutomatically = true
+        tv.returnKeyType = .default
+        tv.enablesReturnKeyAutomatically = false
         tv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         tv.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return tv
@@ -620,10 +635,6 @@ struct MentionTextView: UIViewRepresentable {
             shouldChangeTextIn range: NSRange,
             replacementText text: String
         ) -> Bool {
-            if text == "\n" {
-                parent.onSubmit()
-                return false
-            }
             return true
         }
 

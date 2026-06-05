@@ -94,6 +94,8 @@ struct ModelSettingsView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.white)
         .navigationTitle("Model")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }

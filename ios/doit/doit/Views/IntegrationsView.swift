@@ -242,7 +242,8 @@ private struct ToolkitRow: View {
             ToolkitLogo(assetName: toolkit.slug)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(toolkit.name).font(.headline)
+                    Text(toolkit.name)
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
                     if !toolkit.isConnectable {
                         Text("Available")
                             .font(.caption2.weight(.semibold))
@@ -250,17 +251,10 @@ private struct ToolkitRow: View {
                             .padding(.vertical, 2)
                             .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 4))
                             .foregroundStyle(Color(.systemGray))
-                    } else if toolkit.connected {
-                        Text("Connected")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 4))
-                            .foregroundStyle(Color.green)
                     }
                 }
                 Text(toolkit.description)
-                    .font(.footnote)
+                    .font(.system(size: 13, weight: .regular, design: .rounded))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -288,7 +282,7 @@ private struct ToolkitRow: View {
                     }
             }
         }
-        .padding(.vertical, 26)
+        .padding(.vertical, 18)
     }
 }
 

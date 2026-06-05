@@ -31,35 +31,38 @@ struct TodoListView: View {
                 Color(red: 0.98, green: 0.98, blue: 0.98)
                     .ignoresSafeArea()
 
-                GeometryReader { proxy in
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: 0) {
-                            sectionPage(.todo)
-                                .frame(width: proxy.size.width, height: proxy.size.height)
-                                .id(TodoListSection.todo.index)
-                            sectionPage(.scheduled)
-                                .frame(width: proxy.size.width, height: proxy.size.height)
-                                .id(TodoListSection.scheduled.index)
-                            sectionPage(.done)
-                                .frame(width: proxy.size.width, height: proxy.size.height)
-                                .id(TodoListSection.done.index)
+                Group {
+                    GeometryReader { proxy in
+                        ScrollView(.horizontal) {
+                            LazyHStack(spacing: 0) {
+                                sectionPage(.todo)
+                                    .frame(width: proxy.size.width, height: proxy.size.height)
+                                    .id(TodoListSection.todo.index)
+                                sectionPage(.scheduled)
+                                    .frame(width: proxy.size.width, height: proxy.size.height)
+                                    .id(TodoListSection.scheduled.index)
+                                sectionPage(.done)
+                                    .frame(width: proxy.size.width, height: proxy.size.height)
+                                    .id(TodoListSection.done.index)
+                            }
+                            .scrollTargetLayout()
                         }
-                        .scrollTargetLayout()
+                        .scrollTargetBehavior(.paging)
+                        .scrollIndicators(.hidden)
+                        .scrollPosition(id: $selectedSectionID)
+                        .ignoresSafeArea(.container, edges: [.top, .bottom])
                     }
-                    .scrollTargetBehavior(.paging)
-                    .scrollIndicators(.hidden)
-                    .scrollPosition(id: $selectedSectionID)
                     .ignoresSafeArea(.container, edges: [.top, .bottom])
-                }
-                .ignoresSafeArea(.container, edges: [.top, .bottom])
 
-                VStack {
-                    topControls
-                    Spacer()
-                    bottomControls
+                    VStack {
+                        topControls
+                        Spacer()
+                        bottomControls
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .id("todo-list-navigation-v2")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: TodoListDestination.self) { destination in
                 switch destination {
@@ -147,17 +150,15 @@ struct TodoListView: View {
             .ignoresSafeArea(.container, edges: .top)
 
             HStack {
-                Image("doit_Logo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(height: 24)
-                    .accessibilityLabel("doit")
+                SlidingSectionTitle(selectedSection: selectedSection)
 
                 Spacer()
 
                 Button {
-                    playLightHaptic()
-                    showSettings = true
+                    playFirmHaptic()
+                    withAnimation(settingsPresentationAnimation) {
+                        showSettings = true
+                    }
                 } label: {
                     ProfileAvatar(
                         kind: .user(
@@ -174,6 +175,11 @@ struct TodoListView: View {
             .padding(.horizontal, 20)
             .padding(.top, 10)
         }
+    }
+
+    private var selectedSection: TodoListSection {
+        TodoListSection.allCases.first { $0.index == selectedSectionID }
+            ?? .todo
     }
 
     @ViewBuilder
@@ -230,7 +236,10 @@ struct TodoListView: View {
             activity: activity,
             isResponding: store.respondingInteractionID != nil
                 && store.respondingInteractionID == interaction?.id,
-            onOpen: { navigationPath.append(TodoListDestination.todo(todo.id)) },
+            onOpen: {
+                playLightHaptic()
+                navigationPath.append(TodoListDestination.todo(todo.id))
+            },
             onDoIt: { Task { await store.request(todo) } },
             onCancel: { Task { await store.cancel(todo) } },
             onToggleComplete: { Task { await store.toggleComplete(todo) } },
@@ -280,8 +289,14 @@ struct TodoListView: View {
                         ForEach(store.cronJobs) { job in
                             CronJobCard(
                                 job: job,
-                                onOpen: { navigationPath.append(TodoListDestination.cronJob(job.id)) },
-                                onTogglePause: { Task { await store.toggleCronPause(job) } },
+                                onOpen: {
+                                    playLightHaptic()
+                                    navigationPath.append(TodoListDestination.cronJob(job.id))
+                                },
+                                onTogglePause: {
+                                    playLightHaptic()
+                                    Task { await store.toggleCronPause(job) }
+                                },
                                 onDelete: { Task { await store.deleteCronJob(job.id) } }
                             )
                             .id(cronJobRefreshID(for: job))
@@ -405,6 +420,20 @@ struct TodoListView: View {
 
     private func playLightHaptic() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    private func playFirmHaptic() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
+    }
+
+    private var settingsPresentationAnimation: Animation {
+        .spring(response: 0.36, dampingFraction: 0.78)
+    }
+
+    private func dismissSettings() {
+        withAnimation(settingsPresentationAnimation) {
+            showSettings = false
+        }
     }
 
     private func playSectionHaptic() {
@@ -609,6 +638,29 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+private struct SlidingSectionTitle: View {
+    let selectedSection: TodoListSection
+
+    private let titleWidth: CGFloat = 150
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(TodoListSection.allCases) { section in
+                Text(section.title)
+                    .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: titleWidth, alignment: .leading)
+            }
+        }
+        .offset(x: -CGFloat(selectedSection.index) * titleWidth)
+        .frame(width: titleWidth, alignment: .leading)
+        .clipped()
+        .animation(.easeInOut(duration: 0.18), value: selectedSection)
+        .accessibilityLabel(selectedSection.title)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
 private struct CronJobCard: View {
     let job: CronJob
     let onOpen: () -> Void
@@ -618,7 +670,11 @@ private struct CronJobCard: View {
     private static let scheduleSymbol =
         "clock.arrow.trianglehead.counterclockwise.rotate.90"
     private static let cornerRadius: CGFloat = 18
-    private static let footerBackground = Color(white: 0.975)
+    private static let footerBackground = Color(
+        red: 0xF6 / 255,
+        green: 0xF7 / 255,
+        blue: 0xF9 / 255
+    )
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -629,32 +685,28 @@ private struct CronJobCard: View {
                         .foregroundStyle(TodoCardStyle.muted)
                         .frame(width: 20, height: 20)
                     HStack(spacing: 8) {
-                        Text("Scheduled")
+                        Text(job.scheduleLabel)
                             .font(.system(size: 16, weight: .medium, design: .rounded))
                             .foregroundStyle(TodoCardStyle.muted)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         Spacer(minLength: 8)
                         topRowTrailing
-                            .frame(width: 20, height: 20)
+                            .frame(
+                                width: TodoCardStyle.connectionLogoChipSize,
+                                height: TodoCardStyle.connectionLogoChipSize
+                            )
                     }
                 }
 
                 Button(action: onOpen) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(job.name)
-                            .font(.system(size: 20, weight: .regular, design: .rounded))
-                            .foregroundStyle(Color.black)
-                            .lineLimit(3)
-                            .multilineTextAlignment(.leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Text(job.schedulePillText)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color(white: 0.35))
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 12)
-                            .background(Capsule().fill(Color(white: 0.92)))
-                    }
-                    .contentShape(Rectangle())
+                    Text(job.name)
+                        .font(.system(size: 20, weight: .regular, design: .rounded))
+                        .foregroundStyle(Color.black)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -717,7 +769,7 @@ private struct CronJobCard: View {
                 .controlSize(.small)
                 .tint(TodoCardStyle.muted)
         } else if let slug = job.connection_slug, !slug.isEmpty {
-            ConnectionLogo(slug: slug)
+            ConnectionLogosRow(slugs: [slug], chipSize: TodoCardStyle.connectionLogoChipSize)
         } else {
             Image(systemName: Self.scheduleSymbol)
                 .font(.system(size: 14, weight: .regular))
@@ -802,21 +854,15 @@ private struct TodoCard: View {
     }
 
     private var topRowTrailing: some View {
-        HStack(spacing: 5) {
-            if !connectionSlugs.isEmpty {
-                ConnectionLogosRow(slugs: connectionSlugs, iconSize: 16, spacing: 2)
+        Group {
+            if connectionSlugs.isEmpty {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.black.opacity(0.28))
+                    .frame(width: 20, height: 20)
+            } else {
+                ConnectionLogosRow(slugs: connectionSlugs, chipSize: TodoCardStyle.connectionLogoChipSize)
             }
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.black.opacity(0.28))
-                .frame(width: 11, height: 11)
-        }
-        .padding(.vertical, 7)
-        .padding(.horizontal, connectionSlugs.isEmpty ? 5 : 7)
-        .background(Capsule().fill(Color.black.opacity(0.025)))
-        .overlay {
-            Capsule().stroke(Color.black.opacity(0.08), lineWidth: 1)
         }
     }
 
@@ -945,6 +991,7 @@ private enum TodoCardStyle {
     static let cardPadding: CGFloat = 20
     /// Vertical gap between the three rows; keep equal so the card feels balanced.
     static let rowSpacing: CGFloat = 14
+    static let connectionLogoChipSize: CGFloat = 28
 }
 
 /// Tap-to-complete circle on the top-left of every card. Mirrors the
@@ -1034,20 +1081,48 @@ struct PillButton: View {
 /// Stacked Composio toolkit logos (e.g. Sheets + Gmail on one task).
 struct ConnectionLogosRow: View {
     let slugs: [String]
-    var iconSize: CGFloat = 18
-    var spacing: CGFloat = 6
+    private let chipSize: CGFloat
+
+    init(slugs: [String], chipSize: CGFloat = 24) {
+        self.slugs = slugs
+        self.chipSize = chipSize
+    }
+
+    init(slugs: [String], iconSize: CGFloat, spacing _: CGFloat) {
+        self.slugs = slugs
+        self.chipSize = iconSize + 8
+    }
+
+    private var overlap: CGFloat {
+        chipSize * 0.25
+    }
 
     var body: some View {
         if !slugs.isEmpty {
-            HStack(spacing: spacing) {
+            HStack(spacing: -overlap) {
                 ForEach(slugs, id: \.self) { slug in
-                    ConnectionLogo(slug: slug)
-                        .frame(width: iconSize, height: iconSize)
-                        .accessibilityLabel("Connection: \(slug)")
+                    ConnectionLogoChip(slug: slug, size: chipSize)
                 }
             }
             .animation(.smooth(duration: 0.25), value: slugs)
         }
+    }
+}
+
+private struct ConnectionLogoChip: View {
+    let slug: String
+    let size: CGFloat
+
+    var body: some View {
+        ConnectionLogo(slug: slug)
+            .frame(width: size * 0.56, height: size * 0.56)
+            .frame(width: size, height: size)
+            .background(Color.white, in: Circle())
+            .overlay {
+                Circle()
+                    .strokeBorder(Color.black.opacity(0.10), lineWidth: 1)
+            }
+            .accessibilityLabel("Connection: \(slug)")
     }
 }
 

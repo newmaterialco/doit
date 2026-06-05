@@ -112,9 +112,9 @@ struct TodoChatThread: View {
     @State private var keyboardLift: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .bottom) {
             messageList
-            Divider().opacity(0.5)
+                .zIndex(0)
             ChatComposer(
                 photoSelections: $photoSelections,
                 canAddMoreAttachments: canAddMoreAttachments,
@@ -127,6 +127,19 @@ struct TodoChatThread: View {
                 onSend: onSend,
                 onFocusChange: onFocusChange
             )
+            .background(alignment: .bottom) {
+                LinearGradient(
+                    stops: [
+                        .init(color: .white.opacity(0), location: 0),
+                        .init(color: .white.opacity(0.5), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea(edges: .bottom)
+                .allowsHitTesting(false)
+            }
+            .zIndex(2)
         }
         .padding(.bottom, keyboardLift)
         .animation(.smooth(duration: 0.25), value: keyboardLift)
@@ -174,7 +187,7 @@ struct TodoChatThread: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
-                .padding(.bottom, 20)
+                .padding(.bottom, 76)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             // iMessage-style drag-to-dismiss. `.interactively` follows
@@ -246,9 +259,7 @@ private struct UserTextBubble: View {
     var body: some View {
         HStack {
             Spacer(minLength: 40)
-            Text(text)
-                .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
-                .foregroundStyle(Color.primary)
+            MarkdownMessageText(text: text)
                 .multilineTextAlignment(.leading)
                 .padding(.vertical, 14)
                 .padding(.horizontal, 18)
@@ -258,6 +269,49 @@ private struct UserTextBubble: View {
                 )
                 .textSelection(.enabled)
         }
+    }
+}
+
+private struct MarkdownMessageText: View {
+    let text: String
+    var foregroundColor: Color = .primary
+
+    var body: some View {
+        Text(attributedText)
+            .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
+            .foregroundStyle(foregroundColor)
+            .tint(.accentColor)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var attributedText: AttributedString {
+        let parsed = (try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(text)
+        return parsed.withLinkedPlainURLs(in: text)
+    }
+}
+
+private extension AttributedString {
+    func withLinkedPlainURLs(in source: String) -> AttributedString {
+        var attributed = self
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return attributed
+        }
+        let nsRange = NSRange(source.startIndex..<source.endIndex, in: source)
+        detector.enumerateMatches(in: source, options: [], range: nsRange) { match, _, _ in
+            guard let match,
+                  let url = match.url,
+                  let stringRange = Range(match.range, in: source),
+                  let lower = AttributedString.Index(stringRange.lowerBound, within: attributed),
+                  let upper = AttributedString.Index(stringRange.upperBound, within: attributed) else {
+                return
+            }
+            attributed[lower..<upper].link = url
+        }
+        return attributed
     }
 }
 
@@ -368,11 +422,7 @@ private struct AgentStepMessage: View {
                     .foregroundStyle(.secondary)
             }
             if !bodyText.isEmpty {
-                Text(bodyText)
-                    .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                MarkdownMessageText(text: bodyText)
             }
             if let url = oauthURL {
                 Button {
@@ -421,11 +471,7 @@ private struct AgentInteractionMessage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(interaction.prompt)
-                .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
-                .foregroundStyle(Color.primary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            MarkdownMessageText(text: interaction.prompt)
 
             if let draft = interaction.emailDraft {
                 EmailDraftPreview(draft: draft)
@@ -475,10 +521,7 @@ private struct AgentReadyToRunMessage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(summary ?? "Ready when you are.")
-                .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
-                .foregroundStyle(Color.primary)
-                .fixedSize(horizontal: false, vertical: true)
+            MarkdownMessageText(text: summary ?? "Ready when you are.")
 
             Button {
                 guard !submitting else { return }
@@ -642,11 +685,7 @@ private struct AgentErrorMessage: View {
     let text: String
 
     var body: some View {
-        Text(text)
-            .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
-            .foregroundStyle(.red)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+        MarkdownMessageText(text: text, foregroundColor: .red)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -656,7 +695,7 @@ private struct AgentErrorMessage: View {
 /// Live chat composer. Text + send fire `onSend` with the trimmed,
 /// markdown-serialized draft; the field and send button auto-disable
 /// while the agent is mid-turn so the user can't pile messages on top
-/// of an in-flight Hermes run. The paperclip menu remains available
+/// of an in-flight Hermes run. The attach menu remains available
 /// for attachments regardless of agent state — uploads always work
 /// because they don't bother the agent.
 ///
@@ -690,13 +729,21 @@ private struct ChatComposer: View {
     @State private var showPhotosPicker = false
     @State private var isFocused: Bool = false
     @State private var mentionQuery: String?
+    @State private var voice = VoiceRecorder()
+    @State private var isTranscribing = false
+    @State private var voiceError: String?
 
     private var canSend: Bool {
-        !isAgentRunning && draft.hasContent
+        !isAgentRunning && !isTranscribing && !voice.isRecording && draft.hasContent
+    }
+
+    private var canRecord: Bool {
+        !isAgentRunning && !isTranscribing && !voice.isRecording
     }
 
     private var placeholder: String {
         if isAgentRunning { return "Hermes is working…" }
+        if isTranscribing { return "Transcribing…" }
         if let hint = replyHint, !hint.isEmpty { return hint }
         return "Message Doit"
     }
@@ -714,6 +761,18 @@ private struct ChatComposer: View {
         }
     }
 
+    private var horizontalPadding: CGFloat {
+        isExpanded ? 12 : 28
+    }
+
+    private var bottomPadding: CGFloat {
+        isExpanded ? 12 : -4
+    }
+
+    private var isExpanded: Bool {
+        isFocused || voice.isRecording || isTranscribing
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             if pickerActive, let query = mentionQuery {
@@ -726,46 +785,29 @@ private struct ChatComposer: View {
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                attachMenu
-                    .disabled(!canAddMoreAttachments)
-                    .opacity(canAddMoreAttachments ? 1 : 0.4)
+            if let voiceError {
+                Text(voiceError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+            }
 
-                MentionTextView(
-                    draft: $draft,
-                    pendingInsertion: $pendingInsertion,
-                    isFocused: $isFocused,
-                    mentionQuery: $mentionQuery,
-                    placeholder: placeholder,
-                    isEnabled: !isAgentRunning,
-                    onSubmit: submit
-                )
-                .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
-                )
-
-                Button(action: submit) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            (canSend ? Color.accentColor : Color.primary.opacity(0.4)),
-                            in: Circle()
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .accessibilityLabel("Send")
+            if voice.isRecording {
+                recordingPill
+            } else if isTranscribing {
+                transcribingPill
+            } else {
+                inputBar
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, horizontalPadding)
         .padding(.top, 10)
-        .padding(.bottom, 12)
+        .padding(.bottom, bottomPadding)
         .animation(.smooth(duration: 0.2), value: canSend)
         .animation(.smooth(duration: 0.2), value: isAgentRunning)
         .animation(.smooth(duration: 0.2), value: pickerActive)
+        .animation(.smooth(duration: 0.24), value: isExpanded)
         .onChange(of: isFocused) { _, focused in
             onFocusChange(focused)
         }
@@ -784,6 +826,121 @@ private struct ChatComposer: View {
             matching: .images,
             photoLibrary: .shared()
         )
+        .onDisappear {
+            voice.cancel()
+        }
+    }
+
+    private var inputBar: some View {
+        Group {
+            HStack(alignment: .bottom, spacing: 8) {
+                attachMenu
+                    .disabled(!canAddMoreAttachments)
+                    .opacity(canAddMoreAttachments ? 1 : 0.4)
+
+                MentionTextView(
+                    draft: $draft,
+                    pendingInsertion: $pendingInsertion,
+                    isFocused: $isFocused,
+                    mentionQuery: $mentionQuery,
+                    placeholder: placeholder,
+                    isEnabled: !isAgentRunning
+                )
+
+                trailingActionButton
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var trailingActionButton: some View {
+        if canSend {
+            Button(action: submit) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 40, height: 40)
+                    .background(Color.accentColor, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Send")
+        } else {
+            Button {
+                Task { await startRecording() }
+            } label: {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
+                    .background(canRecord ? Color.black : Color.primary.opacity(0.4), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canRecord)
+            .accessibilityLabel("Record voice message")
+        }
+    }
+
+    private var recordingPill: some View {
+        HStack(spacing: 12) {
+            Button {
+                cancelRecording()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.gray)
+                    .frame(width: 40, height: 40)
+                    .background(Color.gray.opacity(0.18), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Cancel recording")
+
+            WaveformView(levels: voice.levels)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+
+            Button {
+                Task { await acceptRecording() }
+            } label: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(.black)
+                    .frame(width: 40, height: 40)
+                    .background(Color.gray.opacity(0.30), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Use recording")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(Color.gray.opacity(0.10), in: Capsule())
+        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+    }
+
+    private var transcribingPill: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(.primary)
+                .frame(width: 40, height: 40)
+            Text("Transcribing…")
+                .font(.system(.title3, design: .rounded).weight(.medium))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(Color.gray.opacity(0.10), in: Capsule())
+        .transition(.opacity)
     }
 
     private func insertReference(_ ref: ArtifactReference) {
@@ -801,6 +958,44 @@ private struct ChatComposer: View {
         isFocused = false
     }
 
+    private func startRecording() async {
+        voiceError = nil
+        mentionQuery = nil
+        isFocused = false
+        do {
+            try await voice.start()
+        } catch {
+            voiceError = error.localizedDescription
+        }
+    }
+
+    private func cancelRecording() {
+        voice.cancel()
+        isFocused = true
+    }
+
+    private func acceptRecording() async {
+        guard let url = voice.stop() else {
+            isFocused = true
+            return
+        }
+        isTranscribing = true
+        defer {
+            isTranscribing = false
+            try? FileManager.default.removeItem(at: url)
+        }
+        do {
+            let text = try await TranscriptionAPI.transcribe(fileURL: url)
+            draft = draft.appendingPlainText(text)
+            mentionQuery = nil
+            voiceError = nil
+            isFocused = true
+        } catch {
+            voiceError = error.localizedDescription
+            isFocused = true
+        }
+    }
+
     private var attachMenu: some View {
         Menu {
             Button {
@@ -814,10 +1009,10 @@ private struct ChatComposer: View {
                 Label("Choose from library", systemImage: "photo.on.rectangle")
             }
         } label: {
-            Image(systemName: "paperclip")
+            Image(systemName: "plus")
                 .font(.system(size: 18, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.primary)
-                .frame(width: 36, height: 36)
+                .frame(width: 40, height: 40)
                 .background(Color.primary.opacity(0.06), in: Circle())
         }
         .accessibilityLabel("Attach photo")

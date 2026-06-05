@@ -40,7 +40,10 @@ struct CronJobDetailView: View {
                         CronJobHeaderView(
                             job: current,
                             agentStatus: openInteractionStatus,
-                            onBack: { dismiss() },
+                            onBack: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                dismiss()
+                            },
                             onDelete: deleteJob
                         )
                     } else {

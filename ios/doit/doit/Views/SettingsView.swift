@@ -7,106 +7,154 @@ struct SettingsView: View {
     @Environment(AuthModel.self) private var auth
     @Environment(TodoStore.self) private var store
     @State private var selectedModelName: String?
+    @State private var activeRoute: SettingsRoute?
+    @State private var displayedRoute: SettingsRoute?
+
+    var onDismiss: (() -> Void)? = nil
 
     var body: some View {
         NavigationStack {
             GeometryReader { proxy in
-                ZStack(alignment: .top) {
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            VStack(spacing: 0) {
-                                NavigationLink {
-                                    UserProfileView()
-                                } label: {
-                                    PersonRow(
-                                        avatar: .user(
-                                            initials: auth.initials,
-                                            imageData: auth.avatarImageData,
-                                            url: auth.avatarURL
-                                        ),
-                                        title: auth.displayName,
-                                        subtitle: joinedSubtitle
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                SettingsDivider(leadingPadding: 90)
+                ZStack(alignment: .topLeading) {
+                    settingsRoot(minHeight: proxy.size.height - 96)
+                        .offset(x: activeRoute == nil ? 0 : -proxy.size.width)
 
-                                NavigationLink {
-                                    AgentProfileView(lastRunText: agentLastRunSubtitle)
-                                } label: {
-                                    PersonRow(
-                                        avatar: .agent,
-                                        title: "doit",
-                                        subtitle: agentLastRunSubtitle
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            SectionLabel("Settings")
-                                .padding(.top, 30)
-
-                            SettingsGroup {
-                                NavigationLink {
-                                    ModelSettingsView()
-                                } label: {
-                                    SettingsRow(
-                                        icon: "square.3.layers.3d.middle.filled",
-                                        title: "Model",
-                                        value: selectedModelName
-                                    )
-                                }
-                                SettingsDivider(leadingPadding: 76)
-
-                                NavigationLink {
-                                    IntegrationsView()
-                                } label: {
-                                    SettingsRow(
-                                        icon: "arrow.left.arrow.right",
-                                        title: "Connections"
-                                    )
-                                }
-                                SettingsDivider(leadingPadding: 76)
-
-                                NavigationLink {
-                                    MemoryView()
-                                } label: {
-                                    SettingsRow(
-                                        icon: "book.pages",
-                                        title: "Memory"
-                                    )
-                                }
-                            }
-
-                            Spacer()
-                                .frame(height: 52)
-
-                            Button {
-                                Task {
-                                    await auth.signOut()
-                                    dismiss()
-                                }
-                            } label: {
-                                SettingsRow(
-                                    icon: "rectangle.portrait.and.arrow.right",
-                                    title: "Sign out",
-                                    showsChevron: false
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .frame(minHeight: proxy.size.height - 96, alignment: .top)
-                        .padding(.top, 72)
-                        .padding(.bottom, 32)
+                    if let displayedRoute {
+                        settingsDestination(displayedRoute)
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .background(Color.white)
+                            .offset(x: activeRoute == nil ? proxy.size.width : 0)
                     }
-                    .scrollContentBackground(.hidden)
-
-                    settingsHeader
                 }
+                .clipped()
+                .animation(settingsNavigationAnimation, value: activeRoute)
             }
             .background(Color.white)
             .toolbar(.hidden, for: .navigationBar)
             .task { await loadSelectedModelName() }
+        }
+    }
+
+    private func settingsRoot(minHeight: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            ScrollView {
+                VStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            openRoute(.userProfile(
+                                displayName: auth.displayName,
+                                avatarImageData: auth.avatarImageData,
+                                avatarURL: auth.avatarURL
+                            ))
+                        } label: {
+                            PersonRow(
+                                avatar: .user(
+                                    initials: auth.initials,
+                                    imageData: auth.avatarImageData,
+                                    url: auth.avatarURL
+                                ),
+                                title: auth.displayName,
+                                subtitle: joinedSubtitle
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        SettingsDivider(leadingPadding: 90)
+
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            openRoute(.agentProfile(lastRunText: agentLastRunSubtitle))
+                        } label: {
+                            PersonRow(
+                                avatar: .agent,
+                                title: "doit",
+                                subtitle: agentLastRunSubtitle
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    SectionLabel("Settings")
+                        .padding(.top, 30)
+
+                    SettingsGroup {
+                        settingsRouteButton(.model, value: selectedModelName)
+                        SettingsDivider(leadingPadding: 66)
+                        settingsRouteButton(.connections)
+                        SettingsDivider(leadingPadding: 66)
+                        settingsRouteButton(.memory)
+                    }
+
+                    Spacer()
+                        .frame(height: 52)
+
+                    Button {
+                        Task {
+                            await auth.signOut()
+                            close()
+                        }
+                    } label: {
+                        SettingsRow(
+                            icon: "rectangle.portrait.and.arrow.right",
+                            title: "Sign out",
+                            showsChevron: false
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .frame(minHeight: minHeight, alignment: .top)
+                .padding(.top, 72)
+                .padding(.bottom, 32)
+            }
+            .scrollContentBackground(.hidden)
+
+            settingsHeader
+        }
+    }
+
+    private func settingsRouteButton(_ route: SettingsRoute, value: String? = nil) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            openRoute(route)
+        } label: {
+            SettingsRow(icon: route.icon, title: route.title, value: value)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func settingsDestination(_ route: SettingsRoute) -> some View {
+        ZStack(alignment: .top) {
+            route.content
+                .padding(.top, 60)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.white)
+                .toolbar(.hidden, for: .navigationBar)
+
+            SettingsPageHeader(title: route.title) {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                closeRoute()
+            }
+        }
+        .background(Color.white)
+    }
+
+    private func openRoute(_ route: SettingsRoute) {
+        displayedRoute = route
+        DispatchQueue.main.async {
+            withAnimation(settingsNavigationAnimation) {
+                activeRoute = route
+            }
+        }
+    }
+
+    private func closeRoute() {
+        withAnimation(settingsNavigationAnimation) {
+            activeRoute = nil
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            if activeRoute == nil {
+                displayedRoute = nil
+            }
         }
     }
 
@@ -118,7 +166,8 @@ struct SettingsView: View {
 
             HStack {
                 Button {
-                    dismiss()
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
+                    close()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
@@ -132,8 +181,8 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 12)
         }
-        .frame(height: 60)
-        .padding(.bottom, 12)
+        .frame(height: 56)
+        .padding(.bottom, 4)
         .background(Color.white)
         .zIndex(1)
     }
@@ -156,6 +205,18 @@ struct SettingsView: View {
         }
     }
 
+    private func close() {
+        if let onDismiss {
+            onDismiss()
+        } else {
+            dismiss()
+        }
+    }
+
+    private var settingsNavigationAnimation: Animation {
+        .spring(response: 0.36, dampingFraction: 0.84)
+    }
+
     private var joinedSubtitle: String {
         guard let joinedAt = auth.joinedAt else { return "Joined doit" }
         return "Joined \(joinedAt.formatted(.dateTime.month(.abbreviated).day().year()))"
@@ -175,6 +236,87 @@ struct SettingsView: View {
     }
 }
 
+private enum SettingsRoute: Hashable {
+    case userProfile(displayName: String, avatarImageData: Data?, avatarURL: URL?)
+    case agentProfile(lastRunText: String)
+    case model
+    case connections
+    case memory
+
+    var title: String {
+        switch self {
+        case .userProfile:
+            return "You"
+        case .agentProfile:
+            return "doit"
+        case .model: return "Model"
+        case .connections: return "Connections"
+        case .memory: return "Memory"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .userProfile: return "person.crop.circle"
+        case .agentProfile: return "sparkles"
+        case .model: return "square.3.layers.3d.middle.filled"
+        case .connections: return "arrow.left.arrow.right"
+        case .memory: return "book.pages"
+        }
+    }
+
+    @ViewBuilder
+    var content: some View {
+        switch self {
+        case .userProfile(let displayName, let avatarImageData, let avatarURL):
+            UserProfileView(
+                initialDisplayName: displayName,
+                initialAvatarImageData: avatarImageData,
+                initialAvatarURL: avatarURL
+            )
+        case .agentProfile(let lastRunText):
+            AgentProfileView(lastRunText: lastRunText)
+        case .model:
+            ModelSettingsView()
+        case .connections:
+            IntegrationsView()
+        case .memory:
+            MemoryView()
+        }
+    }
+}
+
+private struct SettingsPageHeader: View {
+    let title: String
+    let onBack: () -> Void
+
+    var body: some View {
+        ZStack {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(white: 0.08))
+
+            HStack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(white: 0.58))
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+        }
+        .frame(height: 56)
+        .padding(.bottom, 4)
+        .background(Color.white)
+        .zIndex(1)
+    }
+}
+
 private struct SettingsRow: View {
     let icon: String
     let title: String
@@ -182,11 +324,11 @@ private struct SettingsRow: View {
     var showsChevron = true
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 23, weight: .regular))
+                .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(Color(white: 0.58))
-                .frame(width: 40, height: 44)
+                .frame(width: 34, height: 38)
 
             Text(title)
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
@@ -207,7 +349,7 @@ private struct SettingsRow: View {
                     .foregroundStyle(Color(white: 0.72))
             }
         }
-        .frame(minHeight: 62)
+        .frame(minHeight: 54)
         .padding(.horizontal, 20)
         .contentShape(Rectangle())
     }
@@ -221,6 +363,7 @@ private struct PersonRow: View {
     var body: some View {
         HStack(spacing: 16) {
             ProfileAvatar(kind: avatar, size: 54)
+                .id("settings-row-avatar-\(title)")
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
@@ -284,6 +427,9 @@ struct ProfileAvatar: View {
             Circle()
                 .stroke(Color(white: 0.9), lineWidth: 1)
         }
+        .transaction { transaction in
+            transaction.animation = nil
+        }
     }
 
     private func initialsFallback(_ initials: String?) -> some View {
@@ -315,18 +461,29 @@ private struct UserProfileView: View {
     @State private var saving = false
     @State private var error: String?
 
+    init(
+        initialDisplayName: String? = nil,
+        initialAvatarImageData: Data? = nil,
+        initialAvatarURL: URL? = nil
+    ) {
+        _displayName = State(initialValue: initialDisplayName ?? "")
+        _avatarImageData = State(initialValue: initialAvatarImageData)
+        _originalAvatarURL = State(initialValue: initialAvatarURL)
+    }
+
     var body: some View {
         VStack(spacing: 28) {
             PhotosPicker(selection: $photoSelection, matching: .images, photoLibrary: .shared()) {
                 VStack(spacing: 10) {
                     ProfileAvatar(
                         kind: .user(
-                            initials: initials(for: displayName),
-                            imageData: avatarImageData,
-                            url: avatarImageData == nil ? originalAvatarURL : nil
+                            initials: initials(for: currentDisplayName),
+                            imageData: currentAvatarImageData,
+                            url: currentAvatarImageData == nil ? currentAvatarURL : nil
                         ),
                         size: 92
                     )
+                    .id("profile-editor-avatar")
                     Text("Change Photo")
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color(white: 0.36))
@@ -369,14 +526,32 @@ private struct UserProfileView: View {
             }
         }
         .onAppear {
-            displayName = auth.displayName
-            avatarImageData = auth.avatarImageData
-            originalAvatarURL = auth.avatarURL
+            if displayName.isEmpty {
+                displayName = auth.displayName
+            }
+            if avatarImageData == nil {
+                avatarImageData = auth.avatarImageData
+            }
+            if originalAvatarURL == nil {
+                originalAvatarURL = auth.avatarURL
+            }
         }
         .onChange(of: photoSelection) { _, newValue in
             guard let newValue else { return }
             Task { await loadPhoto(newValue) }
         }
+    }
+
+    private var currentDisplayName: String {
+        displayName.isEmpty ? auth.displayName : displayName
+    }
+
+    private var currentAvatarImageData: Data? {
+        avatarImageData ?? auth.avatarImageData
+    }
+
+    private var currentAvatarURL: URL? {
+        originalAvatarURL ?? auth.avatarURL
     }
 
     private func loadPhoto(_ item: PhotosPickerItem) async {
@@ -447,10 +622,10 @@ private struct SettingsGroup<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SettingsDivider(leadingPadding: 76)
+            SettingsDivider(leadingPadding: 66)
             content
                 .buttonStyle(.plain)
-            SettingsDivider(leadingPadding: 76)
+            SettingsDivider(leadingPadding: 66)
         }
     }
 }

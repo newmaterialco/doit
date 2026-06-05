@@ -31,10 +31,10 @@ struct TodoDetailView: View {
     @State private var uploading = false
     @State private var sending = false
 
-    /// Split between the task header and chat thread. The thread gets the
-    /// majority of the screen by default; the user can drag, mini, or full
-    /// either side via the split's drag pill.
-    @State private var splitDetent: SplitDetent = .fraction(0.3)
+    /// Split between the task header and chat thread. Start balanced so the
+    /// detail context and the latest chat both have useful space; the user
+    /// can drag, mini, or full either side via the split's drag pill.
+    @State private var splitDetent: SplitDetent = .fraction(0.5)
 
     /// Detent the user was sitting on when they tapped the composer. We
     /// auto-snap to `.bottomFull` while the chat field is focused so the
@@ -93,7 +93,10 @@ struct TodoDetailView: View {
                             artifacts: artifacts,
                             agentStatus: openInteractionStatus,
                             agentActivity: store.agentActivity(for: todoID),
-                            onBack: { dismiss() },
+                            onBack: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                dismiss()
+                            },
                             onDelete: deleteTask
                         )
                     } else {
