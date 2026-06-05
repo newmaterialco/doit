@@ -82,12 +82,29 @@ struct AgentActivity: Codable, Identifiable, Hashable, Sendable {
         }
     }
 
-    /// Human-readable status line for the todo card subtitle. We prefer
-    /// the title alone — it's already shaped for that surface — and fall
-    /// back to `detail` if the runner only wrote a generic "Thinking"
-    /// title without context.
-    var cardStatusText: String {
+    /// Most human-facing one-liner for what Hermes is doing right now.
+    /// The runner's `detail` can be a useful activity sentence, but it
+    /// can also be a raw tool preview/output (`set -e ...`, JSON, `*`).
+    /// Only promote it when it reads like user-facing prose; otherwise
+    /// synthesize a calmer activity label from the tool-call title.
+    var humanActivityText: String {
+        if let detail = AgentActivityCopy.readableDetail(detail) {
+            return detail
+        }
+        return AgentActivityCopy.friendlyFallback(for: title, category: resolvedCategory)
+    }
+
+    /// Compact tool-call indicator shown alongside the human-facing
+    /// detail in the Live Activity / Dynamic Island. Always the runner
+    /// `title` so the user can still see *which* tool the agent is
+    /// using even when the prominent line is the more verbose detail.
+    var toolCallText: String {
         title
+    }
+
+    /// Human-readable status line for the todo card subtitle.
+    var cardStatusText: String {
+        humanActivityText
     }
 
     /// Recent step stack the detail card and widget render as the
@@ -192,6 +209,21 @@ struct AgentActivityStep: Hashable, Sendable, Identifiable {
 
     var isCompleted: Bool { completed_at != nil }
 
+    /// Detail-first copy mirroring `AgentActivity.humanActivityText` so
+    /// the previous-intent stack reads the same way as the current one.
+    var humanActivityText: String {
+        if let detail = AgentActivityCopy.readableDetail(detail) {
+            return detail
+        }
+        return AgentActivityCopy.friendlyFallback(for: title, category: tool_category)
+    }
+
+    /// Compact tool-call label for surfaces that want both fields
+    /// (Live Activity / Dynamic Island).
+    var toolCallText: String {
+        title
+    }
+
     init?(json: JSONValue) {
         guard let obj = json.objectValue else { return nil }
         guard let title = obj["title"]?.stringValue, !title.isEmpty else {
@@ -217,5 +249,113 @@ struct AgentActivityStep: Hashable, Sendable, Identifiable {
         if let date = iso.date(from: raw) { return date }
         iso.formatOptions = [.withInternetDateTime]
         return iso.date(from: raw)
+    }
+}
+
+private enum AgentActivityCopy {
+    static func readableDetail(_ raw: String?) -> String? {
+        guard let text = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty,
+              !looksLikeToolNoise(text) else {
+            return nil
+        }
+        return text
+    }
+
+    static func friendlyFallback(for title: String, category: AgentToolCategory) -> String {
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = cleaned.lowercased()
+
+        if lower.contains("terminal") || lower.contains("shell") || lower.contains("command") {
+            if lower.hasPrefix("review") || lower.contains("completed") {
+                return "Checking the command result"
+            }
+            return "Working in the project"
+        }
+        if lower.contains("read") {
+            return lower.hasPrefix("review") ? "Reviewing project files" : "Reading project files"
+        }
+        if lower.contains("skill") {
+            return lower.hasPrefix("review") ? "Reviewing project guidance" : "Checking project guidance"
+        }
+
+        switch category {
+        case .browser:
+            return lower.hasPrefix("review") ? "Reading the web result" : "Reading from the web"
+        case .search:
+            return lower.hasPrefix("review") ? "Reviewing search results" : "Searching for information"
+        case .gmail:
+            return lower.hasPrefix("review") ? "Reviewing Gmail results" : "Working with Gmail"
+        case .calendar:
+            return lower.hasPrefix("review") ? "Reviewing calendar results" : "Working with the calendar"
+        case .sheets:
+            return lower.hasPrefix("review") ? "Reviewing spreadsheet changes" : "Working on a spreadsheet"
+        case .docs:
+            return lower.hasPrefix("review") ? "Reviewing document changes" : "Working on a document"
+        case .drive:
+            return lower.hasPrefix("review") ? "Reviewing Drive results" : "Working with Drive"
+        case .slack:
+            return lower.hasPrefix("review") ? "Reviewing Slack results" : "Working in Slack"
+        case .notion:
+            return lower.hasPrefix("review") ? "Reviewing Notion results" : "Working in Notion"
+        case .audio:
+            return "Preparing the audio"
+        case .oauth:
+            return "Checking the account connection"
+        case .thinking:
+            return "Thinking through the next step"
+        case .question:
+            return "Waiting for your reply"
+        case .final:
+            return "Wrapping up"
+        case .error:
+            return "Checking what went wrong"
+        case .instacart:
+            return "Working with Instacart"
+        case .twitter:
+            return "Working with Twitter"
+        case .reddit:
+            return "Working with Reddit"
+        case .unknown:
+            if cleaned.isEmpty || lower.hasPrefix("using ") || lower.hasPrefix("reviewing ") {
+                return "Working on the task"
+            }
+            return cleaned
+        }
+    }
+
+    private static func looksLikeToolNoise(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+
+        if trimmed.count < 4 { return true }
+        if trimmed == "*" || trimmed == "-" || trimmed == "..." { return true }
+        if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") { return true }
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") { return true }
+        if lower.contains("```") { return true }
+        if lower.hasPrefix("tool completed") || lower.hasPrefix("tool hit an issue") {
+            return true
+        }
+        if lower.range(of: #"^\w+(?:[-_]\w+)+$"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        let commandPrefixes = [
+            "set -", "rm ", "git ", "cd ", "mkdir ", "cp ", "mv ", "curl ",
+            "python ", "python3 ", "npm ", "pnpm ", "yarn ", "swift ",
+            "xcodebuild ", "sed ", "awk ", "grep ", "rg ", "cat ", "ls "
+        ]
+        if commandPrefixes.contains(where: { lower.hasPrefix($0) }) {
+            return true
+        }
+
+        let codeMarkers = ["&&", " || ", " --", " -e ", "#!/", "frompath=", "path="]
+        if codeMarkers.contains(where: { lower.contains($0) }) {
+            return true
+        }
+
+        let proseCharacters = trimmed.filter { $0.isLetter || $0 == " " || $0 == "." || $0 == "," }
+        let proseRatio = Double(proseCharacters.count) / Double(max(trimmed.count, 1))
+        return proseRatio < 0.55
     }
 }

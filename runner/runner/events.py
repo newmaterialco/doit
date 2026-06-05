@@ -26,6 +26,13 @@ ARTIFACT_CLOSE = "[[/DOIT_ARTIFACT]]"
 TASKS_OPEN = "[[DOIT_TASKS]]"
 TASKS_CLOSE = "[[/DOIT_TASKS]]"
 
+# Marker the agent may emit in reasoning/text to update the app's live
+# progress UI with public, user-facing copy. This is separate from private
+# reasoning and raw tool previews; the runner strips the markers before
+# persisting visible chat text.
+ACTIVITY_OPEN = "[[DOIT_ACTIVITY]]"
+ACTIVITY_CLOSE = "[[/DOIT_ACTIVITY]]"
+
 # Kinds we know how to render on iOS. Anything else is dropped on the floor
 # rather than persisted with an unknown kind, since the UI has no fallback.
 _ARTIFACT_KINDS = {"link", "email", "calendar", "text", "audio"}
@@ -97,6 +104,11 @@ _ARTIFACT_RE = re.compile(
 
 _TASKS_RE = re.compile(
     re.escape(TASKS_OPEN) + r"\s*(\{.*?\})\s*" + re.escape(TASKS_CLOSE),
+    re.DOTALL,
+)
+
+_ACTIVITY_RE = re.compile(
+    re.escape(ACTIVITY_OPEN) + r"(.*?)" + re.escape(ACTIVITY_CLOSE),
     re.DOTALL,
 )
 
@@ -317,11 +329,16 @@ def translate(event_name: str, data: dict) -> Translated | None:
 
     if actual_event == "reasoning.available":
         text = str(data.get("text") or "").strip()
+        activity = parse_activity(text)
+        if activity:
+            return Translated(step_kind="thought", text=activity)
         if (
             INTERACTION_OPEN in text
             or INTERACTION_CLOSE in text
             or ARTIFACT_OPEN in text
             or ARTIFACT_CLOSE in text
+            or ACTIVITY_OPEN in text
+            or ACTIVITY_CLOSE in text
         ):
             return None
         if text:
@@ -462,7 +479,7 @@ def _final_or_interaction(text: str) -> Translated:
     # Real final: parse artifacts and spawn-task blocks out of the reply.
     artifacts = parse_artifacts(text)
     spawned_tasks = parse_spawned_tasks(text)
-    visible = normalize_visible_reply(strip_tasks(strip_artifacts(text)))
+    visible = normalize_visible_reply(strip_activity(strip_tasks(strip_artifacts(text))))
     return Translated(
         step_kind="final",
         text=_truncate(visible, 2000) if visible else "Done.",
@@ -516,6 +533,45 @@ def parse_interaction(text: str) -> InteractionRequest | None:
         payload.pop("options", None)
 
     return InteractionRequest(kind=raw_kind, prompt=prompt[:500], payload=payload)
+
+
+def parse_activity(text: str) -> str | None:
+    """Extract one public progress update from a DOIT_ACTIVITY block.
+
+    The model is instructed to keep this short and user-facing. The parser
+    still trims and rejects obvious non-copy so a malformed marker cannot
+    become a noisy status line.
+    """
+    if not text:
+        return None
+    match = _ACTIVITY_RE.search(text)
+    if not match:
+        return None
+    value = normalize_visible_reply(match.group(1))
+    if not value:
+        return None
+    if any(marker in value for marker in (
+        INTERACTION_OPEN,
+        INTERACTION_CLOSE,
+        ARTIFACT_OPEN,
+        ARTIFACT_CLOSE,
+        TASKS_OPEN,
+        TASKS_CLOSE,
+        ACTIVITY_OPEN,
+        ACTIVITY_CLOSE,
+    )):
+        return None
+    value = " ".join(value.split())
+    if len(value) > 120:
+        value = value[:119].rstrip() + "…"
+    return value
+
+
+def strip_activity(text: str) -> str:
+    """Remove every public activity marker block from visible assistant text."""
+    if not text:
+        return text
+    return _ACTIVITY_RE.sub("", text)
 
 
 def parse_artifacts(text: str) -> list[ArtifactRequest]:
@@ -693,6 +749,8 @@ def normalize_visible_reply(text: str) -> str:
         INTERACTION_CLOSE,
         TASKS_OPEN,
         TASKS_CLOSE,
+        ACTIVITY_OPEN,
+        ACTIVITY_CLOSE,
     ):
         cleaned = cleaned.replace(marker, "")
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)

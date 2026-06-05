@@ -251,8 +251,9 @@ final class AgentLiveActivityManager {
         }
 
         return HermesActivityAttributes.ContentState(
-            currentIntent: snapshot.title,
-            subject: snapshot.title,
+            currentIntent: snapshot.humanActivityText,
+            subject: snapshot.humanActivityText,
+            toolCallTitle: snapshot.toolCallText,
             currentSymbolName: snapshot.resolvedCategory.symbolName,
             previousIntent: previous,
             secondPreviousIntent: secondPrevious,
@@ -266,7 +267,7 @@ final class AgentLiveActivityManager {
     private func intent(from step: AgentActivityStep) -> HermesActivityAttributes.WidgetIntent {
         HermesActivityAttributes.WidgetIntent(
             id: step.id,
-            title: step.title,
+            title: step.humanActivityText,
             symbolName: step.tool_category.symbolName,
             isCompleted: step.isCompleted
         )
@@ -276,6 +277,7 @@ final class AgentLiveActivityManager {
         [
             state.state,
             state.currentIntent,
+            state.toolCallTitle ?? "-",
             state.currentSymbolName,
             "\(state.stepNumber)",
             state.previousIntent?.title ?? "-",

@@ -19,7 +19,7 @@ struct AgentActivityCard: View {
         .compositingGroup()
         .frame(height: cardStackHeight)
         .frame(maxWidth: .infinity)
-        .animation(.smooth(duration: 0.28), value: activity.title)
+        .animation(.smooth(duration: 0.28), value: activity.humanActivityText)
         .animation(.smooth(duration: 0.28), value: isTaskActive)
         .animation(.smooth(duration: 0.28), value: activity.recentSteps.map(\.id))
     }
@@ -70,7 +70,7 @@ private struct AgentIntentCardModel: Identifiable, Hashable {
 
     init(activity: AgentActivity) {
         id = "current-\(activity.todo_id.uuidString)-\(activity.updated_at.timeIntervalSince1970)"
-        title = activity.title
+        title = activity.humanActivityText
         symbolName = activity.resolvedCategory.symbolName
         switch activity.resolvedState {
         case .completed:
@@ -84,7 +84,7 @@ private struct AgentIntentCardModel: Identifiable, Hashable {
 
     init(step: AgentActivityStep) {
         id = step.id
-        title = step.title
+        title = step.humanActivityText
         symbolName = step.tool_category.symbolName
         isCompleted = step.isCompleted
     }

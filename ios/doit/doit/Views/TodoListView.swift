@@ -60,6 +60,13 @@ struct TodoListView: View {
                         bottomControls
                     }
                 }
+                .offset(y: showSettings ? UIScreen.main.bounds.height : 0)
+
+                if showSettings {
+                    SettingsTopOverlay(onDismiss: dismissSettings)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(10)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .id("todo-list-navigation-v2")
@@ -85,9 +92,6 @@ struct TodoListView: View {
                     store.insertOptimistic(newTodo)
                     selectedSectionID = TodoListSection.todo.index
                 }
-            }
-            .fullScreenCover(isPresented: $showSettings) {
-                SettingsView()
             }
             .onChange(of: navigationPath.count) { _, count in
                 if count == 0 {
@@ -661,6 +665,19 @@ private struct SlidingSectionTitle: View {
     }
 }
 
+private struct SettingsTopOverlay: View {
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.white
+                .ignoresSafeArea()
+            SettingsView(onDismiss: onDismiss)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
 private struct CronJobCard: View {
     let job: CronJob
     let onOpen: () -> Void
@@ -804,37 +821,86 @@ private struct TodoCard: View {
     let onRespond: (_ interaction: TodoInteraction, _ optionID: String?, _ text: String?) -> Void
 
     var body: some View {
-        // Flat three-row stack so spacing between rows is uniform. The
-        // top-left circle is its own tap target (toggle); the rest of the
-        // top row and the title both open the detail screen.
+        if usesActiveFooterTreatment {
+            activeBody
+        } else {
+            standardBody
+        }
+    }
+
+    // MARK: Rows
+
+    private var usesActiveFooterTreatment: Bool {
+        todo.status.isActive && interaction == nil
+    }
+
+    private var standardBody: some View {
         VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
             topRow
-            Button(action: onOpen) {
-                Text(displayTitle)
-                    .font(.system(size: 20, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color.black)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
+            titleRow
             bottomRow
         }
         .padding(TodoCardStyle.cardPadding)
         .frame(maxWidth: .infinity)
         .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
                 .fill(Color.white)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
                 .stroke(Color.black.opacity(0.06), lineWidth: 1)
         }
     }
 
-    // MARK: Rows
+    private var activeBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
+                topRow
+                titleRow
+            }
+            .padding(TodoCardStyle.cardPadding)
+            .background {
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(
+                        topLeading: TodoCardStyle.cardCornerRadius,
+                        bottomLeading: TodoCardStyle.cardCornerRadius,
+                        bottomTrailing: TodoCardStyle.cardCornerRadius,
+                        topTrailing: TodoCardStyle.cardCornerRadius
+                    ),
+                    style: .continuous
+                )
+                .fill(Color.white)
+            }
+
+            bottomRow
+                .padding(.horizontal, TodoCardStyle.cardPadding)
+                .padding(.vertical, 12)
+                .background(TodoCardStyle.footerBackground)
+        }
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
+                .fill(TodoCardStyle.footerBackground)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+    }
+
+    private var titleRow: some View {
+        Button(action: onOpen) {
+            Text(displayTitle)
+                .font(.system(size: 20, weight: .regular, design: .rounded))
+                .foregroundStyle(Color.black)
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 
     private var topRow: some View {
         HStack(spacing: 8) {
@@ -903,15 +969,21 @@ private struct TodoCard: View {
             .animation(.smooth(duration: 0.25), value: statusText)
         } else {
             HStack(alignment: .center, spacing: 10) {
-                Text(statusText)
-                    .font(.system(size: 14, weight: .regular, design: .rounded))
-                    .foregroundStyle(TodoCardStyle.muted)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .id(statusText)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    .animation(.smooth(duration: 0.25), value: statusText)
+                HStack(alignment: .center, spacing: 8) {
+                    if usesActiveFooterTreatment {
+                        ActivityLoadingDots()
+                    }
+                    Text(statusText)
+                        .font(.system(size: 14, weight: .regular, design: .rounded))
+                        .foregroundStyle(TodoCardStyle.muted)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(statusText)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .animation(.smooth(duration: 0.25), value: statusText)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 primaryAction
             }
         }
@@ -985,6 +1057,12 @@ private enum TodoCardStyle {
     static let muted = Color(red: 0xB6 / 255, green: 0xB6 / 255, blue: 0xB6 / 255)
     static let primaryBlue = Color(red: 0, green: 122 / 255, blue: 1)
     static let primaryBlueTint = Color(red: 0, green: 122 / 255, blue: 1).opacity(0.15)
+    static let footerBackground = Color(
+        red: 0xF6 / 255,
+        green: 0xF7 / 255,
+        blue: 0xF9 / 255
+    )
+    static let cardCornerRadius: CGFloat = 18
     /// Green used for the completed-todo toggle (iOS system green).
     static let completedGreen = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
     /// Padding on all four sides of the card.
@@ -992,6 +1070,31 @@ private enum TodoCardStyle {
     /// Vertical gap between the three rows; keep equal so the card feels balanced.
     static let rowSpacing: CGFloat = 14
     static let connectionLogoChipSize: CGFloat = 28
+}
+
+private struct ActivityLoadingDots: View {
+    @State private var isAnimating = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(TodoCardStyle.muted.opacity(isAnimating ? 0.9 : 0.35))
+                    .frame(width: 4, height: 4)
+                    .scaleEffect(isAnimating ? 1.0 : 0.72)
+                    .animation(
+                        .easeInOut(duration: 0.7)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(index) * 0.16),
+                        value: isAnimating
+                    )
+            }
+        }
+        .frame(width: 18, height: 14)
+        .onAppear { isAnimating = true }
+        .onDisappear { isAnimating = false }
+        .accessibilityHidden(true)
+    }
 }
 
 /// Tap-to-complete circle on the top-left of every card. Mirrors the

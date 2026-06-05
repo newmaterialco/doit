@@ -35,6 +35,8 @@ from .events import (
     INTERACTION_OPEN,
     ARTIFACT_OPEN,
     ARTIFACT_CLOSE,
+    ACTIVITY_OPEN,
+    ACTIVITY_CLOSE,
     Translated,
 )
 
@@ -228,7 +230,14 @@ class AgentActivityService:
             # Reasoning text often contains structured markers we never
             # want to leak into a status line; we already filter those in
             # `events.translate` but double-check defensively.
-            for marker in (INTERACTION_OPEN, INTERACTION_CLOSE, ARTIFACT_OPEN, ARTIFACT_CLOSE):
+            for marker in (
+                INTERACTION_OPEN,
+                INTERACTION_CLOSE,
+                ARTIFACT_OPEN,
+                ARTIFACT_CLOSE,
+                ACTIVITY_OPEN,
+                ACTIVITY_CLOSE,
+            ):
                 if marker in text:
                     return None
             short = _shorten_thought(text)

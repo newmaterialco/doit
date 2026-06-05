@@ -31,7 +31,7 @@ struct HermesLiveActivity: Widget {
                         .padding(.trailing, 8)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text(context.attributes.taskTitle)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
@@ -39,8 +39,22 @@ struct HermesLiveActivity: Widget {
                         Text(context.state.currentIntent)
                             .font(.system(size: 19, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .lineLimit(2)
                             .minimumScaleFactor(0.75)
+                        if let toolCall = context.state.toolCallTitle,
+                           !toolCall.isEmpty,
+                           toolCall != context.state.currentIntent {
+                            HStack(spacing: 4) {
+                                Image(systemName: context.state.currentSymbolName)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(toolCall)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .opacity(0.85)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -263,12 +277,12 @@ private struct LockScreenLayout: View {
                 HStack(spacing: 2) {
                     Text(Image(systemName: context.state.currentSymbolName))
                         .frame(width: 24, height: 18)
-                    Text(isWaiting ? "Thinking..." : context.state.currentIntent)
+                    Text(isWaiting ? "Thinking..." : footerLabel)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .multilineTextAlignment(.leading)
                 }
-                .id(context.state.currentIntent)
+                .id(footerLabel)
                 .transition(.blurReplace)
             }
 
@@ -281,6 +295,19 @@ private struct LockScreenLayout: View {
         .padding(.trailing, 12)
         .font(.footnote.bold())
         .opacity(isWaiting || context.state.isTerminal ? 0.36 : 1)
+    }
+
+    /// The small footer label shows the compact tool-call title (e.g.
+    /// "Searching Gmail") so the user can see *which* tool the agent is
+    /// running while the larger card above shows the human-facing
+    /// detail. Falls back to `currentIntent` when no tool call label
+    /// was emitted (older snapshots, thinking phase).
+    private var footerLabel: String {
+        if let toolCall = context.state.toolCallTitle,
+           !toolCall.isEmpty {
+            return toolCall
+        }
+        return context.state.currentIntent
     }
 
     @ViewBuilder

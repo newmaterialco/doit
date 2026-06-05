@@ -345,6 +345,8 @@ final class MentionTextViewBacking: UITextView {
     /// flip `isScrollEnabled = true` so the user can scroll within
     /// a fixed-height box instead of pushing the chat off-screen.
     var maxAutoHeight: CGFloat = 130
+    private let minAutoHeight: CGFloat = 38
+    private var lastMeasuredWidth: CGFloat = 0
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -373,7 +375,10 @@ final class MentionTextViewBacking: UITextView {
             width: max(0, bounds.width - leading - trailing),
             height: placeholderLabel.intrinsicContentSize.height
         )
-        invalidateIntrinsicContentSize()
+        if abs(bounds.width - lastMeasuredWidth) > 0.5 {
+            lastMeasuredWidth = bounds.width
+            invalidateIntrinsicContentSize()
+        }
     }
 
     override var font: UIFont? {
@@ -381,20 +386,22 @@ final class MentionTextViewBacking: UITextView {
     }
 
     override var intrinsicContentSize: CGSize {
-        let minHeight: CGFloat = 38
         guard bounds.width > 0 else {
-            isScrollEnabled = false
-            return CGSize(width: UIView.noIntrinsicMetric, height: minHeight)
+            return CGSize(width: UIView.noIntrinsicMetric, height: minAutoHeight)
         }
-        let target = sizeThatFits(CGSize(width: bounds.width,
-                                         height: .greatestFiniteMagnitude))
-        if target.height > maxAutoHeight {
-            isScrollEnabled = true
-            return CGSize(width: UIView.noIntrinsicMetric, height: maxAutoHeight)
-        }
-        isScrollEnabled = false
+        let target = measuredHeight(for: bounds.width)
         return CGSize(width: UIView.noIntrinsicMetric,
-                      height: max(target.height, minHeight))
+                      height: min(max(target, minAutoHeight), maxAutoHeight))
+    }
+
+    func measuredHeight(for width: CGFloat) -> CGFloat {
+        sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+    }
+
+    func updateScrollingIfNeeded(for measuredHeight: CGFloat) {
+        let shouldScroll = measuredHeight > maxAutoHeight
+        guard isScrollEnabled != shouldScroll else { return }
+        isScrollEnabled = shouldScroll
     }
 }
 
@@ -440,11 +447,9 @@ struct MentionTextView: UIViewRepresentable {
         context: Context
     ) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
-        let target = uiView.sizeThatFits(
-            CGSize(width: width, height: .greatestFiniteMagnitude)
-        )
-        let height = min(max(target.height, 38), uiView.maxAutoHeight)
-        uiView.isScrollEnabled = target.height > uiView.maxAutoHeight
+        let targetHeight = uiView.measuredHeight(for: width)
+        let height = min(max(targetHeight, 38), uiView.maxAutoHeight)
+        uiView.updateScrollingIfNeeded(for: targetHeight)
         return CGSize(width: width, height: height)
     }
 

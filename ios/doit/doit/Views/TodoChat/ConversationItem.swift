@@ -63,7 +63,8 @@ enum ConversationBuilder {
         interactions: [TodoInteraction],
         attachments: [TodoAttachment],
         messages: [TodoMessage],
-        error: String?
+        error: String?,
+        agentActivity: AgentActivity? = nil
     ) -> [ConversationItem] {
         var items: [ConversationItem] = []
 
@@ -144,11 +145,23 @@ enum ConversationBuilder {
             step.kind == .final && step.ts >= latestUserTurn
         }
         if todo.status.isActive && !hasRecentFinalStep && openInteraction == nil {
-            let latestActivity = steps
-                .filter { !$0.containsInteractionMarker }
-                .filter { $0.kind == .thought || $0.kind == .tool_started || $0.kind == .tool_result }
-                .max(by: { $0.ts < $1.ts })
-            items.append(.agentThinking(label: thinkingLabel(for: latestActivity)))
+            // The live `AgentActivity` snapshot is the most accurate
+            // source of "what is the agent doing right now?" and uses
+            // the runner's human-facing detail copy ("Looking up flights
+            // from SFO to JFK on Tuesday") when available. We only fall
+            // back to the older `todo_steps` derivation when no live
+            // snapshot has landed yet — typically the first beat of a
+            // run before the runner upserts `todo_agent_activity`.
+            if let activity = agentActivity,
+               let label = thinkingLabel(for: activity) {
+                items.append(.agentThinking(label: label))
+            } else {
+                let latestActivity = steps
+                    .filter { !$0.containsInteractionMarker }
+                    .filter { $0.kind == .thought || $0.kind == .tool_started || $0.kind == .tool_result }
+                    .max(by: { $0.ts < $1.ts })
+                items.append(.agentThinking(label: thinkingLabel(for: latestActivity)))
+            }
         }
 
         if todo.status == .todo && openInteraction == nil {
@@ -187,6 +200,7 @@ enum AgentReplyText {
         "[[DOIT_ARTIFACT]]", "[[/DOIT_ARTIFACT]]",
         "[[DOIT_INTERACTION]]", "[[/DOIT_INTERACTION]]",
         "[[DOIT_TASKS]]", "[[/DOIT_TASKS]]",
+        "[[DOIT_ACTIVITY]]", "[[/DOIT_ACTIVITY]]",
     ]
 
     static func normalize(_ text: String) -> String {
@@ -267,6 +281,21 @@ private func thinkingLabel(for step: TodoStep?) -> String {
     default:
         return "Thinking…"
     }
+}
+
+/// Maps the live `AgentActivity` snapshot to a chat-thread placeholder
+/// label. We prefer the runner-provided human-facing detail copy
+/// (matching the home card subtitle and detail-view animated cards)
+/// so all four "what is the agent doing?" surfaces stay in sync.
+///
+/// Returns `nil` when the snapshot isn't useful for a placeholder
+/// (terminal state, missing copy) so the caller can fall back to the
+/// `todo_steps` derivation.
+private func thinkingLabel(for activity: AgentActivity) -> String? {
+    guard activity.isRunning else { return nil }
+    let label = activity.humanActivityText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !label.isEmpty else { return nil }
+    return label
 }
 
 /// Humanizes a Hermes/Composio tool identifier like

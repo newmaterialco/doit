@@ -242,7 +242,8 @@ struct TodoDetailView: View {
             interactions: interactions,
             attachments: attachments,
             messages: messages,
-            error: current.error_message ?? error
+            error: current.error_message ?? error,
+            agentActivity: store.agentActivity(for: todoID)
         )
     }
 

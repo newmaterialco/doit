@@ -12,10 +12,14 @@ from __future__ import annotations
 import unittest
 
 from runner.events import (
+    ACTIVITY_CLOSE,
+    ACTIVITY_OPEN,
     INTERACTION_CLOSE,
     INTERACTION_OPEN,
     extract_usage_total,
+    parse_activity,
     parse_interaction,
+    strip_activity,
     translate,
 )
 
@@ -91,6 +95,51 @@ class ParseInteractionTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(result.prompt, "Send the thing?")
+
+
+class PublicActivityTests(unittest.TestCase):
+    def test_parse_activity_extracts_short_public_copy(self) -> None:
+        text = f"{ACTIVITY_OPEN}Reading the GitHub repo docs{ACTIVITY_CLOSE}"
+        self.assertEqual(parse_activity(text), "Reading the GitHub repo docs")
+
+    def test_parse_activity_rejects_missing_block(self) -> None:
+        self.assertIsNone(parse_activity("Reading files"))
+
+    def test_strip_activity_removes_block_from_visible_text(self) -> None:
+        text = (
+            f"{ACTIVITY_OPEN}Reading files{ACTIVITY_CLOSE}\n\n"
+            "Done — I updated the repo."
+        )
+        self.assertEqual(strip_activity(text).strip(), "Done — I updated the repo.")
+
+    def test_reasoning_activity_becomes_thought(self) -> None:
+        result = translate(
+            "reasoning.available",
+            {
+                "event": "reasoning.available",
+                "text": f"{ACTIVITY_OPEN}Preparing the PR summary{ACTIVITY_CLOSE}",
+            },
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.step_kind, "thought")
+        self.assertEqual(result.text, "Preparing the PR summary")
+
+    def test_final_reply_activity_marker_is_not_visible(self) -> None:
+        result = translate(
+            "run.completed",
+            {
+                "event": "run.completed",
+                "output": (
+                    f"{ACTIVITY_OPEN}Wrapping up{ACTIVITY_CLOSE}\n\n"
+                    "Done — I updated the rules."
+                ),
+            },
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.step_kind, "final")
+        self.assertEqual(result.text, "Done — I updated the rules.")
 
 
 class ExtractUsageTotalTests(unittest.TestCase):

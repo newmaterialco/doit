@@ -43,11 +43,18 @@ public struct HermesActivityAttributes: ActivityAttributes {
 
     public struct ContentState: Codable, Hashable, Sendable {
         /// Current intent rendered as the prominent shimmer line at the
-        /// bottom of the Lock Screen layout / compact island.
+        /// bottom of the Lock Screen layout / compact island. This is
+        /// the human-facing detail copy from `AgentActivity.detail`
+        /// (e.g. "Looking up flights from SFO to JFK on Tuesday").
         public let currentIntent: String
         /// Short subject/header shown in the Chowder-style header and final
         /// card. Usually the current Hermes activity title.
         public let subject: String?
+        /// Compact tool-call label (e.g. "Browsing web", "Searching
+        /// Gmail") shown alongside the human-facing `currentIntent`
+        /// in supporting rows. Sourced from `AgentActivity.title`.
+        /// Optional so older activities without it still decode.
+        public let toolCallTitle: String?
         /// SF Symbol name for the current intent badge.
         public let currentSymbolName: String
         /// Previous intent (slides into the "behind" card on the Lock
@@ -77,6 +84,7 @@ public struct HermesActivityAttributes: ActivityAttributes {
         public init(
             currentIntent: String,
             subject: String? = nil,
+            toolCallTitle: String? = nil,
             currentSymbolName: String,
             previousIntent: WidgetIntent? = nil,
             secondPreviousIntent: WidgetIntent? = nil,
@@ -88,6 +96,7 @@ public struct HermesActivityAttributes: ActivityAttributes {
         ) {
             self.currentIntent = currentIntent
             self.subject = subject
+            self.toolCallTitle = toolCallTitle
             self.currentSymbolName = currentSymbolName
             self.previousIntent = previousIntent
             self.secondPreviousIntent = secondPreviousIntent

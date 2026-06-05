@@ -107,6 +107,7 @@ def build_prompt(
     base = "\n".join(lines)
     base = _append_pinned_memory_block(base, pinned_memories)
     base = _append_artifacts_instructions(base)
+    base = _append_activity_instructions(base)
     base = _append_approval_instructions(base)
     return _append_attachments(base, attachment_urls)
 
@@ -262,6 +263,33 @@ def _append_artifacts_instructions(base: str) -> str:
     runner builds the prompt fresh each turn.
     """
     return base + _ARTIFACT_INSTRUCTIONS
+
+
+_ACTIVITY_INSTRUCTIONS = """\
+
+Public activity updates (for the app's live status UI):
+When your visible work changes in a meaningful way, emit a short public
+activity line wrapped exactly like this:
+
+[[DOIT_ACTIVITY]]Reading the GitHub repo docs[[/DOIT_ACTIVITY]]
+
+Rules:
+- Keep it under 80 characters.
+- Make it natural and honest: "Reading project files", "Adding the rule",
+  "Preparing the PR summary", "Checking the command result".
+- Only describe work you are actually doing or about to do next.
+- Do not mention private reasoning, hidden chain-of-thought, raw tool
+  arguments, shell commands, file paths, JSON, tokens, or internal errors.
+- Do not emit one on every tiny step. Emit when the user-visible phase
+  changes: reading, editing, checking, preparing, asking, finishing.
+- The activity marker is for live status only. Do not include it inside
+  artifact or interaction JSON.
+"""
+
+
+def _append_activity_instructions(base: str) -> str:
+    """Teach the agent to emit concise public progress copy for iOS."""
+    return base + _ACTIVITY_INSTRUCTIONS
 
 
 def _append_pinned_memory_block(base: str, pinned: list[dict] | None) -> str:
