@@ -35,6 +35,7 @@ struct TodoListView: View {
     @State private var suggestionsLoading = false
     @State private var suggestionsError: String?
     @State private var suggestionsHasLoaded = false
+    @State private var showSuggestedInfo = false
     @State private var exploreToolkits: [Toolkit] = []
     @State private var exploreToolkitsLoading = true
     @State private var exploreToolkitsHasLoaded = false
@@ -175,6 +176,16 @@ struct TodoListView: View {
                 }
             }
 
+            if showSuggestedInfo {
+                suggestedInfoBackdrop
+                    .transition(.opacity)
+                    .zIndex(6)
+
+                suggestedInfoPanel
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(7)
+            }
+
             if showSettings {
                 Color.white
                     .ignoresSafeArea()
@@ -214,7 +225,7 @@ struct TodoListView: View {
                     )
                     .overlay {
                         Circle()
-                            .stroke(Color.gray.opacity(0.28), lineWidth: 2.5)
+                            .stroke(Color.gray.opacity(0.16), lineWidth: 2.5)
                     }
                 }
                 .buttonStyle(.plain)
@@ -259,7 +270,11 @@ struct TodoListView: View {
                     }
 
                     if !suggestions.isEmpty {
-                        TaskSectionHeader(title: "Suggested", trailingIconName: "info.circle.fill")
+                        TaskSectionHeader(
+                            title: "Suggested",
+                            trailingIconName: "info.circle.fill",
+                            trailingAction: presentSuggestedInfo
+                        )
                             .padding(.top, activeItems.isEmpty ? 8 : 14)
 
                         SuggestedTasksStrip(
@@ -269,12 +284,13 @@ struct TodoListView: View {
                             onLoadMore: triggerLoadMoreSuggestions,
                             onSelect: selectSuggestion
                         )
-                        .padding(.vertical, 8)
+                        .padding(.top, 8)
+                        .padding(.bottom, 2)
                     }
 
                     if !completedItems.isEmpty {
                         TaskSectionHeader(title: "Done")
-                            .padding(.top, activeItems.isEmpty ? 8 : 14)
+                            .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 2)
 
                         ForEach(completedItems) { todo in
                             todoCard(for: todo)
@@ -567,6 +583,44 @@ struct TodoListView: View {
             if !settingsSheetIsVisible {
                 showSettings = false
             }
+        }
+    }
+
+    private var suggestedInfoBackdrop: some View {
+        Color.black.opacity(0.16)
+            .ignoresSafeArea(.all)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                playLightHaptic()
+                dismissSuggestedInfo()
+            }
+    }
+
+    private var suggestedInfoPanel: some View {
+        VStack {
+            Spacer()
+            SuggestedInfoCard(
+                onClose: {
+                    playLightHaptic()
+                    dismissSuggestedInfo()
+                }
+            )
+            .padding(.horizontal, 18)
+            .padding(.bottom, 20)
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+
+    private func presentSuggestedInfo() {
+        playLightHaptic()
+        withAnimation(settingsPresentationAnimation) {
+            showSuggestedInfo = true
+        }
+    }
+
+    private func dismissSuggestedInfo() {
+        withAnimation(settingsPresentationAnimation) {
+            showSuggestedInfo = false
         }
     }
 
@@ -981,6 +1035,7 @@ struct TodoListView: View {
 private struct TaskSectionHeader: View {
     let title: String
     var trailingIconName: String? = nil
+    var trailingAction: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 8) {
@@ -991,17 +1046,81 @@ private struct TaskSectionHeader: View {
             Spacer(minLength: 0)
 
             if let trailingIconName {
-                Image(systemName: trailingIconName)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.gray.opacity(0.58))
-                    .accessibilityHidden(true)
+                if let trailingAction {
+                    Button(action: trailingAction) {
+                        Image(systemName: trailingIconName)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.gray.opacity(0.58))
+                            .frame(width: 36, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("About suggested tasks")
+                } else {
+                    Image(systemName: trailingIconName)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.gray.opacity(0.58))
+                        .accessibilityHidden(true)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
         .padding(.bottom, 2)
-        .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
+    }
+}
+
+private struct SuggestedInfoCard: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Suggestions")
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color(white: 0.1))
+
+                Spacer()
+
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(white: 0.55))
+                        .frame(width: 34, height: 34)
+                        .background(Color(white: 0.95), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close suggested tasks info")
+            }
+            .padding(.leading, 22)
+            .padding(.trailing, 16)
+            .padding(.top, 22)
+            .padding(.bottom, 16)
+
+            VStack(alignment: .leading, spacing: 18) {
+                Text("doit looks at the kinds of tasks you create, complete, and schedule, then suggests useful next actions that are similar or complementary.")
+                    .font(.system(size: 18, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color(white: 0.18))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button(action: onClose) {
+                    Text("Got it")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                        .background(TodoCardStyle.primaryBlue, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 6)
+            .padding(.bottom, 24)
+        }
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
     }
 }
 
@@ -1275,13 +1394,6 @@ private struct LocationMapSquareTile: View {
                 }
             }
 
-            Text("Monitoring...")
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(8)
         }
         .frame(width: 142, height: 142)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -1379,22 +1491,23 @@ private struct ExploreConnectionsPromoCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Image("Connections_Header")
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity)
-                .frame(height: 152)
-                .clipped()
-                .padding(.top, -2)
+            GeometryReader { proxy in
+                Image("Connections_Header")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: 154)
+                    .clipped()
+            }
+            .frame(height: 154)
 
             VStack(alignment: .leading, spacing: 16) {
                 Spacer()
-                    .frame(height: 10)
+                    .frame(height: 6)
 
-                Text("Connect your favorite tools to help doit get more done for you.")
-                    .font(.system(size: 24, weight: .medium, design: .rounded))
+                Text("Connect your tools")
+                    .font(.system(size: 22, weight: .medium, design: .rounded))
                     .foregroundStyle(.black)
-                    .lineLimit(3)
+                    .lineLimit(1)
                     .multilineTextAlignment(.leading)
 
                 Button(action: onSetup) {
@@ -1410,9 +1523,10 @@ private struct ExploreConnectionsPromoCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 18)
+            .padding(.bottom, 18)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(Color.white)
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
                 .stroke(Color.black.opacity(0.06), lineWidth: 1)
@@ -2385,7 +2499,7 @@ private enum TodoCardStyle {
         green: 0xF7 / 255,
         blue: 0xF9 / 255
     )
-    static let cardCornerRadius: CGFloat = 18
+    static let cardCornerRadius: CGFloat = 30
     /// Green used for the completed-todo toggle (iOS system green).
     static let completedGreen = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
     /// Padding on all four sides of the card.
