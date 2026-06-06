@@ -21,6 +21,12 @@ struct AddTodoView: View {
     @State private var preview: PreviewItem?
     @FocusState private var isEditorFocused: Bool
 
+    init(userID: UUID, initialTitle: String = "", onCreated: @escaping (Todo) -> Void) {
+        self.userID = userID
+        self.onCreated = onCreated
+        _title = State(initialValue: initialTitle)
+    }
+
     private let promptSuggestions = [
         "Send an email to...",
         "Create an invite to...",

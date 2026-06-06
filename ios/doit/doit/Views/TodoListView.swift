@@ -1,3 +1,7 @@
+import AuthenticationServices
+import Combine
+import CoreLocation
+import MapKit
 import SwiftUI
 import UIKit
 
@@ -25,6 +29,23 @@ struct TodoListView: View {
     @State private var scrubbedSectionID: Int?
     @State private var navigationPath = NavigationPath()
     @State private var deletingTodoIDs: Set<UUID> = []
+    @State private var addSheetInitialTitle = ""
+    @State private var centeredSuggestedTaskID: String?
+    @State private var suggestedTasks: [SuggestedTask] = []
+    @State private var suggestionsLoading = false
+    @State private var suggestionsError: String?
+    @State private var suggestionsHasLoaded = false
+    @State private var exploreToolkits: [Toolkit] = []
+    @State private var exploreToolkitsLoading = true
+    @State private var exploreToolkitsHasLoaded = false
+    @State private var exploreError: String?
+    @State private var exploreBusySlug: String?
+    @State private var exploreOAuthSession: ASWebAuthenticationSession?
+    @State private var exploreApiKeyToolkit: Toolkit?
+    @State private var exploreApiKeyInput = ""
+    @State private var exploreApiKeyError: String?
+    @StateObject private var locationProvider = LocationProvider()
+    @Namespace private var taskCardNamespace
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -78,15 +99,37 @@ struct TodoListView: View {
                 .onChange(of: selectedSectionID) { _, newValue in
                     guard newValue != nil else { return }
                     playSectionHaptic()
+                    if newValue == TodoListSection.done.index {
+                        Task { await prepareExploreIfNeeded() }
+                    }
                 }
-                .sheet(isPresented: $showAddSheet) {
-                    AddTodoView(userID: userID) { newTodo in
+                .sheet(
+                    isPresented: $showAddSheet,
+                    onDismiss: { addSheetInitialTitle = "" }
+                ) {
+                    AddTodoView(userID: userID, initialTitle: addSheetInitialTitle) { newTodo in
                         // The store owns the list; insert there so realtime
                         // reconciliation can update the same row in place when
                         // the runner's prep pass finishes.
                         store.insertOptimistic(newTodo)
                         selectedSectionID = TodoListSection.todo.index
                     }
+                }
+                .sheet(item: $exploreApiKeyToolkit) { toolkit in
+                    ExploreApiKeySheet(
+                        toolkit: toolkit,
+                        apiKey: $exploreApiKeyInput,
+                        error: $exploreApiKeyError,
+                        busy: exploreBusySlug == toolkit.slug,
+                        onConnect: { key in
+                            Task { await connectExploreApiKey(toolkit, apiKey: key) }
+                        },
+                        onCancel: {
+                            exploreApiKeyToolkit = nil
+                            exploreApiKeyInput = ""
+                            exploreApiKeyError = nil
+                        }
+                    )
                 }
                 .onChange(of: navigationPath.count) { _, count in
                     if count == 0 {
@@ -148,17 +191,8 @@ struct TodoListView: View {
 
     private var topControls: some View {
         ZStack(alignment: .top) {
-            LinearGradient(
-                colors: [
-                    .white,
-                    .white.opacity(0.9),
-                    .white.opacity(0.55),
-                    .white.opacity(0)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 180)
+            Color(red: 0xFA / 255, green: 0xFA / 255, blue: 0xFA / 255)
+            .frame(height: 114)
             .ignoresSafeArea(.container, edges: .top)
 
             HStack {
@@ -176,8 +210,12 @@ struct TodoListView: View {
                             imageData: auth.avatarImageData,
                             url: auth.avatarURL
                         ),
-                        size: 30
+                        size: 32
                     )
+                    .overlay {
+                        Circle()
+                            .stroke(Color.gray.opacity(0.28), lineWidth: 2.5)
+                    }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Profile")
@@ -194,42 +232,63 @@ struct TodoListView: View {
 
     @ViewBuilder
     private func sectionPage(_ section: TodoListSection) -> some View {
-        if section == .scheduled {
+        if section == .todo {
+            tasksSectionPage
+        } else if section == .scheduled {
             scheduledSectionPage
         } else {
-            todoSectionPage(section)
+            exploreSectionPage
         }
     }
 
-    @ViewBuilder
-    private func todoSectionPage(_ section: TodoListSection) -> some View {
-        let items = sortedTodos(for: section)
-        Group {
-            if items.isEmpty && store.loadError == nil {
-                EmptyState(section: section)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        if let loadError = store.loadError {
-                            Text(loadError)
-                                .foregroundStyle(.red)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, todo in
-                            if let label = doneDividerLabel(for: todo, at: index, in: items) {
-                                DoneTimeDivider(label: label)
-                                    .padding(.vertical, 2)
-                            }
+    private var tasksSectionPage: some View {
+        let activeItems = activeTodos
+        let completedItems = completedTodos
+        let suggestions = displayedSuggestedTasks
+        return GeometryReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if let loadError = store.loadError {
+                        Text(loadError)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    ForEach(activeItems) { todo in
+                        todoCard(for: todo)
+                    }
+
+                    if !suggestions.isEmpty {
+                        TaskSectionHeader(title: "Suggested", trailingIconName: "info.circle.fill")
+                            .padding(.top, activeItems.isEmpty ? 8 : 14)
+
+                        SuggestedTasksStrip(
+                            suggestions: suggestions,
+                            screenWidth: proxy.size.width,
+                            centeredSuggestionID: $centeredSuggestedTaskID,
+                            onLoadMore: triggerLoadMoreSuggestions,
+                            onSelect: selectSuggestion
+                        )
+                        .padding(.vertical, 8)
+                    }
+
+                    if !completedItems.isEmpty {
+                        TaskSectionHeader(title: "Done")
+                            .padding(.top, activeItems.isEmpty ? 8 : 14)
+
+                        ForEach(completedItems) { todo in
                             todoCard(for: todo)
                         }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 130)
-                    .padding(.bottom, 96)
-                    .animation(.smooth(duration: 0.24), value: items.map(\.id))
                 }
-                .refreshable { await store.loadAll() }
+                .padding(.horizontal, 16)
+                .padding(.top, 116)
+                .padding(.bottom, 96)
+                .animation(.smooth(duration: 0.34), value: taskLayoutSignature)
+            }
+            .refreshable { await store.loadAll() }
+            .task {
+                await loadInitialSuggestionsIfNeeded()
             }
         }
     }
@@ -263,22 +322,73 @@ struct TodoListView: View {
                 }
             }
         )
-        .id(cardRefreshID(for: todo))
+        .id(todo.id)
+        .matchedGeometryEffect(id: todo.id, in: taskCardNamespace)
         .opacity(isDeleting ? 0 : 1)
         .scaleEffect(isDeleting ? 0.96 : 1)
         .offset(x: isDeleting ? 28 : 0)
         .allowsHitTesting(!isDeleting)
-        .transition(
-            .asymmetric(
-                insertion: .opacity.combined(with: .move(edge: .top)),
-                removal: .opacity
-                    .combined(with: .scale(scale: 0.96))
-                    .combined(with: .move(edge: .trailing))
-            )
-        )
         .animation(.smooth(duration: 0.24), value: isDeleting)
         .contextMenu {
             todoContextMenuAction(for: todo)
+        }
+    }
+
+    private var exploreSectionPage: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if let exploreError {
+                    Text(exploreError)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                ExploreSectionHeader(title: "Location")
+                ExploreHorizontalRow {
+                    LocationMapTile(locationProvider: locationProvider)
+                    ForEach(locationActions) { item in
+                        ExploreActionTile(item: item, style: .compact) {
+                            openSuggestedTask(item.prompt)
+                        }
+                    }
+                }
+
+                ExploreSectionHeader(title: "Connections")
+                ExploreHorizontalRow {
+                    if exploreToolkitsLoading && exploreToolkits.isEmpty {
+                        ForEach(0..<3, id: \.self) { _ in
+                            ExploreConnectionSkeletonCard()
+                        }
+                    } else {
+                        ForEach(exploreToolkits) { toolkit in
+                            ExploreConnectionCard(
+                                toolkit: toolkit,
+                                busy: exploreBusySlug == toolkit.slug,
+                                onConnect: { beginExploreConnect(toolkit) },
+                                onDisconnect: { Task { await disconnectExploreToolkit(toolkit) } }
+                            )
+                        }
+                    }
+                }
+
+                ForEach(exploreCategories) { category in
+                    ExploreSectionHeader(title: category.title)
+                    ExploreHorizontalRow {
+                        ForEach(category.items) { item in
+                            ExploreActionTile(item: item, style: category.cardStyle) {
+                                openSuggestedTask(item.prompt)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 116)
+            .padding(.bottom, 96)
+        }
+        .refreshable {
+            await loadExploreToolkits(showSpinner: false, force: true)
+            locationProvider.refreshIfAuthorized()
         }
     }
 
@@ -335,6 +445,7 @@ struct TodoListView: View {
 
             Button {
                 playLightHaptic()
+                addSheetInitialTitle = ""
                 showAddSheet = true
             } label: {
                 Image(systemName: "plus")
@@ -471,10 +582,12 @@ struct TodoListView: View {
         UISelectionFeedbackGenerator().selectionChanged()
     }
 
-    private func sortedTodos(for section: TodoListSection) -> [Todo] {
-        let items = store.todos.filter { section.contains($0.status) }
-        guard section == .done else { return items }
-        return items.sorted { lhs, rhs in
+    private var activeTodos: [Todo] {
+        store.todos.filter { $0.status != .done }
+    }
+
+    private var completedTodos: [Todo] {
+        store.todos.filter { $0.status == .done }.sorted { lhs, rhs in
             if lhs.updated_at == rhs.updated_at {
                 return lhs.created_at > rhs.created_at
             }
@@ -482,12 +595,324 @@ struct TodoListView: View {
         }
     }
 
-    private func doneDividerLabel(for todo: Todo, at index: Int, in items: [Todo]) -> String? {
-        guard todo.status == .done else { return nil }
-        let currentBucket = DoneTimeBucket.bucket(for: todo.updated_at)
-        guard index > 0 else { return currentBucket.label }
-        let previousBucket = DoneTimeBucket.bucket(for: items[index - 1].updated_at)
-        return previousBucket == currentBucket ? nil : currentBucket.label
+    private var taskLayoutSignature: String {
+        store.todos
+            .map { "\($0.id.uuidString):\($0.status.rawValue):\($0.updated_at.ISO8601Format())" }
+            .joined(separator: "|")
+    }
+
+    private var displayedSuggestedTasks: [SuggestedTask] {
+        if suggestedTasks.isEmpty && !suggestionsLoading && suggestionsHasLoaded {
+            return fallbackSuggestedTasks()
+        }
+        if suggestionsLoading || suggestionsHasLoaded {
+            return suggestedTasks + [.loader]
+        }
+        return [.loader]
+    }
+
+    private func fallbackSuggestedTasks() -> [SuggestedTask] {
+        let source = store.todos
+            .filter { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { lhs, rhs in
+                let lhsDoneRank = lhs.status == .done ? 0 : 1
+                let rhsDoneRank = rhs.status == .done ? 0 : 1
+                if lhsDoneRank != rhsDoneRank {
+                    return lhsDoneRank < rhsDoneRank
+                }
+                return lhs.updated_at > rhs.updated_at
+            }
+
+        var seenTitles: Set<String> = []
+        return source.compactMap { todo in
+            let title = suggestionTitle(for: todo)
+            let key = title.lowercased()
+            guard seenTitles.insert(key).inserted else { return nil }
+            return SuggestedTask(
+                id: "fallback-\(key)",
+                title: title,
+                theme: fallbackTheme(for: todo),
+                kind: .suggestion
+            )
+        }
+        .prefix(5)
+        .map { $0 }
+    }
+
+    private func suggestionTitle(for todo: Todo) -> String {
+        let rawTitle = todo.original_title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? todo.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawTitle.isEmpty else { return "Create a new task" }
+        return rawTitle
+    }
+
+    private func fallbackTheme(for todo: Todo) -> String {
+        switch todo.connection_slug {
+        case "gmail": return "Email"
+        case "googlecalendar": return "Plan"
+        case "googlesheets": return "Sheets"
+        case "slack": return "Update"
+        case "googledocs": return "Write"
+        case "googledrive": return "Docs"
+        default:
+            return todo.status == .done ? "Follow-up" : "Idea"
+        }
+    }
+
+    private func selectSuggestion(_ suggestion: SuggestedTask) {
+        guard suggestion.kind == .suggestion else { return }
+        openSuggestedTask(suggestion.title)
+    }
+
+    private func openSuggestedTask(_ title: String) {
+        playLightHaptic()
+        addSheetInitialTitle = title
+        showAddSheet = true
+    }
+
+    private var locationActions: [ExploreActionItem] {
+        [
+            ExploreActionItem(
+                title: "When I Leave",
+                subtitle: "Location reminder",
+                prompt: "Remind me when I leave here to ",
+                symbolName: "location.fill"
+            ),
+            ExploreActionItem(
+                title: "Nearby Places",
+                subtitle: "Local search",
+                prompt: "Find nearby places for ",
+                symbolName: "map.fill"
+            ),
+            ExploreActionItem(
+                title: "Errand Route",
+                subtitle: "Plan around here",
+                prompt: "Plan errands around my current location",
+                symbolName: "car.fill"
+            ),
+            ExploreActionItem(
+                title: "Area Checklist",
+                subtitle: "Travel prep",
+                prompt: "Create a travel checklist for this area",
+                symbolName: "checklist"
+            )
+        ]
+    }
+
+    private var exploreCategories: [ExploreCategory] {
+        [
+            ExploreCategory(
+                title: "Daily Automations",
+                cardStyle: .square,
+                items: [
+                    ExploreActionItem(title: "Morning Plan", subtitle: "Every weekday", prompt: "Every weekday morning, make me a short plan for the day", symbolName: "sun.max.fill"),
+                    ExploreActionItem(title: "Email Watch", subtitle: "Monitor inbox", prompt: "Monitor my inbox every day for important follow-ups", symbolName: "envelope.fill"),
+                    ExploreActionItem(title: "Weekly Summary", subtitle: "Recurring recap", prompt: "Every Friday, summarize what I got done this week", symbolName: "calendar.badge.clock"),
+                    ExploreActionItem(title: "Daily Check", subtitle: "Track anything", prompt: "Check every day whether ", symbolName: "clock.fill")
+                ]
+            ),
+            ExploreCategory(
+                title: "Writing",
+                cardStyle: .square,
+                items: [
+                    ExploreActionItem(title: "Draft Reply", subtitle: "Fast response", prompt: "Draft a reply to ", symbolName: "text.bubble.fill"),
+                    ExploreActionItem(title: "Polish Message", subtitle: "Cleaner tone", prompt: "Polish this message and make it concise: ", symbolName: "sparkles"),
+                    ExploreActionItem(title: "Summarize Notes", subtitle: "Find the point", prompt: "Summarize these notes into action items: ", symbolName: "doc.text.fill"),
+                    ExploreActionItem(title: "Make a Plan", subtitle: "From bullets", prompt: "Turn these bullets into a clear plan: ", symbolName: "list.bullet.clipboard.fill")
+                ]
+            ),
+            ExploreCategory(
+                title: "Research",
+                cardStyle: .square,
+                items: [
+                    ExploreActionItem(title: "Compare Options", subtitle: "Pros and cons", prompt: "Compare options for ", symbolName: "scale.3d"),
+                    ExploreActionItem(title: "Find Info", subtitle: "Web research", prompt: "Research and summarize ", symbolName: "magnifyingglass"),
+                    ExploreActionItem(title: "Track Company", subtitle: "Stay updated", prompt: "Track news about this company and summarize important updates: ", symbolName: "building.2.fill"),
+                    ExploreActionItem(title: "Topic Brief", subtitle: "Quick overview", prompt: "Create a short brief about ", symbolName: "book.closed.fill")
+                ]
+            ),
+            ExploreCategory(
+                title: "Organization",
+                cardStyle: .square,
+                items: [
+                    ExploreActionItem(title: "Clean Inbox", subtitle: "Triage help", prompt: "Help me clean up my inbox and make a follow-up list", symbolName: "tray.full.fill"),
+                    ExploreActionItem(title: "Organize Links", subtitle: "Sort resources", prompt: "Organize these links into useful groups: ", symbolName: "link"),
+                    ExploreActionItem(title: "Follow-Ups", subtitle: "Next actions", prompt: "Create a follow-up list from ", symbolName: "person.crop.circle.badge.checkmark"),
+                    ExploreActionItem(title: "Status Update", subtitle: "Share progress", prompt: "Prepare a status update for ", symbolName: "chart.bar.doc.horizontal.fill")
+                ]
+            )
+        ]
+    }
+
+    private func beginExploreConnect(_ toolkit: Toolkit) {
+        if toolkit.usesApiKey {
+            exploreApiKeyInput = ""
+            exploreApiKeyError = nil
+            exploreApiKeyToolkit = toolkit
+        } else {
+            Task { await connectExploreOAuth(toolkit) }
+        }
+    }
+
+    private func prepareExploreIfNeeded() async {
+        locationProvider.refreshIfAuthorized()
+        await loadExploreToolkits()
+    }
+
+    private func loadExploreToolkits(showSpinner: Bool = true, force: Bool = false) async {
+        if exploreToolkitsHasLoaded, !force {
+            return
+        }
+
+        if exploreToolkits.isEmpty, let cachedToolkits = IntegrationsAPI.cachedToolkits {
+            exploreToolkits = cachedToolkits
+            exploreToolkitsLoading = cachedToolkits.isEmpty
+            if !cachedToolkits.isEmpty, !force {
+                exploreToolkitsHasLoaded = true
+                return
+            }
+        }
+
+        if showSpinner {
+            exploreToolkitsLoading = exploreToolkits.isEmpty
+        }
+
+        do {
+            exploreToolkits = try await IntegrationsAPI.list()
+            exploreToolkitsHasLoaded = true
+            exploreError = nil
+        } catch {
+            exploreError = "Couldn't load connections: \(error.localizedDescription)"
+        }
+
+        exploreToolkitsLoading = false
+    }
+
+    private func connectExploreOAuth(_ toolkit: Toolkit) async {
+        exploreBusySlug = toolkit.slug
+        defer { exploreBusySlug = nil }
+
+        do {
+            let result = try await IntegrationsAPI.connect(toolkit: toolkit.slug)
+            guard let urlString = result.redirect_url,
+                  let url = URL(string: urlString) else {
+                exploreError = "Got an invalid authorization URL."
+                return
+            }
+            await runExploreOAuth(url: url)
+            await loadExploreToolkits(showSpinner: false, force: true)
+        } catch {
+            exploreError = "Couldn't start connection: \(error.localizedDescription)"
+        }
+    }
+
+    private func connectExploreApiKey(_ toolkit: Toolkit, apiKey key: String) async {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            exploreApiKeyError = "Enter your \(toolkit.name) API key."
+            return
+        }
+
+        exploreBusySlug = toolkit.slug
+        exploreApiKeyError = nil
+        defer { exploreBusySlug = nil }
+
+        do {
+            _ = try await IntegrationsAPI.connect(toolkit: toolkit.slug, apiKey: trimmed)
+            let toolkits = try await IntegrationsAPI.list()
+            if let updated = toolkits.first(where: { $0.slug == toolkit.slug }), updated.connected {
+                exploreToolkits = toolkits
+                exploreToolkitsHasLoaded = true
+                exploreApiKeyToolkit = nil
+                exploreApiKeyInput = ""
+                exploreApiKeyError = nil
+                exploreError = nil
+            } else {
+                exploreApiKeyError = "Saved your key but couldn't confirm the connection. Pull down to refresh."
+            }
+        } catch {
+            exploreApiKeyError = IntegrationsAPI.userFacingError(error)
+        }
+    }
+
+    private func disconnectExploreToolkit(_ toolkit: Toolkit) async {
+        guard let connectionID = toolkit.connection_id else { return }
+        exploreBusySlug = toolkit.slug
+        defer { exploreBusySlug = nil }
+
+        do {
+            try await IntegrationsAPI.disconnect(connectionID: connectionID)
+            await loadExploreToolkits(showSpinner: false, force: true)
+        } catch {
+            exploreError = "Couldn't disconnect: \(error.localizedDescription)"
+        }
+    }
+
+    private func runExploreOAuth(url: URL) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { _, _ in
+                continuation.resume()
+            }
+            session.prefersEphemeralWebBrowserSession = false
+            session.presentationContextProvider = PresentationContextProvider.shared
+            exploreOAuthSession = session
+            if !session.start() {
+                continuation.resume()
+            }
+        }
+    }
+
+    private func loadInitialSuggestionsIfNeeded() async {
+        guard !suggestionsHasLoaded, !suggestionsLoading else { return }
+        await loadMoreSuggestions()
+    }
+
+    private func triggerLoadMoreSuggestions() {
+        Task { await loadMoreSuggestions() }
+    }
+
+    private func loadMoreSuggestions() async {
+        guard !suggestionsLoading else { return }
+        suggestionsLoading = true
+        suggestionsError = nil
+        defer {
+            suggestionsLoading = false
+            suggestionsHasLoaded = true
+        }
+
+        do {
+            let response = try await SuggestionsAPI.fetch(
+                count: 5,
+                excludeTitles: suggestedTasks.map(\.title)
+            )
+            let newSuggestions = response.suggestions
+                .map(makeSuggestedTask(from:))
+                .filter { candidate in
+                    !suggestedTasks.contains { existing in
+                        existing.title.caseInsensitiveCompare(candidate.title) == .orderedSame
+                    }
+                }
+            suggestedTasks.append(contentsOf: newSuggestions)
+            if centeredSuggestedTaskID == SuggestedTask.loaderID, let first = newSuggestions.first {
+                centeredSuggestedTaskID = first.id
+            }
+        } catch {
+            suggestionsError = error.localizedDescription
+            if suggestedTasks.isEmpty {
+                suggestedTasks = fallbackSuggestedTasks()
+            }
+        }
+    }
+
+    private func makeSuggestedTask(from generated: GeneratedSuggestion) -> SuggestedTask {
+        let title = generated.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let theme = generated.theme.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SuggestedTask(
+            id: "generated-\(UUID().uuidString)",
+            title: title.isEmpty ? "Create a helpful new task" : title,
+            theme: theme.isEmpty ? "Idea" : theme,
+            kind: .suggestion
+        )
     }
 
     private func connectionSlugs(for todo: Todo) -> [String] {
@@ -562,65 +987,728 @@ struct TodoListView: View {
     }
 }
 
-private enum DoneTimeBucket: Equatable {
-    case today
-    case yesterday
-    case pastWeek
-    case pastMonth
-    case earlier
+private struct TaskSectionHeader: View {
+    let title: String
+    var trailingIconName: String? = nil
 
-    var label: String {
-        switch self {
-        case .today: return "Today"
-        case .yesterday: return "Yesterday"
-        case .pastWeek: return "Past week"
-        case .pastMonth: return "Past month"
-        case .earlier: return "Earlier"
-        }
-    }
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.78))
 
-    static func bucket(for date: Date, now: Date = Date()) -> DoneTimeBucket {
-        let calendar = Calendar.current
-        if calendar.isDateInToday(date) {
-            return .today
-        }
-        if calendar.isDateInYesterday(date) {
-            return .yesterday
-        }
+            Spacer(minLength: 0)
 
-        let startOfDate = calendar.startOfDay(for: date)
-        let startOfToday = calendar.startOfDay(for: now)
-        let daysAgo = calendar.dateComponents([.day], from: startOfDate, to: startOfToday).day ?? 0
-        if daysAgo < 7 {
-            return .pastWeek
+            if let trailingIconName {
+                Image(systemName: trailingIconName)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.gray.opacity(0.58))
+                    .accessibilityHidden(true)
+            }
         }
-        if daysAgo < 31 {
-            return .pastMonth
-        }
-        return .earlier
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
-private struct DoneTimeDivider: View {
-    let label: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            dividerLine
-            Text(label.uppercased())
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .tracking(0.6)
-                .foregroundStyle(Color.black.opacity(0.34))
-            dividerLine
-        }
-        .padding(.horizontal, 2)
-        .accessibilityElement(children: .combine)
+private struct SuggestedTask: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case suggestion
+        case loader
     }
 
-    private var dividerLine: some View {
-        Rectangle()
-            .fill(Color.black.opacity(0.07))
-            .frame(height: 1)
+    static let loaderID = "suggestion-loader"
+
+    let id: String
+    let title: String
+    let theme: String
+    let kind: Kind
+
+    static var loader: SuggestedTask {
+        SuggestedTask(
+            id: loaderID,
+            title: "",
+            theme: "",
+            kind: .loader
+        )
+    }
+}
+
+private struct SuggestedTasksStrip: View {
+    let suggestions: [SuggestedTask]
+    let screenWidth: CGFloat
+    @Binding var centeredSuggestionID: String?
+    let onLoadMore: () -> Void
+    let onSelect: (SuggestedTask) -> Void
+
+    private let spacing: CGFloat = 8
+    private let horizontalContentInset: CGFloat = 16
+
+    private var tileSize: CGFloat {
+        max(58, (viewportWidth - spacing * 4) / 5)
+    }
+
+    private var viewportWidth: CGFloat {
+        max(0, screenWidth - horizontalContentInset * 2)
+    }
+
+    private var tileWidth: CGFloat {
+        tileSize * 4.8
+    }
+
+    private var tileHeight: CGFloat {
+        tileSize * 2.35
+    }
+
+    private var leftSnapMargin: CGFloat {
+        max(0, min(2, viewportWidth - tileWidth))
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: spacing) {
+                ForEach(suggestions) { suggestion in
+                    SuggestedTaskTile(suggestion: suggestion) {
+                        onSelect(suggestion)
+                    }
+                    .frame(width: tileWidth, height: tileHeight)
+                    .id(suggestion.id)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .contentMargins(.leading, leftSnapMargin, for: .scrollContent)
+        .contentMargins(.trailing, max(0, viewportWidth - tileWidth - leftSnapMargin), for: .scrollContent)
+        .scrollClipDisabled()
+        .scrollPosition(id: $centeredSuggestionID)
+        .scrollTargetBehavior(.viewAligned)
+        .onAppear {
+            if centeredSuggestionID == nil || !suggestions.contains(where: { $0.id == centeredSuggestionID }) {
+                centeredSuggestionID = suggestions.first?.id
+            }
+        }
+        .onChange(of: suggestions.map(\.id)) { _, ids in
+            if centeredSuggestionID == nil || !ids.contains(centeredSuggestionID ?? "") {
+                centeredSuggestionID = ids.first
+            }
+        }
+        .onChange(of: centeredSuggestionID) { oldValue, newValue in
+            guard oldValue != nil, newValue != nil, oldValue != newValue else { return }
+            UISelectionFeedbackGenerator().selectionChanged()
+            if newValue == SuggestedTask.loaderID {
+                onLoadMore()
+            }
+        }
+    }
+}
+
+private struct SuggestedTaskTile: View {
+    let suggestion: SuggestedTask
+    let onTap: () -> Void
+    @State private var skeletonIsAnimating = false
+
+    var body: some View {
+        Button(action: onTap) {
+            Group {
+                if suggestion.kind == .loader {
+                    skeletonContent
+                } else {
+                    suggestionContent
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(suggestion.kind == .loader)
+        .accessibilityLabel(
+            suggestion.kind == .loader
+                ? "Loading more suggestions"
+                : "Suggested task: \(suggestion.title)"
+        )
+        .onAppear { skeletonIsAnimating = true }
+        .onDisappear { skeletonIsAnimating = false }
+    }
+
+    private var suggestionContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(suggestion.theme)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.gray)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.gray.opacity(0.10), in: Capsule())
+
+            Spacer(minLength: 0)
+
+            Text(suggestion.title)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.black)
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var skeletonContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Capsule()
+                .fill(skeletonFill)
+                .frame(width: 72, height: 26)
+
+            Spacer(minLength: 0)
+
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(skeletonFill)
+                    .frame(width: 190, height: 18)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(skeletonFill)
+                    .frame(width: 140, height: 18)
+            }
+        }
+        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: skeletonIsAnimating)
+    }
+
+    private var skeletonFill: Color {
+        Color.gray.opacity(skeletonIsAnimating ? 0.18 : 0.08)
+    }
+}
+
+private struct ExploreSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 18, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 8)
+    }
+}
+
+private struct ExploreHorizontalRow<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                content
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.horizontal, -16)
+        .scrollClipDisabled()
+    }
+}
+
+private struct LocationMapTile: View {
+    @ObservedObject var locationProvider: LocationProvider
+
+    private var coordinate: CLLocationCoordinate2D? {
+        locationProvider.coordinate
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Group {
+                if let coordinate {
+                    Map(
+                        coordinateRegion: .constant(region(for: coordinate)),
+                        interactionModes: [],
+                        showsUserLocation: true
+                    )
+                    .allowsHitTesting(false)
+                } else {
+                    permissionContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.88, green: 0.94, blue: 1.0),
+                                    Color(red: 0.95, green: 0.98, blue: 0.96)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+
+            Text("Monitoring...")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(12)
+        }
+        .frame(width: 264, height: 190)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .onTapGesture {
+            locationProvider.requestAuthorizationOrLocation()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Location map")
+    }
+
+    private var permissionContent: some View {
+        VStack(spacing: 10) {
+            Image(systemName: locationProvider.permissionSymbolName)
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(TodoCardStyle.primaryBlue)
+                .frame(width: 58, height: 58)
+                .background(Color.white.opacity(0.75), in: Circle())
+
+            Text(locationProvider.permissionActionText)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private func region(for coordinate: CLLocationCoordinate2D) -> MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)
+        )
+    }
+}
+
+private struct ExploreActionTile: View {
+    let item: ExploreActionItem
+    let style: ExploreCardStyle
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: item.symbolName)
+                    .font(.system(size: style.iconSize, weight: style.iconWeight))
+                    .foregroundStyle(style.iconForegroundStyle)
+                    .frame(width: 40, height: 40)
+                    .background(style.iconBackgroundColor(for: item), in: Circle())
+
+                Spacer(minLength: 0)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(item.title)
+                        .font(.system(size: style.titleSize, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+
+                    Text(item.subtitle)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(style.padding)
+            .frame(width: style.width, height: style.height, alignment: .leading)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
+                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+    }
+}
+
+private struct ExploreConnectionCard: View {
+    let toolkit: Toolkit
+    let busy: Bool
+    let onConnect: () -> Void
+    let onDisconnect: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                ConnectionLogo(slug: toolkit.slug)
+                    .frame(width: 32, height: 32)
+
+                Spacer()
+
+                if toolkit.isConnectable && toolkit.connected {
+                    Menu {
+                        Button("Disconnect", role: .destructive, action: onDisconnect)
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 36)
+                            .background(Color(.systemGray6), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, height: 36)
+                        .background(Color(.systemGray6), in: Circle())
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(toolkit.name)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+
+                Text(toolkit.description)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+
+            if busy {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+            } else if toolkit.isConnectable && toolkit.connected {
+                Text("Connected")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(TodoCardStyle.primaryBlue)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background(TodoCardStyle.primaryBlueTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else if toolkit.isConnectable {
+                Button("Connect", action: onConnect)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                Text("Available")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .padding(16)
+        .frame(width: 220, height: 204, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+    }
+}
+
+private struct ExploreConnectionSkeletonCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Circle()
+                .fill(Color.gray.opacity(0.12))
+                .frame(width: 34, height: 34)
+
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.gray.opacity(0.12))
+                    .frame(width: 118, height: 16)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.gray.opacity(0.10))
+                    .frame(width: 160, height: 12)
+            }
+
+            Spacer()
+
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.gray.opacity(0.10))
+                .frame(height: 34)
+        }
+        .padding(16)
+        .frame(width: 220, height: 188)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+    }
+}
+
+private struct ExploreApiKeySheet: View {
+    let toolkit: Toolkit
+    @Binding var apiKey: String
+    @Binding var error: String?
+    let busy: Bool
+    let onConnect: (String) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let error {
+                    Section {
+                        Text(error)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
+                }
+                Section {
+                    SecureField("\(toolkit.name) API key", text: $apiKey)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .disabled(busy)
+                } footer: {
+                    Text(apiKeyFooter)
+                }
+            }
+            .navigationTitle("Connect \(toolkit.name)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if busy {
+                        ProgressView()
+                    } else {
+                        Button("Connect") {
+                            onConnect(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                        }
+                        .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private var apiKeyFooter: String {
+        switch toolkit.slug {
+        case "hunter":
+            return "Find your key at hunter.io API. Composio stores it securely for agent use."
+        default:
+            return "Composio stores your key securely for agent use."
+        }
+    }
+}
+
+private final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published private(set) var authorizationStatus: CLAuthorizationStatus
+    @Published private(set) var coordinate: CLLocationCoordinate2D?
+    @Published private(set) var lastError: String?
+
+    private let manager = CLLocationManager()
+    private var lastLocationRefresh: Date?
+
+    override init() {
+        authorizationStatus = manager.authorizationStatus
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+    }
+
+    func requestAuthorizationOrLocation() {
+        authorizationStatus = manager.authorizationStatus
+        switch authorizationStatus {
+        case .notDetermined:
+            manager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse:
+            manager.requestLocation()
+        case .denied, .restricted:
+            lastError = "Location access is blocked."
+        @unknown default:
+            lastError = "Location is unavailable."
+        }
+    }
+
+    func refreshIfAuthorized() {
+        authorizationStatus = manager.authorizationStatus
+        guard authorizationStatus == .authorizedAlways || authorizationStatus == .authorizedWhenInUse else {
+            return
+        }
+        if let lastLocationRefresh,
+           coordinate != nil,
+           Date().timeIntervalSince(lastLocationRefresh) < 300 {
+            return
+        }
+        lastLocationRefresh = Date()
+        manager.requestLocation()
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        authorizationStatus = manager.authorizationStatus
+        if authorizationStatus == .authorizedAlways || authorizationStatus == .authorizedWhenInUse {
+            lastLocationRefresh = Date()
+            manager.requestLocation()
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        coordinate = locations.last?.coordinate
+        lastError = nil
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        lastError = error.localizedDescription
+    }
+
+    var statusText: String {
+        if let lastError {
+            return lastError
+        }
+        switch authorizationStatus {
+        case .notDetermined:
+            return "Tap to allow location suggestions."
+        case .authorizedAlways, .authorizedWhenInUse:
+            return coordinate == nil ? "Finding you..." : "Ready for nearby ideas."
+        case .denied, .restricted:
+            return "Enable location in Settings."
+        @unknown default:
+            return "Location unavailable."
+        }
+    }
+
+    var permissionActionText: String {
+        switch authorizationStatus {
+        case .notDetermined:
+            return "Use Current Location"
+        case .denied, .restricted:
+            return "Location Disabled"
+        default:
+            return "Finding Location"
+        }
+    }
+
+    var permissionSymbolName: String {
+        switch authorizationStatus {
+        case .denied, .restricted:
+            return "location.slash.fill"
+        default:
+            return "location.fill"
+        }
+    }
+}
+
+private struct ExploreActionItem: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let prompt: String
+    let symbolName: String
+
+    init(title: String, subtitle: String, prompt: String, symbolName: String) {
+        self.id = "\(title)-\(prompt)"
+        self.title = title
+        self.subtitle = subtitle
+        self.prompt = prompt
+        self.symbolName = symbolName
+    }
+}
+
+private struct ExploreCategory: Identifiable, Hashable {
+    var id: String { title }
+    let title: String
+    let cardStyle: ExploreCardStyle
+    let items: [ExploreActionItem]
+}
+
+private enum ExploreCardStyle: Hashable {
+    case compact
+    case square
+
+    var width: CGFloat {
+        switch self {
+        case .compact: return 156
+        case .square: return 260
+        }
+    }
+
+    var height: CGFloat {
+        switch self {
+        case .compact: return 190
+        case .square: return 148
+        }
+    }
+
+    var cornerRadius: CGFloat {
+        switch self {
+        case .compact: return 26
+        case .square: return 24
+        }
+    }
+
+    var padding: CGFloat {
+        switch self {
+        case .compact: return 16
+        case .square: return 14
+        }
+    }
+
+    var titleSize: CGFloat {
+        switch self {
+        case .compact: return 16
+        case .square: return 15
+        }
+    }
+
+    var iconSize: CGFloat {
+        switch self {
+        case .compact: return 17
+        case .square: return 16
+        }
+    }
+
+    var iconWeight: Font.Weight {
+        switch self {
+        case .compact: return .semibold
+        case .square: return .heavy
+        }
+    }
+
+    var iconForegroundStyle: Color {
+        switch self {
+        case .compact: return TodoCardStyle.primaryBlue
+        case .square: return .white
+        }
+    }
+
+    func iconBackgroundColor(for item: ExploreActionItem) -> Color {
+        switch self {
+        case .compact:
+            return TodoCardStyle.primaryBlueTint
+        case .square:
+            let palette: [Color] = [
+                Color(red: 0.00, green: 0.48, blue: 1.00),
+                Color(red: 0.20, green: 0.78, blue: 0.35),
+                Color(red: 1.00, green: 0.58, blue: 0.00),
+                Color(red: 0.69, green: 0.32, blue: 0.87),
+                Color(red: 1.00, green: 0.23, blue: 0.19),
+                Color(red: 0.00, green: 0.78, blue: 0.75)
+            ]
+            let seed = item.title.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+            return palette[seed % palette.count]
+        }
     }
 }
 
@@ -643,7 +1731,7 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .todo: return "Tasks"
         case .scheduled: return "Scheduled"
-        case .done: return "Done"
+        case .done: return "Explore"
         }
     }
 
@@ -651,7 +1739,7 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .todo: return "circle"
         case .scheduled: return "clock.arrow.trianglehead.counterclockwise.rotate.90"
-        case .done: return "checkmark.circle.fill"
+        case .done: return "menucard"
         }
     }
 
@@ -664,7 +1752,7 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
         case .scheduled:
             return false
         case .done:
-            return status == .done
+            return false
         }
     }
 }
@@ -990,6 +2078,8 @@ private struct TodoCard: View {
             .id(statusText)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
             .animation(.smooth(duration: 0.25), value: statusText)
+        } else if todo.status == .done {
+            EmptyView()
         } else {
             HStack(alignment: .center, spacing: 10) {
                 HStack(alignment: .center, spacing: 8) {
@@ -1315,7 +2405,7 @@ private struct EmptyState: View {
         switch section {
         case .todo: return "checklist"
         case .scheduled: return "clock.arrow.trianglehead.counterclockwise.rotate.90"
-        case .done: return "checkmark.seal"
+        case .done: return "menucard"
         }
     }
 
@@ -1323,7 +2413,7 @@ private struct EmptyState: View {
         switch section {
         case .todo: return "No tasks yet"
         case .scheduled: return "No scheduled tasks"
-        case .done: return "Nothing done yet"
+        case .done: return "Explore"
         }
     }
 
@@ -1334,7 +2424,7 @@ private struct EmptyState: View {
         case .scheduled:
             return "Recurring automations like daily email checks will appear here when the agent sets them up."
         case .done:
-            return "Completed tasks will show up here."
+            return "New discovery tools will live here soon."
         }
     }
 }

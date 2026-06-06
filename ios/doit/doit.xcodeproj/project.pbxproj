@@ -485,6 +485,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "doit uses the camera to attach photos to your tasks.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "doit uses your location to suggest nearby tasks and automations.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "doit uses the microphone to capture voice notes that we transcribe into your task.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "doit attaches selected photos to your tasks.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
@@ -523,6 +524,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "doit uses the camera to attach photos to your tasks.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "doit uses your location to suggest nearby tasks and automations.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "doit uses the microphone to capture voice notes that we transcribe into your task.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "doit attaches selected photos to your tasks.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
