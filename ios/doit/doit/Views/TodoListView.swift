@@ -220,7 +220,7 @@ struct TodoListView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Profile")
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             .padding(.top, 10)
         }
     }
@@ -343,32 +343,17 @@ struct TodoListView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                ExploreSectionHeader(title: "Location")
-                ExploreHorizontalRow {
-                    LocationMapTile(locationProvider: locationProvider)
-                    ForEach(locationActions) { item in
-                        ExploreActionTile(item: item, style: .compact) {
-                            openSuggestedTask(item.prompt)
-                        }
+                ExploreLocationCard(
+                    locationProvider: locationProvider,
+                    actions: Array(locationActions.prefix(3)),
+                    onSelectAction: { item in
+                        openSuggestedTask(item.prompt)
                     }
-                }
+                )
 
-                ExploreSectionHeader(title: "Connections")
-                ExploreHorizontalRow {
-                    if exploreToolkitsLoading && exploreToolkits.isEmpty {
-                        ForEach(0..<3, id: \.self) { _ in
-                            ExploreConnectionSkeletonCard()
-                        }
-                    } else {
-                        ForEach(exploreToolkits) { toolkit in
-                            ExploreConnectionCard(
-                                toolkit: toolkit,
-                                busy: exploreBusySlug == toolkit.slug,
-                                onConnect: { beginExploreConnect(toolkit) },
-                                onDisconnect: { Task { await disconnectExploreToolkit(toolkit) } }
-                            )
-                        }
-                    }
+                ExploreConnectionsPromoCard {
+                    playLightHaptic()
+                    presentSettings()
                 }
 
                 ForEach(exploreCategories) { category in
@@ -387,7 +372,6 @@ struct TodoListView: View {
             .padding(.bottom, 96)
         }
         .refreshable {
-            await loadExploreToolkits(showSpinner: false, force: true)
             locationProvider.refreshIfAuthorized()
         }
     }
@@ -399,11 +383,18 @@ struct TodoListView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 10) {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10)
+                        ],
+                        spacing: 10
+                    ) {
                         if let loadError = store.loadError {
                             Text(loadError)
                                 .foregroundStyle(.red)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .gridCellColumns(2)
                         }
                         ForEach(store.cronJobs) { job in
                             CronJobCard(
@@ -418,6 +409,7 @@ struct TodoListView: View {
                                 },
                                 onDelete: { Task { await store.deleteCronJob(job.id) } }
                             )
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
                             .id(cronJobRefreshID(for: job))
                             .contextMenu {
                                 Button(role: .destructive) {
@@ -756,7 +748,6 @@ struct TodoListView: View {
 
     private func prepareExploreIfNeeded() async {
         locationProvider.refreshIfAuthorized()
-        await loadExploreToolkits()
     }
 
     private func loadExploreToolkits(showSpinner: Bool = true, force: Bool = false) async {
@@ -1213,6 +1204,220 @@ private struct ExploreHorizontalRow<Content: View>: View {
         }
         .padding(.horizontal, -16)
         .scrollClipDisabled()
+    }
+}
+
+private struct ExploreLocationCard: View {
+    @ObservedObject var locationProvider: LocationProvider
+    let actions: [ExploreActionItem]
+    let onSelectAction: (ExploreActionItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                LocationMapSquareTile(locationProvider: locationProvider)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    LocationInfoPill(title: "Home address", subtitle: "Add home")
+                    LocationInfoPill(title: "Work, school etc.", subtitle: "Add place")
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+
+            VStack(spacing: 8) {
+                ForEach(actions) { item in
+                    LocationSuggestionRow(item: item) {
+                        onSelectAction(item)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+    }
+}
+
+private struct LocationMapSquareTile: View {
+    @ObservedObject var locationProvider: LocationProvider
+
+    private var coordinate: CLLocationCoordinate2D? {
+        locationProvider.coordinate
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Group {
+                if let coordinate {
+                    Map(
+                        coordinateRegion: .constant(region(for: coordinate)),
+                        interactionModes: [],
+                        showsUserLocation: true
+                    )
+                    .allowsHitTesting(false)
+                } else {
+                    permissionContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.88, green: 0.94, blue: 1.0),
+                                    Color(red: 0.95, green: 0.98, blue: 0.96)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                }
+            }
+
+            Text("Monitoring...")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(8)
+        }
+        .frame(width: 142, height: 142)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            locationProvider.requestAuthorizationOrLocation()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Location map")
+    }
+
+    private var permissionContent: some View {
+        VStack(spacing: 8) {
+            Image(systemName: locationProvider.permissionSymbolName)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(TodoCardStyle.primaryBlue)
+                .frame(width: 50, height: 50)
+                .background(Color.white.opacity(0.75), in: Circle())
+
+            Text(locationProvider.permissionActionText)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .padding(10)
+    }
+
+    private func region(for coordinate: CLLocationCoordinate2D) -> MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 0.012, longitudeDelta: 0.012)
+        )
+    }
+}
+
+private struct LocationInfoPill: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text(subtitle)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private struct LocationSuggestionRow: View {
+    let item: ExploreActionItem
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Image(systemName: item.symbolName)
+                    .font(.system(size: 14, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(TodoCardStyle.primaryBlue, in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    Text(item.subtitle)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ExploreConnectionsPromoCard: View {
+    let onSetup: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Image("Connections_Header")
+                .resizable()
+                .scaledToFill()
+                .frame(maxWidth: .infinity)
+                .frame(height: 152)
+                .clipped()
+                .padding(.top, -2)
+
+            VStack(alignment: .leading, spacing: 16) {
+                Spacer()
+                    .frame(height: 10)
+
+                Text("Connect your favorite tools to help doit get more done for you.")
+                    .font(.system(size: 24, weight: .medium, design: .rounded))
+                    .foregroundStyle(.black)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+
+                Button(action: onSetup) {
+                    Text("Setup connections")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(Color.black, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 }
 
@@ -1731,7 +1936,7 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .todo: return "Tasks"
         case .scheduled: return "Scheduled"
-        case .done: return "Explore"
+        case .done: return "Passbook"
         }
     }
 
@@ -1798,7 +2003,7 @@ private struct CronJobCard: View {
 
     private static let scheduleSymbol =
         "clock.arrow.trianglehead.counterclockwise.rotate.90"
-    private static let cornerRadius: CGFloat = 18
+    private static let cornerRadius: CGFloat = 30
     private static let footerBackground = Color(
         red: 0xF6 / 255,
         green: 0xF7 / 255,
@@ -1813,24 +2018,26 @@ private struct CronJobCard: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(TodoCardStyle.muted)
                         .frame(width: 20, height: 20)
-                    HStack(spacing: 8) {
-                        Text(job.scheduleLabel)
-                            .font(.system(size: 16, weight: .medium, design: .rounded))
-                            .foregroundStyle(TodoCardStyle.muted)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 8)
-                        topRowTrailing
-                            .frame(
-                                width: TodoCardStyle.connectionLogoChipSize,
-                                height: TodoCardStyle.connectionLogoChipSize
-                            )
-                    }
+
+                    Spacer(minLength: 8)
+
+                    topRowTrailing
+                        .frame(
+                            width: TodoCardStyle.connectionLogoChipSize,
+                            height: TodoCardStyle.connectionLogoChipSize
+                        )
                 }
+
+                Text(job.scheduleLabel)
+                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                    .foregroundStyle(TodoCardStyle.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button(action: onOpen) {
                     Text(job.name)
-                        .font(.system(size: 20, weight: .regular, design: .rounded))
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.black)
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
@@ -1844,14 +2051,15 @@ private struct CronJobCard: View {
                 UnevenRoundedRectangle(
                     cornerRadii: .init(
                         topLeading: Self.cornerRadius,
-                        bottomLeading: Self.cornerRadius,
-                        bottomTrailing: Self.cornerRadius,
+                        bottomLeading: 0,
+                        bottomTrailing: 0,
                         topTrailing: Self.cornerRadius
                     ),
                     style: .continuous
                 )
                 .fill(Color.white)
             }
+            .frame(maxWidth: .infinity, minHeight: 148, alignment: .topLeading)
 
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1868,18 +2076,26 @@ private struct CronJobCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 if job.state != .completed {
-                    PillButton(
-                        label: job.state == .paused ? "Resume" : "Pause",
-                        style: .neutral,
-                        action: onTogglePause
-                    )
+                    Button(action: onTogglePause) {
+                        Image(systemName: job.state == .paused ? "play.fill" : "pause")
+                            .font(.system(size: 15, weight: .heavy))
+                            .foregroundStyle(Color.black)
+                            .frame(width: 38, height: 38)
+                            .background(Color.white, in: Circle())
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(job.state == .paused ? "Resume schedule" : "Pause schedule")
                 }
             }
             .padding(.horizontal, TodoCardStyle.cardPadding)
             .padding(.vertical, 8)
             .background(Self.footerBackground)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, minHeight: 214, alignment: .topLeading)
         .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .background {
             RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
