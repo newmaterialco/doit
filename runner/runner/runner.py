@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from .config import Config, load
-from .db import DB
+from .db import AgentModelSetting, DB
 from .activity import AgentActivityService, ActivitySnapshot
 from .events import (
     ArtifactRequest,
@@ -79,6 +79,13 @@ def _resolve_attachment_urls(db: DB, todo_id: str) -> list[str]:
         if url:
             urls.append(url)
     return urls
+
+
+def _model_setting_label(setting: AgentModelSetting | None) -> str:
+    if setting is None:
+        return "profile-default"
+    status = f" status={setting.apply_status}" if setting.apply_status else ""
+    return f"{setting.provider}/{setting.model}{status}"
 
 
 async def run_one_todo(
@@ -167,13 +174,42 @@ async def run_one_todo(
         )
         return
 
+    model_setting = db.get_agent_model_setting(user_id)
     try:
         setting = db.get_pending_agent_model_setting(user_id)
         if setting is not None:
+            log.info(
+                "applying model setting user=%s profile=%s model=%s endpoint=%s:%s",
+                user_id,
+                endpoint.profile_name,
+                _model_setting_label(setting),
+                endpoint.host,
+                endpoint.port,
+            )
             AgentModelApplier(cfg).apply(endpoint.profile_name, setting)
             db.update_agent_model_status(user_id, status="applied")
+            model_setting = AgentModelSetting(
+                provider=setting.provider,
+                model=setting.model,
+                apply_status="applied",
+            )
+        log.info(
+            "Hermes model context user=%s profile=%s model=%s endpoint=%s:%s",
+            user_id,
+            endpoint.profile_name,
+            _model_setting_label(model_setting),
+            endpoint.host,
+            endpoint.port,
+        )
     except Exception as e:
-        log.exception("failed to apply model setting for user %s", user_id)
+        log.exception(
+            "failed to apply model setting user=%s profile=%s model=%s endpoint=%s:%s",
+            user_id,
+            endpoint.profile_name,
+            _model_setting_label(model_setting),
+            endpoint.host,
+            endpoint.port,
+        )
         db.update_agent_model_status(user_id, status="failed", error=str(e))
         db.update_todo(
             todo_id,
@@ -287,10 +323,12 @@ async def run_one_todo(
             {"hermes_run_id": run_id, "hermes_session_id": session_id},
         )
         log.info(
-            "todo %s started run %s on session %s",
+            "todo %s started run %s on session %s profile=%s model=%s",
             todo_id,
             run_id,
             session_id,
+            endpoint.profile_name,
+            _model_setting_label(model_setting),
         )
 
         cancel_event = asyncio.Event()
@@ -373,7 +411,14 @@ async def run_one_todo(
             )
 
     except httpx.HTTPError as e:
-        log.exception("hermes call failed for todo %s", todo_id)
+        log.exception(
+            "hermes call failed for todo %s profile=%s endpoint=%s:%s model=%s",
+            todo_id,
+            endpoint.profile_name,
+            endpoint.host,
+            endpoint.port,
+            _model_setting_label(model_setting),
+        )
         terminal_status = "failed"
         db.update_todo(
             todo_id,
@@ -534,6 +579,17 @@ async def prepare_one_todo(
         # task card without the user having to tap Do it first.
         db.update_todo(todo_id, {"status": "requested"})
         return
+
+    model_setting = db.get_agent_model_setting(user_id)
+    log.info(
+        "preparing with Hermes model context todo=%s user=%s profile=%s model=%s endpoint=%s:%s",
+        todo_id,
+        user_id,
+        endpoint.profile_name,
+        _model_setting_label(model_setting),
+        endpoint.host,
+        endpoint.port,
+    )
 
     memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
     with suppress(Exception):

@@ -94,6 +94,9 @@ final class TodoStore {
     /// the store knows it should keep `interactionsByTodoID[todoID]` fresh
     /// rather than only the lightweight open-interaction summary.
     private var trackedTodoIDs: Set<UUID> = []
+    /// Creation timestamp for `pendingNewTodoID`, used to distinguish a cron
+    /// conversion from older scheduled jobs already in the list.
+    private var pendingNewTodoCreatedAt: Date?
 
     // MARK: - Lifecycle
 
@@ -128,6 +131,7 @@ final class TodoStore {
         agentActivityByTodoID = [:]
         trackedTodoIDs = []
         pendingNewTodoID = nil
+        pendingNewTodoCreatedAt = nil
         loadError = nil
     }
 
@@ -154,6 +158,16 @@ final class TodoStore {
     /// that never started).
     func agentActivity(for todoID: UUID) -> AgentActivity? {
         agentActivityByTodoID[todoID]
+    }
+
+    /// The likely scheduled row produced by the runner converting the current
+    /// pending todo, if one has landed through realtime or a refresh.
+    func pendingNewTodoCronCandidateID() -> UUID? {
+        guard pendingNewTodoID != nil,
+              let pendingNewTodoCreatedAt else { return nil }
+        return cronJobs.first { job in
+            job.created_at >= pendingNewTodoCreatedAt.addingTimeInterval(-10)
+        }?.id
     }
 
     // MARK: - Detail tracking
@@ -301,14 +315,22 @@ final class TodoStore {
         }
     }
 
-    func refreshCronJob(id: UUID) async {
+    @discardableResult
+    func refreshCronJob(id: UUID, removeIfMissing: Bool = true) async -> Bool {
         do {
             let job = try await CronJobsAPI.fetch(id)
+            print("[store] refreshCronJob id=\(id) state=\(job.state.rawValue) name=\(job.name)")
             upsertCronJob(job)
+            return true
         } catch CronJobsAPIError.notFound {
-            removeCronJobLocal(id: id)
+            print("[store] refreshCronJob id=\(id) not found")
+            if removeIfMissing {
+                removeCronJobLocal(id: id)
+            }
+            return false
         } catch {
             print("[store] refreshCronJob(\(id)) failed: \(error)")
+            return false
         }
     }
 
@@ -361,7 +383,43 @@ final class TodoStore {
     /// update the same row and the realtime path will reconcile.
     func insertOptimistic(_ todo: Todo) {
         pendingNewTodoID = todo.id
+        pendingNewTodoCreatedAt = todo.created_at
         upsertTodo(todo)
+    }
+
+    /// Complete the visual handoff when the pending todo has disappeared and
+    /// its replacement cron job is already present.
+    @discardableResult
+    func completePendingNewTodoCronHandoffIfReady() -> Bool {
+        guard let pending = pendingNewTodoID else {
+            return false
+        }
+        let candidate = pendingNewTodoCronCandidateID()
+        let stillHasTodo = todos.contains(where: { $0.id == pending })
+        guard candidate != nil, !stillHasTodo else {
+            print("[store][cron_handoff] waiting pending=\(pending) candidate=\(candidate?.uuidString ?? "-") stillHasTodo=\(stillHasTodo)")
+            return false
+        }
+        print("[store][cron_handoff] complete pending=\(pending) cron=\(candidate?.uuidString ?? "-")")
+        clearPendingNewTodo()
+        return true
+    }
+
+    /// Cron creation and todo deletion can arrive in either order. When the
+    /// cron lands first, fetch the pending todo once so the store observes the
+    /// deletion instead of leaving a stale tappable prep card in Tasks.
+    @discardableResult
+    func reconcilePendingNewTodoCronHandoff() async -> Bool {
+        guard let pending = pendingNewTodoID,
+              let candidate = pendingNewTodoCronCandidateID() else {
+            return false
+        }
+        print("[store][cron_handoff] reconcile pending=\(pending) cron=\(candidate)")
+        if completePendingNewTodoCronHandoffIfReady() {
+            return true
+        }
+        await refreshTodo(id: pending)
+        return completePendingNewTodoCronHandoffIfReady()
     }
 
     func setStatus(_ id: UUID, _ status: TodoStatus) async {
@@ -522,8 +580,13 @@ final class TodoStore {
             // flow keeps `pendingNewTodoID` set during preparing → requested
             // → running so the cron-conversion handoff in `TodoListView`
             // can still detect "row vanished" and switch sections.
-            pendingNewTodoID = nil
+            clearPendingNewTodo()
         }
+    }
+
+    private func clearPendingNewTodo() {
+        pendingNewTodoID = nil
+        pendingNewTodoCreatedAt = nil
     }
 
     private func patchTodoLocal(id: UUID, _ mutate: (inout Todo) -> Void) {
@@ -560,6 +623,15 @@ final class TodoStore {
         cronJobs.removeAll { $0.id == id }
     }
 
+    private func recoverCronJobAfterRealtimeMiss(id: UUID) async {
+        try? await Task.sleep(for: .milliseconds(450))
+        if await refreshCronJob(id: id, removeIfMissing: false) {
+            return
+        }
+        print("[store] realtime cron id=\(id) still missing; running full refresh")
+        await loadAll()
+    }
+
     // MARK: - Realtime callbacks (wired into TodoRealtimeHub)
 
     private func makeUserFeedHandlers() -> TodoRealtimeHub.UserFeedHandlers {
@@ -587,8 +659,21 @@ final class TodoStore {
             onArtifactChange: { [weak self] todoID in
                 await self?.refreshArtifacts(for: todoID)
             },
-            onCronJobChange: { [weak self] id in
-                await self?.refreshCronJob(id: id)
+            onCronJobChange: { [weak self] id, realtimeCronJob in
+                guard let self else { return }
+                if let realtimeCronJob {
+                    print("[store] realtime cron id=\(id) state=\(realtimeCronJob.state.rawValue) name=\(realtimeCronJob.name)")
+                    self.upsertCronJob(realtimeCronJob)
+                } else {
+                    print("[store] realtime cron id=\(id) missing payload; fetching")
+                }
+                let didRefresh = await self.refreshCronJob(
+                    id: id,
+                    removeIfMissing: realtimeCronJob == nil
+                )
+                if !didRefresh, realtimeCronJob == nil {
+                    await self.recoverCronJobAfterRealtimeMiss(id: id)
+                }
             },
             onCronJobDelete: { [weak self] id in
                 await MainActor.run { self?.removeCronJobLocal(id: id) }
@@ -635,6 +720,12 @@ final class TodoStore {
         existing: AgentActivity?
     ) -> AgentActivity {
         guard realtime.payload == nil, let existing else { return realtime }
+        let sameRun = realtime.hermes_run_id == existing.hermes_run_id
+        let isFreshRunStart = realtime.phase == AgentActivityPhase.starting.rawValue
+        let resumedFromPaused = existing.resolvedState == .paused && realtime.isRunning
+        guard sameRun, !isFreshRunStart, !resumedFromPaused else {
+            return realtime
+        }
         return AgentActivity(
             todo_id: realtime.todo_id,
             user_id: realtime.user_id,

@@ -31,6 +31,7 @@ class Config:
     hermes_restart_command_template: str
     openai_api_key: str
     anthropic_api_key: str
+    openrouter_api_key: str
     apns_key_path: str
     apns_key_id: str
     apns_team_id: str
@@ -54,6 +55,7 @@ def load() -> Config:
         ),
         openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
         apns_key_path=os.environ.get("APNS_KEY_PATH", ""),
         apns_key_id=os.environ.get("APNS_KEY_ID", ""),
         apns_team_id=os.environ.get("APNS_TEAM_ID", ""),

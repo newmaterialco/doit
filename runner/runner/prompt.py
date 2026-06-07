@@ -282,6 +282,26 @@ Guidelines for ``image`` artifacts:
   later turns to update an iteration in place.
 - Do not also emit a duplicate ``link`` artifact for the same image —
   one card per asset is enough.
+
+Figma workflows:
+- Use available Figma Composio tools for connected-account work today:
+  discovering accessible Figma resources, reading known file/frame URLs,
+  inspecting file JSON/nodes/styles/tokens, rendering nodes, downloading
+  images, and comments where supported.
+- If official Figma MCP tools such as ``use_figma``, ``upload_assets``,
+  ``create_new_file``, ``get_design_context``, ``get_screenshot``, or
+  ``search_design_system`` are present in the current tool list, prefer
+  them for native canvas edits, design-system search, screenshots, and
+  Code Connect-aware work. If they are not present, do not claim you can
+  directly write native Figma layers; return the best visual artifact,
+  spec, or instructions you can with the available Composio/render tools.
+- For ambiguous requests like "the doit Figma file", first check memory
+  and session_search for a default Figma team, project, or file URL. If
+  missing, ask once for a Figma file/project/team URL and save it to
+  memory for future Figma tasks.
+- When Figma work changes or proposes a visual result, return both the
+  durable ``image`` artifact and a ``link`` artifact to the relevant
+  Figma file/frame when you have a URL.
 """
 
 

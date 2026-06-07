@@ -36,6 +36,7 @@ def _derive_title(text: str) -> str:
 class AgentModelSetting:
     provider: str
     model: str
+    apply_status: str | None = None
 
 
 class DB:
@@ -172,7 +173,7 @@ class DB:
     def get_pending_agent_model_setting(self, user_id: str) -> AgentModelSetting | None:
         settings_resp = (
             self._client.table("agent_model_settings")
-            .select("provider, model")
+            .select("provider, model, apply_status")
             .eq("user_id", user_id)
             .eq("apply_status", "pending")
             .limit(1)
@@ -186,6 +187,26 @@ class DB:
         return AgentModelSetting(
             provider=setting["provider"],
             model=setting["model"],
+            apply_status=setting.get("apply_status"),
+        )
+
+    def get_agent_model_setting(self, user_id: str) -> AgentModelSetting | None:
+        settings_resp = (
+            self._client.table("agent_model_settings")
+            .select("provider, model, apply_status")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        settings = settings_resp.data or []
+        if not settings:
+            return None
+        setting = settings[0]
+
+        return AgentModelSetting(
+            provider=setting["provider"],
+            model=setting["model"],
+            apply_status=setting.get("apply_status"),
         )
 
     def get_todo(self, todo_id: str) -> dict | None:

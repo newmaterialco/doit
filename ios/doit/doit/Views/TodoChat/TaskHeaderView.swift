@@ -158,8 +158,13 @@ struct TaskHeaderView: View {
 
     private var hasContentBelowTitle: Bool {
         if let activity = agentActivity, shouldShowActivityCard(activity) { return true }
-        if let status = agentStatus, !status.isEmpty { return true }
+        if shouldShowAgentStatus { return true }
         return !artifacts.isEmpty
+    }
+
+    private var shouldShowAgentStatus: Bool {
+        guard let status = agentStatus, !status.isEmpty else { return false }
+        return agentActivity?.isRunning != true
     }
 
     /// Show the activity card whenever we have a snapshot, including
@@ -197,7 +202,7 @@ struct TaskHeaderView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
 
-                if let status = agentStatus, !status.isEmpty {
+                if shouldShowAgentStatus, let status = agentStatus {
                     agentStatusBox(text: status)
                         .connectorAnchor()
                         .transition(.opacity.combined(with: .move(edge: .top)))

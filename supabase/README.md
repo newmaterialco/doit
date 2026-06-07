@@ -89,4 +89,5 @@ catalog. Provider API keys are global runner secrets, not app input.
 | `COMPOSIO_API_KEY` | Edge Function secret + VM `.env` for Hermes | OAuth proxy |
 | `OPENAI_API_KEY` | Runner (VM env) | global Doit-paid OpenAI models |
 | `ANTHROPIC_API_KEY` | Runner (VM env) | global Doit-paid Claude models |
+| `OPENROUTER_API_KEY` | Runner (VM env) | global Doit-paid OpenRouter models |
 | Apple `.p8` (APNs) | Runner (VM env) | push notifications |

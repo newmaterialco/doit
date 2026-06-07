@@ -1,6 +1,7 @@
 """Thin Hermes API client: create runs and consume their SSE event stream."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from typing import AsyncIterator
 import httpx
 
 log = logging.getLogger(__name__)
+
+_START_RUN_CONNECT_RETRY_DELAYS = (0.5, 1.0, 2.0)
 
 
 @dataclass
@@ -70,6 +73,17 @@ SYSTEM_INSTRUCTIONS = (
     "meta-tool to obtain an OAuth URL and clearly surface that URL in your "
     "reply so the user can approve it. After approval, continue and "
     "complete the task.\n\n"
+    "FIGMA. Figma is currently available through Composio tools in this "
+    "profile. Use those tools to discover accessible resources, inspect known "
+    "file/frame URLs, read design data, render nodes, download images, and "
+    "comment where supported. The official Figma MCP server has richer canvas "
+    "editing tools (use_figma, upload_assets, design-system search), but this "
+    "Hermes profile does not have authenticated access to that server yet; do "
+    "not claim you can write native Figma layers unless an official Figma MCP "
+    "tool is actually available in the current tool list. For visual Figma "
+    "deliverables, return an image artifact and a Figma link when you have "
+    "one. If the user gives a team, project, or file URL that should be reused "
+    "later, save it to memory as their default Figma context.\n\n"
     "ASKING THE USER. You can pause and ask the user something before "
     "continuing. Do this whenever you need approval, a choice, or "
     "clarification — for example before sending an email or message, "
@@ -183,13 +197,44 @@ class HermesClient:
         headers: dict[str, str] | None = None
         if session_key:
             headers = {"X-Hermes-Session-Key": session_key}
-        resp = await self._client.post("/v1/runs", json=body, headers=headers)
+        log.info(
+            "starting Hermes run profile=%s endpoint=%s session_id=%s instructions=%s input_chars=%s",
+            self._endpoint.profile_name,
+            self._endpoint.base_url,
+            session_id or "",
+            "custom" if instructions is not None else "default",
+            len(todo_text),
+        )
+        resp = await self._post_start_run(body, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         run_id = data.get("run_id") or data.get("id")
         if not run_id:
             raise RuntimeError(f"hermes /v1/runs missing run_id: {data}")
         return str(run_id)
+
+    async def _post_start_run(
+        self,
+        body: dict,
+        *,
+        headers: dict[str, str] | None,
+    ) -> httpx.Response:
+        for attempt, delay in enumerate((0.0, *_START_RUN_CONNECT_RETRY_DELAYS), start=1):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                return await self._client.post("/v1/runs", json=body, headers=headers)
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                if attempt > len(_START_RUN_CONNECT_RETRY_DELAYS):
+                    raise
+                log.warning(
+                    "Hermes start_run connect failed; retrying profile=%s endpoint=%s attempt=%s error=%s",
+                    self._endpoint.profile_name,
+                    self._endpoint.base_url,
+                    attempt,
+                    e,
+                )
+        raise RuntimeError("unreachable Hermes start_run retry loop")
 
     async def stop_run(self, run_id: str) -> None:
         try:

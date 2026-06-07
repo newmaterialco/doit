@@ -114,7 +114,6 @@ struct TodoDetailView: View {
                     attachmentsByID: attachmentsByID,
                     attachmentURLs: attachmentURLs,
                     submittingOptionID: submittingOptionID,
-                    isAgentRunning: (current?.status.isActive ?? false) || sending,
                     photoSelections: $photoSelections,
                     canAddMoreAttachments: canAddMoreAttachments,
                     maxNewAttachments: max(1, TodoDetailView.maxAttachments - attachments.count),

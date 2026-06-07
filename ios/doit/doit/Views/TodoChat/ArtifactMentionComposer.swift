@@ -425,6 +425,7 @@ struct MentionTextView: UIViewRepresentable {
     @Binding var mentionQuery: String?
     let placeholder: String
     let isEnabled: Bool
+    let moveCursorToEndRequest: UUID?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -476,6 +477,12 @@ struct MentionTextView: UIViewRepresentable {
             coord.applyDraft(draft, to: uiView)
         }
 
+        if let request = moveCursorToEndRequest,
+           coord.lastMoveCursorToEndRequestID != request {
+            coord.lastMoveCursorToEndRequestID = request
+            coord.moveCursorToEnd(in: uiView)
+        }
+
         // Apply pending insertion when we see a request the
         // coordinator hasn't consumed yet.
         if let request = pendingInsertion,
@@ -499,6 +506,7 @@ struct MentionTextView: UIViewRepresentable {
         weak var textView: MentionTextViewBacking?
         var lastWrittenDraft: MentionDraft = .empty
         var lastConsumedRequestID: UUID?
+        var lastMoveCursorToEndRequestID: UUID?
 
         init(_ parent: MentionTextView) {
             self.parent = parent
@@ -522,6 +530,11 @@ struct MentionTextView: UIViewRepresentable {
             lastWrittenDraft = draft
             tv.placeholderLabel.isHidden = !attributed.string.isEmpty
             tv.invalidateIntrinsicContentSize()
+        }
+
+        func moveCursorToEnd(in tv: MentionTextViewBacking) {
+            tv.selectedRange = NSRange(location: tv.attributedText.length, length: 0)
+            tv.scrollRangeToVisible(tv.selectedRange)
         }
 
         private func makeAttributed(draft: MentionDraft, font: UIFont) -> NSAttributedString {

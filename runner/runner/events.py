@@ -112,6 +112,15 @@ _ACTIVITY_RE = re.compile(
     re.DOTALL,
 )
 
+_NOISY_ACTIVITY_PATTERNS = (
+    re.compile(r"https?://", re.IGNORECASE),
+    re.compile(r"\b(function_call|function_call_output|call_id|tool_call_id)\b", re.IGNORECASE),
+    re.compile(r"\b(response\.output_item|hermes\.tool|run\.completed)\b", re.IGNORECASE),
+    re.compile(r"\b(frompath|topath|cmd|argv|stdin|stdout|stderr)\s*=", re.IGNORECASE),
+    re.compile(r"^\s*(event|data|id|retry)\s*:", re.IGNORECASE),
+    re.compile(r"^\s*(cd|ls|rg|grep|python|python3|npm|pnpm|yarn|git|curl)\b", re.IGNORECASE),
+)
+
 
 @dataclass
 class InteractionRequest:
@@ -341,8 +350,9 @@ def translate(event_name: str, data: dict) -> Translated | None:
             or ACTIVITY_CLOSE in text
         ):
             return None
-        if text:
-            return Translated(step_kind="thought", text=_truncate(text, 1000))
+        activity = parse_public_reasoning(text)
+        if activity:
+            return Translated(step_kind="thought", text=activity)
 
     if actual_event == "run.completed":
         text = str(data.get("output") or "").strip()
@@ -565,6 +575,71 @@ def parse_activity(text: str) -> str | None:
     if len(value) > 120:
         value = value[:119].rstrip() + "…"
     return value
+
+
+def parse_public_reasoning(text: str) -> str | None:
+    """Extract a safe public status line from upstream reasoning text.
+
+    Hermes sometimes emits `reasoning.available` with useful prose like
+    "Looking through the Figma file now." When it instead contains raw
+    structured/tool/code output, we drop it and let tool events or the
+    heartbeat drive the UI.
+    """
+    if not text:
+        return None
+    if any(marker in text for marker in (
+        INTERACTION_OPEN,
+        INTERACTION_CLOSE,
+        ARTIFACT_OPEN,
+        ARTIFACT_CLOSE,
+        TASKS_OPEN,
+        TASKS_CLOSE,
+        ACTIVITY_OPEN,
+        ACTIVITY_CLOSE,
+    )):
+        return None
+    value = normalize_visible_reply(text)
+    if not value:
+        return None
+    value = " ".join(value.split())
+    if not _looks_like_public_activity(value):
+        return None
+    return _first_public_activity_sentence(value)
+
+
+def _looks_like_public_activity(text: str) -> bool:
+    stripped = text.strip()
+    if len(stripped) < 8:
+        return False
+    if len(stripped.split()) < 3:
+        return False
+    if stripped.startswith(("```", "{", "}", "[", "]", "<", ">")):
+        return False
+    if any(ch in stripped for ch in ("\x00", "\r")):
+        return False
+    lower = stripped.lower()
+    if lower in {"tool completed.", "tool completed", "thinking", "thinking..."}:
+        return False
+    if lower.startswith(("tool completed", "tool hit an issue", "error:", "traceback")):
+        return False
+    if any(pattern.search(stripped) for pattern in _NOISY_ACTIVITY_PATTERNS):
+        return False
+    # Reject dense structured blobs and code-like snippets while still
+    # allowing normal punctuation in short prose.
+    symbolic = sum(1 for ch in stripped if ch in "{}[]<>`$=|\\")
+    if symbolic >= 3:
+        return False
+    if stripped.count(":") >= 3 or stripped.count(",") >= 6:
+        return False
+    return True
+
+
+def _first_public_activity_sentence(text: str) -> str:
+    for sep in (". ", "! ", "? ", "\n", "; "):
+        idx = text.find(sep)
+        if 0 < idx < 180:
+            return text[: idx + 1].strip()
+    return _truncate(text, 180)
 
 
 def strip_activity(text: str) -> str:

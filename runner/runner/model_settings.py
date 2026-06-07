@@ -15,16 +15,19 @@ log = logging.getLogger(__name__)
 KEY_ENV_BY_PROVIDER = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 
 KEY_VALUE_ATTR_BY_PROVIDER = {
     "openai": "openai_api_key",
     "anthropic": "anthropic_api_key",
+    "openrouter": "openrouter_api_key",
 }
 
 HERMES_PROVIDER_BY_PROVIDER = {
     "openai": "openai-api",
     "anthropic": "anthropic",
+    "openrouter": "openrouter",
 }
 
 

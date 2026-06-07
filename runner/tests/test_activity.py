@@ -87,9 +87,28 @@ class AgentActivityServiceTests(unittest.TestCase):
         self.assertEqual(snap.phase, "starting")
         self.assertEqual(snap.state, "running")
         self.assertEqual(snap.title, "Starting agent…")
+        self.assertEqual(snap.detail, "Starting agent…")
+        self.assertEqual(snap.tool_category, "thinking")
         fields = snap.to_db_fields(hermes_run_id="run-1")
         self.assertEqual(fields["state"], "running")
         self.assertEqual(fields["hermes_run_id"], "run-1")
+        self.assertEqual(fields["payload"]["steps"], [])
+
+    def test_initial_snapshot_clears_stale_paused_question_payload(self) -> None:
+        paused_service = AgentActivityService()
+        paused = paused_service.observe(
+            Translated(step_kind="input_needed", text="Which screen should I update?")
+        )
+        assert paused is not None
+        self.assertEqual(len(paused.to_db_fields(hermes_run_id="run-1")["payload"]["steps"]), 1)
+
+        resumed_service = AgentActivityService()
+        fresh = resumed_service.initial(title="Starting agent…")
+        fields = fresh.to_db_fields(hermes_run_id="run-2")
+
+        self.assertEqual(fields["state"], "running")
+        self.assertEqual(fields["phase"], "starting")
+        self.assertIsNone(fields["completed_at"])
         self.assertEqual(fields["payload"]["steps"], [])
 
     def test_heartbeat_refreshes_latest_snapshot(self) -> None:

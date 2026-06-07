@@ -42,7 +42,7 @@ enum TodoRealtimeHub {
         /// Fires for `todo_artifacts` insert/update/delete; `todoID` is
         /// the parent todo.
         var onArtifactChange: (UUID) async -> Void = { _ in }
-        var onCronJobChange: (UUID) async -> Void = { _ in }
+        var onCronJobChange: (UUID, CronJob?) async -> Void = { _, _ in }
         var onCronJobDelete: (UUID) async -> Void = { _ in }
         /// Fires for `todo_agent_activity` insert/update; `todoID` is the
         /// parent todo (PK of the activity row). The store then fetches
@@ -271,13 +271,13 @@ enum TodoRealtimeHub {
         switch action {
         case .insert(let a):
             if let id = uuid(from: a.record, key: "id") {
-                await userHandlers.onCronJobChange(id)
+                await userHandlers.onCronJobChange(id, cronJob(from: a.record))
             } else {
                 await userHandlers.onUnknown()
             }
         case .update(let a):
             if let id = uuid(from: a.record, key: "id") {
-                await userHandlers.onCronJobChange(id)
+                await userHandlers.onCronJobChange(id, cronJob(from: a.record))
             } else {
                 await userHandlers.onUnknown()
             }
@@ -383,6 +383,41 @@ enum TodoRealtimeHub {
             created_at: createdAt,
             updated_at: updatedAt,
             completed_at: date(from: record["completed_at"]?.stringValue)
+        )
+    }
+
+    private static func cronJob(from record: [String: AnyJSON]) -> CronJob? {
+        guard let id = uuid(from: record, key: "id"),
+              let userID = uuid(from: record, key: "user_id"),
+              let name = record["name"]?.stringValue,
+              let prompt = record["prompt"]?.stringValue,
+              let schedule = record["schedule"]?.stringValue,
+              let rawState = record["state"]?.stringValue,
+              let state = CronJobState(rawValue: rawState),
+              let enabled = record["enabled"]?.boolValue,
+              let createdAt = date(from: record["created_at"]?.stringValue),
+              let updatedAt = date(from: record["updated_at"]?.stringValue) else {
+            return nil
+        }
+
+        return CronJob(
+            id: id,
+            user_id: userID,
+            name: name,
+            prompt: prompt,
+            schedule: schedule,
+            schedule_display: record["schedule_display"]?.stringValue,
+            connection_slug: record["connection_slug"]?.stringValue,
+            state: state,
+            enabled: enabled,
+            next_run_at: date(from: record["next_run_at"]?.stringValue),
+            last_run_at: date(from: record["last_run_at"]?.stringValue),
+            last_status: record["last_status"]?.stringValue,
+            original_prompt: record["original_prompt"]?.stringValue,
+            configuration_summary: record["configuration_summary"]?.stringValue,
+            timezone: record["timezone"]?.stringValue,
+            created_at: createdAt,
+            updated_at: updatedAt
         )
     }
 

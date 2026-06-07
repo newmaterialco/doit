@@ -19,7 +19,7 @@ struct AgentActivityCard: View {
         .compositingGroup()
         .frame(height: cardStackHeight)
         .frame(maxWidth: .infinity)
-        .animation(.smooth(duration: 0.28), value: activity.humanActivityText)
+        .animation(.smooth(duration: 0.28), value: activity.activityContentSignature)
         .animation(.smooth(duration: 0.28), value: isTaskActive)
         .animation(.smooth(duration: 0.28), value: activity.recentSteps.map(\.id))
     }
@@ -39,9 +39,9 @@ struct AgentActivityCard: View {
     }
 
     private var currentCard: AgentIntentCardModel {
-        if isTaskActive, activity.isTerminal {
+        if isTaskActive, !activity.isRunning {
             return AgentIntentCardModel(
-                id: "rerun-\(activity.todo_id.uuidString)-\(activity.updated_at.timeIntervalSince1970)",
+                id: "rerun-\(activity.todo_id.uuidString)-\(activity.activityContentSignature)",
                 title: "Starting agent…",
                 symbolName: AgentToolCategory.thinking.symbolName,
                 isCompleted: false
@@ -69,8 +69,8 @@ private struct AgentIntentCardModel: Identifiable, Hashable {
     }
 
     init(activity: AgentActivity) {
-        id = "current-\(activity.todo_id.uuidString)-\(activity.updated_at.timeIntervalSince1970)"
-        title = activity.humanActivityText
+        id = "current-\(activity.todo_id.uuidString)-\(activity.activityContentSignature)"
+        title = activity.primaryStatusText
         symbolName = activity.resolvedCategory.symbolName
         switch activity.resolvedState {
         case .completed:
@@ -84,7 +84,7 @@ private struct AgentIntentCardModel: Identifiable, Hashable {
 
     init(step: AgentActivityStep) {
         id = step.id
-        title = step.humanActivityText
+        title = step.primaryStatusText
         symbolName = step.tool_category.symbolName
         isCompleted = step.isCompleted
     }

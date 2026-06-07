@@ -148,6 +148,8 @@ class AgentActivityService:
             phase=phase,
             state="running",
             title=title,
+            detail=title,
+            tool_category="thinking",
             started_at=self._started_at,
             recent=list(self._recent),
         )
@@ -523,6 +525,9 @@ def _humanize_tool_name(tool_name: str | None) -> str:
         return "Running a tool"
     if tool_name == "text_to_speech":
         return "Generating spoken summary"
+    figma_label = _figma_tool_label(tool_name)
+    if figma_label is not None:
+        return figma_label
     tokens = _NAME_TOKEN_RE.findall(tool_name.lower())
     if not tokens:
         return "Running a tool"
@@ -542,6 +547,39 @@ def _humanize_tool_name(tool_name: str | None) -> str:
     if verb:
         return f"{verb} {target}".strip()
     return f"Using {target}".strip()
+
+
+def _figma_tool_label(tool_name: str) -> str | None:
+    """Friendly labels for official Figma MCP tool names.
+
+    The production profile currently uses Composio for Figma. If an
+    authenticated Figma MCP bridge is added later, these labels keep the
+    live activity UI from showing raw names like ``use_figma``.
+    """
+    name = tool_name.lower()
+    if name == "use_figma":
+        return "Editing Figma canvas"
+    if name == "upload_assets":
+        return "Uploading assets to Figma"
+    if name == "create_new_file":
+        return "Creating Figma file"
+    if name == "generate_diagram":
+        return "Generating FigJam diagram"
+    if name == "generate_figma_design":
+        return "Capturing UI to Figma"
+    if name == "get_design_context":
+        return "Reading Figma design context"
+    if name == "get_metadata":
+        return "Reading Figma structure"
+    if name == "get_screenshot":
+        return "Capturing Figma screenshot"
+    if name == "get_variable_defs":
+        return "Reading Figma variables"
+    if name == "search_design_system":
+        return "Searching Figma design system"
+    if name in {"get_libraries", "get_code_connect_map", "get_code_connect_suggestions"}:
+        return "Reading Figma component mappings"
+    return None
 
 
 _TOKEN_PRETTY_OVERRIDES: dict[str, str] = {

@@ -90,6 +90,41 @@ URL for this app; it does not carry the per-user session context.
 You won't connect any apps yet — that happens per user once the iOS app is
 running.
 
+### Figma: Composio today, official MCP later
+
+Doit currently enables Figma through the Composio `figma` toolkit. That path is
+good for connected-account file/resource access: discover Figma resources, read
+known files and nodes, render/download image exports, inspect styles/tokens, and
+comment where Composio exposes those actions.
+
+Figma's official remote MCP server (`https://mcp.figma.com/mcp`) is more
+powerful: it exposes tools such as `use_figma`, `upload_assets`,
+`create_new_file`, `get_design_context`, `get_screenshot`, `search_design_system`,
+and Code Connect-related tools. Those can support native canvas editing and
+design-system-aware workflows once authenticated.
+
+Do not add the official Figma MCP URL directly to a Hermes profile yet. A direct
+spike with:
+
+```yaml
+mcp_servers:
+  figma:
+    url: https://mcp.figma.com/mcp
+```
+
+started successfully but Hermes logged `401 Unauthorized` from Figma and did not
+surface a usable OAuth flow. Figma currently documents the remote MCP server for
+supported MCP clients such as Cursor, VS Code, Claude Code, and Codex. To use it
+from Doit/Hermes, first add one of:
+
+- native Hermes support for Figma MCP OAuth, or
+- a small authenticated bridge MCP service that connects to Figma and exposes a
+  Hermes-compatible endpoint.
+
+Until then, keep the Composio Figma integration enabled and have Hermes return
+durable Doit `image` artifacts for screenshots/exports instead of raw temporary
+Figma image URLs.
+
 ## 5. Onboard a user (create their Hermes profile)
 
 For each friend, do this once on the VM. Using `alice` as the example name.
@@ -317,6 +352,7 @@ cp .env.example .env  # fill in SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, APNS_*
 # Add Doit's global provider keys here too:
 # OPENAI_API_KEY=sk-proj-...
 # ANTHROPIC_API_KEY=sk-ant-...
+# OPENROUTER_API_KEY=sk-or-v1-...
 #
 # If the runner user needs sudo to restart per-user Hermes services, allow only
 # the hermes-* restart command in sudoers, then keep:
@@ -342,6 +378,31 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now doit-runner
 journalctl -u doit-runner -f   # watch it pick up requested todos
+```
+
+To add or rotate the OpenRouter key later without putting it directly in shell
+history:
+
+```bash
+ssh root@162.243.30.100
+cd /opt/doit/runner
+cp .env ".env.backup.$(date +%Y%m%d%H%M%S)"
+read -rsp 'OPENROUTER_API_KEY: ' OPENROUTER_API_KEY; echo
+export OPENROUTER_API_KEY
+python3 - <<'PY'
+from pathlib import Path
+import os
+
+path = Path(".env")
+key = os.environ["OPENROUTER_API_KEY"]
+lines = path.read_text().splitlines()
+out = [line for line in lines if not line.startswith("OPENROUTER_API_KEY=")]
+out.append(f"OPENROUTER_API_KEY={key}")
+path.write_text("\n".join(out).rstrip() + "\n")
+PY
+unset OPENROUTER_API_KEY
+systemctl restart doit-runner
+systemctl status doit-runner --no-pager
 ```
 
 ## Onboarding a second user (Bob)

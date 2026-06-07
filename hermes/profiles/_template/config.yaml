@@ -15,6 +15,15 @@ mcp_servers:
     url: "replace-with-session-mcp-url"
     headers:
       x-api-key: "replace-with-session-mcp-header-value"
+  # Official Figma MCP (https://mcp.figma.com/mcp) is intentionally not
+  # enabled here yet. A direct Hermes profile connection currently receives
+  # 401 Unauthorized because Figma expects an OAuth flow from a supported MCP
+  # client (Cursor, VS Code, Claude Code, Codex, etc.). Keep using the
+  # Composio `figma` toolkit for file/resource access until Hermes supports
+  # Figma MCP auth directly or Doit provides an authenticated bridge.
+  #
+  # figma:
+  #   url: "https://mcp.figma.com/mcp"
 
 # --- Native persistent memory (Hermes built-in) ---
 # Hermes injects MEMORY.md and USER.md into the system prompt at session start

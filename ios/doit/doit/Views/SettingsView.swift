@@ -262,6 +262,7 @@ struct SettingsView: View {
         modelSettingsLoading = true
         defer { modelSettingsLoading = false }
         do {
+            print("[settings][model] loading model settings")
             let response = try await AgentSettingsAPI.getModelSettings()
             modelCatalog = response.catalog
             modelSetting = response.setting
@@ -269,6 +270,7 @@ struct SettingsView: View {
                 selectedModelName = nil
                 cachedModelDisplayName = ""
                 modelSettingsError = nil
+                print("[settings][model] loaded catalog providers=\(response.catalog.count) setting=nil")
                 return
             }
 
@@ -276,9 +278,13 @@ struct SettingsView: View {
             selectedModelName = name
             cachedModelDisplayName = name
             modelSettingsError = nil
+            print(
+                "[settings][model] loaded provider=\(setting.provider) model=\(setting.model) status=\(setting.apply_status.rawValue)"
+            )
         } catch {
             selectedModelName = nil
             modelSettingsError = "Couldn't load model settings: \(error.localizedDescription)"
+            print("[settings][model] load failed error=\(error.localizedDescription)")
         }
     }
 
@@ -306,18 +312,23 @@ struct SettingsView: View {
         defer { modelSettingsSaving = false }
 
         do {
+            print("[settings][model] saving provider=\(provider.id) model=\(model.id)")
             let updated = try await AgentSettingsAPI.updateModelSettings(
                 provider: provider.id,
                 model: model.id
             )
             modelSetting = updated
-            let name = "\(provider.name) - \(model.name)"
+            let name = modelDisplayName(provider: provider, model: model)
             selectedModelName = name
             cachedModelDisplayName = name
             modelSettingsError = nil
+            print(
+                "[settings][model] saved provider=\(updated.provider) model=\(updated.model) status=\(updated.apply_status.rawValue)"
+            )
             dismissModelPicker()
         } catch {
             modelSettingsError = "Couldn't save model settings: \(error.localizedDescription)"
+            print("[settings][model] save failed provider=\(provider.id) model=\(model.id) error=\(error.localizedDescription)")
         }
     }
 
@@ -332,8 +343,10 @@ struct SettingsView: View {
         guard let provider = catalog.first(where: { $0.id == setting.provider }) else {
             return setting.model
         }
-        let modelName = provider.models.first { $0.id == setting.model }?.name ?? setting.model
-        return "\(provider.name) - \(modelName)"
+        guard let model = provider.models.first(where: { $0.id == setting.model }) else {
+            return setting.model
+        }
+        return modelDisplayName(provider: provider, model: model)
     }
 
     private func modelPickerHeight(for containerHeight: CGFloat) -> CGFloat {
@@ -571,20 +584,22 @@ private struct ModelPickerCard: View {
                                 SettingsDivider(leadingPadding: 20)
                             }
 
-                            ForEach(catalog) { provider in
-                                ForEach(provider.models) { model in
-                                    ModelPickerRow(
-                                        provider: provider,
-                                        model: model,
-                                        isSelected: selectedSetting?.provider == provider.id
-                                            && selectedSetting?.model == model.id,
-                                        saving: saving,
-                                        onSelect: { onSelect(provider, model) }
-                                    )
+                            let rows = modelRows
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                                ModelPickerRow(
+                                    provider: row.provider,
+                                    model: row.model,
+                                    isSelected: selectedSetting?.provider == row.provider.id
+                                        && selectedSetting?.model == row.model.id,
+                                    saving: saving,
+                                    onSelect: { onSelect(row.provider, row.model) }
+                                )
+                                if index < rows.count - 1 {
                                     SettingsDivider(leadingPadding: 72)
                                 }
                             }
                         }
+                        .padding(.bottom, 18)
                     }
                     .scrollIndicators(.hidden)
                 }
@@ -595,6 +610,23 @@ private struct ModelPickerCard: View {
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
+    }
+
+    private var modelRows: [ModelPickerRowData] {
+        catalog.flatMap { provider in
+            provider.models.map { model in
+                ModelPickerRowData(provider: provider, model: model)
+            }
+        }
+    }
+}
+
+private struct ModelPickerRowData: Identifiable {
+    let provider: AgentModelProviderOption
+    let model: AgentModelOption
+
+    var id: String {
+        "\(provider.id)::\(model.id)"
     }
 }
 
@@ -608,10 +640,10 @@ private struct ModelPickerRow: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 14) {
-                ModelProviderLogo(providerID: provider.id)
+                ModelProviderLogo(assetName: modelLogoAssetName(provider: provider, model: model))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(provider.name) - \(model.name)")
+                    Text(modelDisplayName(provider: provider, model: model))
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color(white: 0.14))
                         .lineLimit(1)
@@ -656,9 +688,9 @@ private struct ModelPickerRow: View {
         switch label {
         case "Premium":
             return "$$$"
-        case "Strong", "Legacy Strong", "Balanced":
+        case "Strong", "Legacy Strong", "Balanced", "Strong Reasoning", "Daily Driver+":
             return "$$"
-        case "Efficient", "Budget":
+        case "Efficient", "Budget", "Budget Agent", "Budget Coding", "Daily Driver":
             return "$"
         default:
             return "$$"
@@ -677,30 +709,90 @@ private struct ModelPickerRow: View {
 }
 
 private struct ModelProviderLogo: View {
-    let providerID: String
+    let assetName: String?
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Color(white: 0.96))
+                .fill(Color.clear)
 
-            if providerID == "openai" || providerID == "anthropic" {
-                Image(providerID)
+            if let assetName {
+                Image(assetName)
                     .resizable()
                     .scaledToFit()
                     .padding(7)
             } else {
-                Text(providerID.prefix(1).uppercased())
+                Text("?")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(white: 0.32))
             }
         }
         .frame(width: 38, height: 38)
-        .overlay {
-            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .stroke(Color(white: 0.9), lineWidth: 1)
-        }
     }
+}
+
+private func modelDisplayName(
+    provider: AgentModelProviderOption,
+    model: AgentModelOption
+) -> String {
+    guard provider.id == "openrouter" else {
+        return "\(provider.name) - \(model.name)"
+    }
+
+    switch openRouterLab(for: model.id) {
+    case .deepseek:
+        return "DeepSeek - \(droppingPrefix(model.name, prefix: "DeepSeek "))"
+    case .qwen:
+        return "Qwen - \(model.name)"
+    case .kimi:
+        return "Kimi - \(droppingPrefix(model.name, prefix: "Kimi "))"
+    case .google:
+        return "Google - \(model.name)"
+    case nil:
+        return model.name
+    }
+}
+
+private func modelLogoAssetName(
+    provider: AgentModelProviderOption,
+    model: AgentModelOption
+) -> String? {
+    guard provider.id == "openrouter" else {
+        return provider.id
+    }
+
+    switch openRouterLab(for: model.id) {
+    case .deepseek:
+        return "deepseek"
+    case .qwen:
+        return "qwen"
+    case .kimi:
+        return "kimi"
+    case .google:
+        return "gemini"
+    case nil:
+        return nil
+    }
+}
+
+private enum OpenRouterLab {
+    case deepseek
+    case qwen
+    case kimi
+    case google
+}
+
+private func openRouterLab(for modelID: String) -> OpenRouterLab? {
+    if modelID.hasPrefix("deepseek/") { return .deepseek }
+    if modelID.hasPrefix("qwen/") { return .qwen }
+    if modelID.hasPrefix("moonshotai/") { return .kimi }
+    if modelID.hasPrefix("google/") { return .google }
+    return nil
+}
+
+private func droppingPrefix(_ value: String, prefix: String) -> String {
+    guard value.hasPrefix(prefix) else { return value }
+    return String(value.dropFirst(prefix.count))
 }
 
 struct ProfileAvatar: View {

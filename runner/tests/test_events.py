@@ -19,6 +19,7 @@ from runner.events import (
     extract_usage_total,
     parse_activity,
     parse_interaction,
+    parse_public_reasoning,
     strip_activity,
     translate,
 )
@@ -105,6 +106,18 @@ class PublicActivityTests(unittest.TestCase):
     def test_parse_activity_rejects_missing_block(self) -> None:
         self.assertIsNone(parse_activity("Reading files"))
 
+    def test_parse_public_reasoning_extracts_first_status_sentence(self) -> None:
+        text = "Looking through the Figma file now. Then I will pick the screen."
+        self.assertEqual(
+            parse_public_reasoning(text),
+            "Looking through the Figma file now.",
+        )
+
+    def test_parse_public_reasoning_rejects_tool_noise(self) -> None:
+        self.assertIsNone(parse_public_reasoning("Tool completed. (0.2s)"))
+        self.assertIsNone(parse_public_reasoning("frompath=/tmp/foo topath=/tmp/bar"))
+        self.assertIsNone(parse_public_reasoning('{"call_id": "abc", "output": "..."}'))
+
     def test_strip_activity_removes_block_from_visible_text(self) -> None:
         text = (
             f"{ACTIVITY_OPEN}Reading files{ACTIVITY_CLOSE}\n\n"
@@ -124,6 +137,29 @@ class PublicActivityTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.step_kind, "thought")
         self.assertEqual(result.text, "Preparing the PR summary")
+
+    def test_reasoning_available_without_marker_becomes_thought(self) -> None:
+        result = translate(
+            "reasoning.available",
+            {
+                "event": "reasoning.available",
+                "text": "Reviewing the selected mobile screen before editing.",
+            },
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.step_kind, "thought")
+        self.assertEqual(result.text, "Reviewing the selected mobile screen before editing.")
+
+    def test_reasoning_available_noise_is_dropped(self) -> None:
+        result = translate(
+            "reasoning.available",
+            {
+                "event": "reasoning.available",
+                "text": "tool_call_id=call_1 stdout=README.md",
+            },
+        )
+        self.assertIsNone(result)
 
     def test_final_reply_activity_marker_is_not_visible(self) -> None:
         result = translate(

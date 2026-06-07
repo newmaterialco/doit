@@ -45,6 +45,7 @@ struct TodoListView: View {
     @State private var exploreApiKeyToolkit: Toolkit?
     @State private var exploreApiKeyInput = ""
     @State private var exploreApiKeyError: String?
+    @State private var activeCronHandoff: CronHandoff?
     @StateObject private var locationProvider = LocationProvider()
     @Namespace private var taskCardNamespace
 
@@ -143,16 +144,8 @@ struct TodoListView: View {
                     guard newPhase == .active else { return }
                     Task { await store.loadAll() }
                 }
-                .onChange(of: store.cronJobs.count) { _, _ in
-                    // If the runner's prep pass converted the new todo into a
-                    // cron job, the placeholder todo row vanishes and a cron
-                    // job arrives. Move the user to the "Scheduled" section so
-                    // they can see where their input landed.
-                    guard let pending = store.pendingNewTodoID else { return }
-                    if !store.todos.contains(where: { $0.id == pending }) {
-                        store.pendingNewTodoID = nil
-                        selectedSectionID = TodoListSection.scheduled.index
-                    }
+                .onChange(of: cronHandoffSignature) { _, _ in
+                    reconcilePendingCronHandoff()
                 }
                 .onChange(of: push.pendingTodoID) { _, newID in
                     guard let id = newID else { return }
@@ -339,11 +332,17 @@ struct TodoListView: View {
             }
         )
         .id(todo.id)
-        .matchedGeometryEffect(id: todo.id, in: taskCardNamespace)
+        .modifier(
+            OptionalMatchedGeometryEffect(
+                id: cronHandoffGeometryID(forTodo: todo.id) ?? todo.id.uuidString,
+                namespace: taskCardNamespace,
+                isSource: true
+            )
+        )
         .opacity(isDeleting ? 0 : 1)
         .scaleEffect(isDeleting ? 0.96 : 1)
         .offset(x: isDeleting ? 28 : 0)
-        .allowsHitTesting(!isDeleting)
+        .allowsHitTesting(!isDeleting && cronHandoffGeometryID(forTodo: todo.id) == nil)
         .animation(.smooth(duration: 0.24), value: isDeleting)
         .contextMenu {
             todoContextMenuAction(for: todo)
@@ -426,6 +425,13 @@ struct TodoListView: View {
                                 onDelete: { Task { await store.deleteCronJob(job.id) } }
                             )
                             .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .modifier(
+                                OptionalMatchedGeometryEffect(
+                                    id: cronHandoffGeometryID(forCronJob: job.id),
+                                    namespace: taskCardNamespace,
+                                    isSource: false
+                                )
+                            )
                             .id(cronJobRefreshID(for: job))
                             .contextMenu {
                                 Button(role: .destructive) {
@@ -645,6 +651,15 @@ struct TodoListView: View {
         store.todos
             .map { "\($0.id.uuidString):\($0.status.rawValue):\($0.updated_at.ISO8601Format())" }
             .joined(separator: "|")
+    }
+
+    private var cronHandoffSignature: String {
+        [
+            store.pendingNewTodoID?.uuidString ?? "",
+            store.pendingNewTodoCronCandidateID()?.uuidString ?? "",
+            store.todos.map(\.id.uuidString).joined(separator: ","),
+            store.cronJobs.map { "\($0.id.uuidString):\($0.created_at.ISO8601Format())" }.joined(separator: ",")
+        ].joined(separator: "|")
     }
 
     private var displayedSuggestedTasks: [SuggestedTask] {
@@ -978,13 +993,61 @@ struct TodoListView: View {
         ].joined(separator: "|")
     }
 
+    private func reconcilePendingCronHandoff() {
+        if store.pendingNewTodoID != nil || store.pendingNewTodoCronCandidateID() != nil {
+            print("[list][cron_handoff] observed pending=\(store.pendingNewTodoID?.uuidString ?? "-") candidate=\(store.pendingNewTodoCronCandidateID()?.uuidString ?? "-") selected=\(selectedSectionID ?? -1)")
+        }
+        primeCronHandoffAnimationIfNeeded()
+        if store.completePendingNewTodoCronHandoffIfReady() {
+            completeCronHandoffAnimation()
+            return
+        }
+        Task {
+            if await store.reconcilePendingNewTodoCronHandoff() {
+                completeCronHandoffAnimation()
+            }
+        }
+    }
+
+    private func primeCronHandoffAnimationIfNeeded() {
+        guard activeCronHandoff == nil,
+              let todoID = store.pendingNewTodoID,
+              let cronJobID = store.pendingNewTodoCronCandidateID() else {
+            return
+        }
+        print("[list][cron_handoff] prime animation todo=\(todoID) cron=\(cronJobID)")
+        activeCronHandoff = CronHandoff(todoID: todoID, cronJobID: cronJobID)
+    }
+
+    private func completeCronHandoffAnimation() {
+        primeCronHandoffAnimationIfNeeded()
+        print("[list][cron_handoff] scroll to scheduled active=\(activeCronHandoff?.geometryID ?? "-")")
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+            selectedSectionID = TodoListSection.scheduled.index
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            print("[list][cron_handoff] clear animation active=\(activeCronHandoff?.geometryID ?? "-")")
+            activeCronHandoff = nil
+        }
+    }
+
+    private func cronHandoffGeometryID(forTodo todoID: UUID) -> String? {
+        guard activeCronHandoff?.todoID == todoID else { return nil }
+        return activeCronHandoff?.geometryID
+    }
+
+    private func cronHandoffGeometryID(forCronJob jobID: UUID) -> String? {
+        guard activeCronHandoff?.cronJobID == jobID else { return nil }
+        return activeCronHandoff?.geometryID
+    }
+
     private func cardRefreshID(for todo: Todo) -> String {
         let artifactSig = (store.artifactsByTodoID[todo.id] ?? [])
             .map { "\($0.artifact_key):\($0.kind.rawValue):\($0.updated_at.ISO8601Format())" }
             .joined(separator: ",")
         let activitySig: String
         if let activity = store.agentActivityByTodoID[todo.id] {
-            activitySig = "\(activity.phase):\(activity.state):\(activity.title):\(activity.updated_at.ISO8601Format())"
+            activitySig = activity.activitySignature
         } else {
             activitySig = ""
         }
@@ -2076,6 +2139,30 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+private struct CronHandoff: Equatable {
+    let todoID: UUID
+    let cronJobID: UUID
+
+    var geometryID: String {
+        "cron-handoff-\(todoID.uuidString)-\(cronJobID.uuidString)"
+    }
+}
+
+private struct OptionalMatchedGeometryEffect: ViewModifier {
+    let id: String?
+    let namespace: Namespace.ID
+    let isSource: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let id {
+            content.matchedGeometryEffect(id: id, in: namespace, isSource: isSource)
+        } else {
+            content
+        }
+    }
+}
+
 private struct SlidingSectionTitle: View {
     let selectedSection: TodoListSection
 
@@ -2405,9 +2492,6 @@ private struct TodoCard: View {
                     }
                 }
             }
-            .id(statusText)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
-            .animation(.smooth(duration: 0.25), value: statusText)
         } else if todo.status == .done {
             EmptyView()
         } else {
@@ -2422,9 +2506,6 @@ private struct TodoCard: View {
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .id(statusText)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        .animation(.smooth(duration: 0.25), value: statusText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 primaryAction
@@ -2440,13 +2521,13 @@ private struct TodoCard: View {
         // is actually working ("Searching Gmail…"). We only trust it
         // for active statuses so the card doesn't flash a stale title
         // once the run lands in a terminal state.
-        if let activity, todo.status.isActive {
-            return activity.cardStatusText
+        if let activity, todo.status.isActive, activity.isRunning {
+            return activity.primaryStatusText
         }
         switch todo.status {
         case .preparing:
-            if let activity, activity.resolvedState == .running {
-                return activity.cardStatusText
+            if let activity, activity.isRunning {
+                return activity.primaryStatusText
             }
             if let summary = todo.preparation_summary, !summary.isEmpty {
                 return summary

@@ -15,7 +15,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-type ProviderId = "openai" | "anthropic";
+type ProviderId = "openai" | "anthropic" | "openrouter";
 
 interface ModelOption {
     id: string;
@@ -31,6 +31,48 @@ interface ProviderOption {
 }
 
 const CATALOG: ProviderOption[] = [
+    {
+        id: "openrouter",
+        name: "OpenRouter",
+        models: [
+            {
+                id: "google/gemini-3.1-flash-lite",
+                name: "Gemini 3.1 Flash Lite",
+                label: "Daily Driver",
+                description: "Fast, low-cost default for everyday Hermes agent tasks.",
+            },
+            {
+                id: "google/gemini-2.5-flash",
+                name: "Gemini 2.5 Flash",
+                label: "Daily Driver+",
+                description: "Slightly heavier daily-driver option when a task needs more headroom.",
+            },
+            {
+                id: "deepseek/deepseek-v3.2",
+                name: "DeepSeek V3.2",
+                label: "Budget Agent",
+                description: "Very low-cost agent model with long context and tool/structured output support.",
+            },
+            {
+                id: "qwen/qwen3-coder-flash",
+                name: "Qwen3 Coder Flash",
+                label: "Budget Coding",
+                description: "Cost-efficient coding and tool-use model with a very large context window.",
+            },
+            {
+                id: "moonshotai/kimi-k2.5",
+                name: "Kimi K2.5",
+                label: "Efficient",
+                description: "Kimi option for agentic tool use and multimodal reasoning at moderate cost.",
+            },
+            {
+                id: "moonshotai/kimi-k2-thinking",
+                name: "Kimi K2 Thinking",
+                label: "Strong Reasoning",
+                description: "Stronger Kimi reasoning model for harder multi-step agent tasks.",
+            },
+        ],
+    },
     {
         id: "openai",
         name: "OpenAI",

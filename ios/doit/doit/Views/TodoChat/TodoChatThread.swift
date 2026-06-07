@@ -16,8 +16,8 @@ private enum ChatStyle {
 
 /// Bottom panel of the split-screen detail view: a scrolling conversation
 /// of `ConversationItem`s plus a live composer. Free-form sends go through
-/// `onSend`; the composer disables itself while the agent is active so the
-/// user can't queue messages on top of an in-flight Hermes turn.
+/// `onSend`; follow-up messages remain available while the agent is active
+/// so the user can interrupt or redirect the in-flight Hermes turn.
 ///
 /// Keyboard handling: the parent `VerticalSplit`'s `BottomWrapper` uses
 /// `.ignoresSafeArea()`, which suppresses SwiftUI's automatic keyboard
@@ -33,8 +33,6 @@ struct TodoChatThread: View {
     let attachmentsByID: [UUID: TodoAttachment]
     let attachmentURLs: [UUID: URL]
     let submittingOptionID: String?
-    let isAgentRunning: Bool
-
     @Binding var photoSelections: [PhotosPickerItem]
     let canAddMoreAttachments: Bool
     let maxNewAttachments: Int
@@ -70,7 +68,6 @@ struct TodoChatThread: View {
         attachmentsByID: [UUID: TodoAttachment],
         attachmentURLs: [UUID: URL],
         submittingOptionID: String?,
-        isAgentRunning: Bool,
         photoSelections: Binding<[PhotosPickerItem]>,
         canAddMoreAttachments: Bool,
         maxNewAttachments: Int,
@@ -89,7 +86,6 @@ struct TodoChatThread: View {
         self.attachmentsByID = attachmentsByID
         self.attachmentURLs = attachmentURLs
         self.submittingOptionID = submittingOptionID
-        self.isAgentRunning = isAgentRunning
         self._photoSelections = photoSelections
         self.canAddMoreAttachments = canAddMoreAttachments
         self.maxNewAttachments = maxNewAttachments
@@ -119,7 +115,6 @@ struct TodoChatThread: View {
                 photoSelections: $photoSelections,
                 canAddMoreAttachments: canAddMoreAttachments,
                 maxNewAttachments: maxNewAttachments,
-                isAgentRunning: isAgentRunning,
                 replyHint: composerReplyHint,
                 availableReferences: availableReferences,
                 pendingInsertion: $pendingArtifactInsertion,
@@ -173,47 +168,37 @@ struct TodoChatThread: View {
     }
 
     private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: ChatStyle.messageSpacing) {
-                    ForEach(items) { item in
-                        messageRow(for: item)
-                            .id(item.id)
-                            .transition(.opacity)
-                    }
-                    Color.clear
-                        .frame(height: 8)
-                        .id("__bottom")
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: ChatStyle.messageSpacing) {
+                ForEach(items) { item in
+                    messageRow(for: item)
+                        .id(item.id)
+                        .transition(.opacity)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                .padding(.bottom, 76)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Color.clear
+                    .frame(height: 8)
             }
-            // iMessage-style drag-to-dismiss. `.interactively` follows
-            // the finger so the keyboard slides away under the user's
-            // gesture instead of popping; once focus drops, our
-            // `onFocusChange` hook restores the prior split detent.
-            .scrollDismissesKeyboard(.interactively)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                // Belt-and-suspenders for non-scroll dismissal — tapping
-                // anywhere on the transcript hides the keyboard via the
-                // app-wide resignFirstResponder, which trips the same
-                // FocusState → detent-restore path as a send.
-                UIApplication.shared.sendAction(
-                    #selector(UIResponder.resignFirstResponder),
-                    to: nil, from: nil, for: nil
-                )
-            }
-            .onChange(of: items.count) { _, _ in
-                withAnimation(.smooth(duration: 0.25)) {
-                    proxy.scrollTo("__bottom", anchor: .bottom)
-                }
-            }
-            .onAppear {
-                proxy.scrollTo("__bottom", anchor: .bottom)
-            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 76)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // iMessage-style drag-to-dismiss. `.interactively` follows
+        // the finger so the keyboard slides away under the user's
+        // gesture instead of popping; once focus drops, our
+        // `onFocusChange` hook restores the prior split detent.
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .scrollDismissesKeyboard(.interactively)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Belt-and-suspenders for non-scroll dismissal — tapping
+            // anywhere on the transcript hides the keyboard via the
+            // app-wide resignFirstResponder, which trips the same
+            // FocusState → detent-restore path as a send.
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil
+            )
         }
     }
 
@@ -860,11 +845,8 @@ private struct AgentErrorMessage: View {
 // MARK: - Composer
 
 /// Live chat composer. Text + send fire `onSend` with the trimmed,
-/// markdown-serialized draft; the field and send button auto-disable
-/// while the agent is mid-turn so the user can't pile messages on top
-/// of an in-flight Hermes run. The attach menu remains available
-/// for attachments regardless of agent state — uploads always work
-/// because they don't bother the agent.
+/// markdown-serialized draft. The composer stays usable while the agent
+/// is mid-turn so a follow-up can interrupt or redirect the active run.
 ///
 /// `onFocusChange` is forwarded out so the parent (TodoDetailView) can
 /// snap the vertical split to `.bottomFull` while the field is focused
@@ -874,7 +856,6 @@ private struct ChatComposer: View {
     @Binding var photoSelections: [PhotosPickerItem]
     let canAddMoreAttachments: Bool
     let maxNewAttachments: Int
-    let isAgentRunning: Bool
     /// Open-interaction prompt hint (e.g. "Example: Wednesday at 3pm…").
     /// When present we surface it as the placeholder so the user knows
     /// the composer is the way to answer the agent's pending question.
@@ -899,17 +880,17 @@ private struct ChatComposer: View {
     @State private var voice = VoiceRecorder()
     @State private var isTranscribing = false
     @State private var voiceError: String?
+    @State private var moveCursorToEndRequest: UUID?
 
     private var canSend: Bool {
-        !isAgentRunning && !isTranscribing && !voice.isRecording && draft.hasContent
+        !isTranscribing && !voice.isRecording && draft.hasContent
     }
 
     private var canRecord: Bool {
-        !isAgentRunning && !isTranscribing && !voice.isRecording
+        !isTranscribing && !voice.isRecording
     }
 
     private var placeholder: String {
-        if isAgentRunning { return "doit is working…" }
         if isTranscribing { return "Transcribing…" }
         if let hint = replyHint, !hint.isEmpty { return hint }
         return "Message Doit"
@@ -972,7 +953,6 @@ private struct ChatComposer: View {
         .padding(.top, 10)
         .padding(.bottom, bottomPadding)
         .animation(.smooth(duration: 0.2), value: canSend)
-        .animation(.smooth(duration: 0.2), value: isAgentRunning)
         .animation(.smooth(duration: 0.2), value: pickerActive)
         .animation(.smooth(duration: 0.24), value: isExpanded)
         .onChange(of: isFocused) { _, focused in
@@ -1011,7 +991,8 @@ private struct ChatComposer: View {
                     isFocused: $isFocused,
                     mentionQuery: $mentionQuery,
                     placeholder: placeholder,
-                    isEnabled: !isAgentRunning
+                    isEnabled: true,
+                    moveCursorToEndRequest: moveCursorToEndRequest
                 )
 
                 trailingActionButton
@@ -1092,7 +1073,12 @@ private struct ChatComposer: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
-        .background(Color.gray.opacity(0.10), in: Capsule())
+        .background(Color.white, in: Capsule())
+        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
         .transition(.opacity.combined(with: .scale(scale: 0.97)))
     }
 
@@ -1109,7 +1095,12 @@ private struct ChatComposer: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
-        .background(Color.gray.opacity(0.10), in: Capsule())
+        .background(Color.white, in: Capsule())
+        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
         .transition(.opacity)
     }
 
@@ -1121,7 +1112,7 @@ private struct ChatComposer: View {
 
     private func submit() {
         let text = draft.serialized
-        guard !text.isEmpty, !isAgentRunning else { return }
+        guard !text.isEmpty else { return }
         onSend(text)
         draft = .empty
         mentionQuery = nil
@@ -1163,6 +1154,7 @@ private struct ChatComposer: View {
             draft = draft.appendingPlainText(text)
             mentionQuery = nil
             voiceError = nil
+            moveCursorToEndRequest = UUID()
             isFocused = true
         } catch {
             voiceError = error.localizedDescription

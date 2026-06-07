@@ -293,7 +293,7 @@ private func thinkingLabel(for step: TodoStep?) -> String {
 /// `todo_steps` derivation.
 private func thinkingLabel(for activity: AgentActivity) -> String? {
     guard activity.isRunning else { return nil }
-    let label = activity.humanActivityText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let label = activity.primaryStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !label.isEmpty else { return nil }
     return label
 }

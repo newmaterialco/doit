@@ -94,6 +94,13 @@ struct AgentActivity: Codable, Identifiable, Hashable, Sendable {
         return AgentActivityCopy.friendlyFallback(for: title, category: resolvedCategory)
     }
 
+    /// Canonical prominent status text for every in-app and ActivityKit
+    /// surface. Kept separate from `humanActivityText` so call sites can
+    /// read intent instead of re-deciding which field is primary.
+    var primaryStatusText: String {
+        humanActivityText
+    }
+
     /// Compact tool-call indicator shown alongside the human-facing
     /// detail in the Live Activity / Dynamic Island. Always the runner
     /// `title` so the user can still see *which* tool the agent is
@@ -102,9 +109,38 @@ struct AgentActivity: Codable, Identifiable, Hashable, Sendable {
         title
     }
 
+    /// Canonical secondary label for compact technical context. Hidden by
+    /// surfaces when it is identical to the primary line.
+    var secondaryToolText: String {
+        toolCallText
+    }
+
+    /// Visible-content signature for animation identity. This deliberately
+    /// excludes `updated_at` so heartbeat / REST-refresh duplicates don't
+    /// reinsert the same detail-header card over and over.
+    var activityContentSignature: String {
+        [
+            phase,
+            state,
+            primaryStatusText,
+            secondaryToolText,
+            tool_name ?? "",
+            tool_category ?? ""
+        ].joined(separator: "|")
+    }
+
+    /// Refresh signature shared by list rows and other surfaces that need to
+    /// redraw when the row is refreshed, even if visible copy is unchanged.
+    var activitySignature: String {
+        [
+            activityContentSignature,
+            updated_at.ISO8601Format()
+        ].joined(separator: "|")
+    }
+
     /// Human-readable status line for the todo card subtitle.
     var cardStatusText: String {
-        humanActivityText
+        primaryStatusText
     }
 
     /// Recent step stack the detail card and widget render as the
@@ -167,6 +203,7 @@ enum AgentToolCategory: String, Codable, Hashable, Sendable {
     case instacart
     case twitter
     case reddit
+    case figma
     case unknown
 
     /// SF Symbol name for the activity row / widget icon. Picked to read
@@ -191,6 +228,7 @@ enum AgentToolCategory: String, Codable, Hashable, Sendable {
         case .instacart: return "cart.fill"
         case .twitter: return "bird.fill"
         case .reddit: return "newspaper.fill"
+        case .figma: return "paintpalette.fill"
         case .unknown: return "wrench.and.screwdriver.fill"
         }
     }
@@ -216,6 +254,10 @@ struct AgentActivityStep: Hashable, Sendable, Identifiable {
             return detail
         }
         return AgentActivityCopy.friendlyFallback(for: title, category: tool_category)
+    }
+
+    var primaryStatusText: String {
+        humanActivityText
     }
 
     /// Compact tool-call label for surfaces that want both fields
@@ -316,6 +358,8 @@ private enum AgentActivityCopy {
             return "Working with Twitter"
         case .reddit:
             return "Working with Reddit"
+        case .figma:
+            return lower.hasPrefix("review") ? "Reviewing Figma results" : "Working in Figma"
         case .unknown:
             if cleaned.isEmpty || lower.hasPrefix("using ") || lower.hasPrefix("reviewing ") {
                 return "Working on the task"

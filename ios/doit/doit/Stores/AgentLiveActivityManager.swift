@@ -251,9 +251,9 @@ final class AgentLiveActivityManager {
         }
 
         return HermesActivityAttributes.ContentState(
-            currentIntent: snapshot.humanActivityText,
-            subject: snapshot.humanActivityText,
-            toolCallTitle: snapshot.toolCallText,
+            currentIntent: snapshot.primaryStatusText,
+            subject: snapshot.primaryStatusText,
+            toolCallTitle: snapshot.secondaryToolText,
             currentSymbolName: snapshot.resolvedCategory.symbolName,
             previousIntent: previous,
             secondPreviousIntent: secondPrevious,
@@ -267,25 +267,30 @@ final class AgentLiveActivityManager {
     private func intent(from step: AgentActivityStep) -> HermesActivityAttributes.WidgetIntent {
         HermesActivityAttributes.WidgetIntent(
             id: step.id,
-            title: step.humanActivityText,
+            title: step.primaryStatusText,
             symbolName: step.tool_category.symbolName,
             isCompleted: step.isCompleted
         )
     }
 
     private func signature(for state: HermesActivityAttributes.ContentState) -> String {
-        [
+        let previousCompleted = state.previousIntent.map { "\($0.isCompleted)" } ?? "-"
+        let secondPreviousCompleted = state.secondPreviousIntent.map { "\($0.isCompleted)" } ?? "-"
+        let parts: [String] = [
             state.state,
             state.currentIntent,
             state.toolCallTitle ?? "-",
             state.currentSymbolName,
             "\(state.stepNumber)",
             state.previousIntent?.title ?? "-",
-            state.previousIntent?.id ?? "-",
+            state.previousIntent?.symbolName ?? "-",
+            previousCompleted,
             state.secondPreviousIntent?.title ?? "-",
-            state.secondPreviousIntent?.id ?? "-",
+            state.secondPreviousIntent?.symbolName ?? "-",
+            secondPreviousCompleted,
             state.intentEndDate == nil ? "open" : "ended"
-        ].joined(separator: "|")
+        ]
+        return parts.joined(separator: "|")
     }
 
     private func cleanupActivity(_ todoID: UUID) {

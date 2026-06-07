@@ -57,7 +57,6 @@ struct CronJobDetailView: View {
                     attachmentsByID: [:],
                     attachmentURLs: [:],
                     submittingOptionID: submittingOptionID,
-                    isAgentRunning: (current?.state.isActive ?? false) || sending,
                     photoSelections: .constant([]),
                     canAddMoreAttachments: false,
                     maxNewAttachments: 1,
