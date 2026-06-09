@@ -56,7 +56,7 @@ MEMORY_EXTRACT_INSTRUCTIONS = (
     "  \"memories\": [\n"
     "    {\n"
     "      \"target\": \"user\" | \"memory\",\n"
-    "      \"title\": \"Short label, <= 120 chars\",\n"
+    "      \"title\": \"Short label, <= 120 chars; not the full fact\",\n"
     "      \"body\": \"One compact durable fact, <= 500 chars\",\n"
     "      \"confidence\": \"high\" | \"medium\" | \"low\",\n"
     "      \"reason\": \"Why this should be remembered, <= 240 chars\"\n"
@@ -64,6 +64,9 @@ MEMORY_EXTRACT_INSTRUCTIONS = (
     "  ]\n"
     "}\n"
     f"{MEMORY_CLOSE}\n\n"
+    "The title should be a label like \"Birthday\", \"Preferred signoff\", "
+    "or \"Wife's contact\", while body should contain the full remembered "
+    "fact. Do not repeat the same sentence in title and body. "
     "Use target=\"user\" for user preferences, identity, communication style, "
     "contacts, and recurring personal context. Use target=\"memory\" for Doit's "
     "workflow notes, tool quirks, project conventions, and lessons learned. "
@@ -192,6 +195,8 @@ def parse_memory_extraction(text: str) -> list[MemoryCandidate]:
         reason = _clean_text(item.get("reason"), max_len=240)
         if not title or not body:
             continue
+        if _canonical(title) == _canonical(body):
+            title = _derive_short_title(body)
         key = (target, _canonical(body))
         if key in seen:
             continue
@@ -225,4 +230,36 @@ def _one_line(text: str, limit: int = 1000) -> str:
 
 def _canonical(text: str) -> str:
     return " ".join((text or "").lower().split())
+
+
+def _derive_short_title(body: str) -> str:
+    text = body.strip()
+    lowered = text.lower()
+    if "birthday" in lowered:
+        return "Birthday"
+    if "signoff" in lowered or "sign-off" in lowered or "sign off" in lowered:
+        return "Preferred signoff"
+    if "wife" in lowered:
+        return "Wife"
+    if "husband" in lowered:
+        return "Husband"
+    if "partner" in lowered:
+        return "Partner"
+    if "manager" in lowered:
+        return "Manager"
+    if "coworker" in lowered or "co-worker" in lowered:
+        return "Coworker"
+    if "email" in lowered:
+        return "Email preference"
+    if ":" in text:
+        prefix = text.split(":", 1)[0].strip()
+        for lead in ("User's ", "User "):
+            if prefix.startswith(lead):
+                prefix = prefix.removeprefix(lead).strip()
+        if 2 <= len(prefix) <= 80:
+            return prefix[:1].upper() + prefix[1:]
+    words = text.rstrip(".").split()
+    if len(words) <= 4:
+        return text.rstrip(".")[:120]
+    return "Memory"
 

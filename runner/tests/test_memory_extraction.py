@@ -41,6 +41,20 @@ class MemoryExtractionTests(unittest.TestCase):
         self.assertEqual(len(memories), 1)
         self.assertFalse(memories[0].should_auto_activate)
 
+    def test_parse_shortens_repeated_title_body(self) -> None:
+        text = (
+            f"{MEMORY_OPEN}\n"
+            '{"memories":[{"target":"user",'
+            '"title":"User\\u0027s birthday: June 15, 1993.",'
+            '"body":"User\\u0027s birthday: June 15, 1993.",'
+            '"confidence":"high","reason":"The user shared their birthday."}]}'
+            f"\n{MEMORY_CLOSE}"
+        )
+        memories = parse_memory_extraction(text)
+        self.assertEqual(len(memories), 1)
+        self.assertEqual(memories[0].title, "Birthday")
+        self.assertEqual(memories[0].body, "User's birthday: June 15, 1993.")
+
     def test_prompt_calls_out_implicit_preference_changes(self) -> None:
         prompt = build_memory_extraction_prompt(
             todo={"title": "Change my signoff to Gabe", "id": "t1"},

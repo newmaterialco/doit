@@ -11,6 +11,7 @@ struct Toolkit: Codable, Identifiable, Hashable, Sendable {
     let connected: Bool
     let connection_id: String?
     let status: String?
+    let account_email: String?
 
     var isConnectable: Bool { connectable ?? true }
     var usesApiKey: Bool { auth_type == "api_key" }

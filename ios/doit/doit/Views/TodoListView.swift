@@ -41,6 +41,7 @@ struct TodoListView: View {
     @State private var suggestionsError: String?
     @State private var suggestionsHasLoaded = false
     @State private var showSuggestedInfo = false
+    @State private var showPassbookMemoryDetail = false
     @State private var selectedPassbookMemory: AgentMemory?
     @State private var passbookMemoryIsEditing = false
     @State private var passbookMemoryDraftTitle = ""
@@ -188,7 +189,7 @@ struct TodoListView: View {
                     .zIndex(7)
             }
 
-            if let selectedPassbookMemory {
+            if showPassbookMemoryDetail, let selectedPassbookMemory {
                 memoryDetailBackdrop
                     .transition(.opacity)
                     .zIndex(6)
@@ -196,6 +197,9 @@ struct TodoListView: View {
                 memoryDetailPanel(for: selectedPassbookMemory)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(7)
+                    .onAppear {
+                        print("[passbook][memory] detail overlay appeared id=\(selectedPassbookMemory.id)")
+                    }
             }
 
             if showSettings {
@@ -468,29 +472,23 @@ struct TodoListView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                ExploreSectionHeader(title: "Basics")
-
-                ExploreLocationCard(
-                    locationProvider: locationProvider,
-                    actions: Array(locationActions.prefix(3)),
-                    onSelectAction: { item in
-                        openSuggestedTask(item.prompt)
-                    }
+                PassbookUserContactCard(
+                    initials: auth.initials,
+                    displayName: auth.displayName,
+                    avatarImageData: auth.avatarImageData,
+                    avatarURL: auth.avatarURL,
+                    joinedAt: auth.joinedAt,
+                    locationText: locationProvider.displayLocationText
                 )
-
-                ExploreSectionHeader(title: "Integrations")
-
-                ExploreConnectionsPromoCard {
-                    playLightHaptic()
-                    presentSettings()
-                }
 
                 PassbookMemorySection(
                     memories: passbookMemories,
                     onSelect: { memory in
+                        print("[passbook][memory] selected row id=\(memory.id) title=\(memory.title)")
                         presentMemoryDetail(memory)
                     }
                 )
+
             }
             .padding(.horizontal, 16)
             .padding(.top, 116)
@@ -874,19 +872,28 @@ struct TodoListView: View {
     }
 
     private func presentMemoryDetail(_ memory: AgentMemory) {
+        print("[passbook][memory] presenting detail id=\(memory.id) title=\(memory.title)")
         playLightHaptic()
         passbookMemoryDraftTitle = memory.title
         passbookMemoryDraftBody = memory.body
         passbookMemoryIsEditing = false
-        withAnimation(settingsPresentationAnimation) {
-            selectedPassbookMemory = memory
+        selectedPassbookMemory = memory
+        DispatchQueue.main.async {
+            withAnimation(settingsPresentationAnimation) {
+                showPassbookMemoryDetail = true
+            }
         }
     }
 
     private func dismissMemoryDetail() {
         withAnimation(settingsPresentationAnimation) {
-            selectedPassbookMemory = nil
+            showPassbookMemoryDetail = false
             passbookMemoryIsEditing = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            if !showPassbookMemoryDetail {
+                selectedPassbookMemory = nil
+            }
         }
     }
 
@@ -1474,33 +1481,28 @@ private struct SuggestedInfoCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Suggestions")
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(white: 0.1))
+            ZStack(alignment: .bottomLeading) {
+                TodoCardStyle.primaryBlue
 
-                Spacer()
-
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color(white: 0.55))
-                        .frame(width: 34, height: 34)
-                        .background(Color(white: 0.95), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close suggested tasks info")
+                Image(systemName: "sparkles")
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(24)
             }
-            .padding(.leading, 22)
-            .padding(.trailing, 16)
-            .padding(.top, 22)
-            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity)
+            .frame(height: 180)
 
-            VStack(alignment: .leading, spacing: 18) {
-                Text("doit looks at the kinds of tasks you create, complete, and schedule, then suggests useful next actions that are similar or complementary.")
-                    .font(.system(size: 18, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color(white: 0.18))
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Smart suggestions")
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.black)
+
+                    Text("doit learns from the tasks you create, complete, and schedule, then suggests useful next actions that fit your patterns.")
+                        .font(.system(size: 20, weight: .regular, design: .rounded))
+                        .foregroundStyle(Color.gray)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Button(action: onClose) {
                     Text("Got it")
@@ -1508,12 +1510,12 @@ private struct SuggestedInfoCard: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
-                        .background(TodoCardStyle.primaryBlue, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .background(TodoCardStyle.primaryBlue, in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 22)
-            .padding(.top, 6)
+            .padding(.top, 22)
             .padding(.bottom, 24)
         }
         .background(Color.white)
@@ -1728,21 +1730,10 @@ private struct ExploreLocationCard: View {
     @ObservedObject var locationProvider: LocationProvider
     let actions: [ExploreActionItem]
     let onSelectAction: (ExploreActionItem) -> Void
-    private let mapTileSize: CGFloat = 142
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                LocationMapSquareTile(locationProvider: locationProvider)
-
-                VStack(alignment: .leading, spacing: 0) {
-                    LocationInfoPill(title: "Home address", subtitle: "Add home")
-                        .frame(maxHeight: .infinity)
-                    LocationInfoPill(title: "Work, school etc.", subtitle: "Add place")
-                        .frame(maxHeight: .infinity)
-                }
-                .frame(maxWidth: .infinity, minHeight: mapTileSize, maxHeight: mapTileSize, alignment: .topLeading)
-            }
+            LocationBasicsRow(locationProvider: locationProvider)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1754,8 +1745,20 @@ private struct ExploreLocationCard: View {
     }
 }
 
+private struct LocationBasicsRow: View {
+    @ObservedObject var locationProvider: LocationProvider
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            LocationMapSquareTile(locationProvider: locationProvider)
+            CurrentLocationPill(locationProvider: locationProvider)
+        }
+    }
+}
+
 private struct LocationMapSquareTile: View {
     @ObservedObject var locationProvider: LocationProvider
+    private let size: CGFloat = 62
 
     private var coordinate: CLLocationCoordinate2D? {
         locationProvider.coordinate
@@ -1788,8 +1791,18 @@ private struct LocationMapSquareTile: View {
             }
 
         }
-        .frame(width: 142, height: 142)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .frame(width: size, height: size)
+        .clipShape(
+            UnevenRoundedRectangle(
+                cornerRadii: .init(
+                    topLeading: size / 2,
+                    bottomLeading: size / 2,
+                    bottomTrailing: 8,
+                    topTrailing: 8
+                ),
+                style: .continuous
+            )
+        )
         .onTapGesture {
             locationProvider.requestAuthorizationOrLocation()
         }
@@ -1798,20 +1811,20 @@ private struct LocationMapSquareTile: View {
     }
 
     private var permissionContent: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 5) {
             Image(systemName: locationProvider.permissionSymbolName)
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(TodoCardStyle.primaryBlue)
-                .frame(width: 50, height: 50)
+                .frame(width: 30, height: 30)
                 .background(Color.white.opacity(0.75), in: Circle())
 
             Text(locationProvider.permissionActionText)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
-        .padding(10)
+        .padding(6)
     }
 
     private func region(for coordinate: CLLocationCoordinate2D) -> MKCoordinateRegion {
@@ -1822,25 +1835,35 @@ private struct LocationMapSquareTile: View {
     }
 }
 
-private struct LocationInfoPill: View {
-    let title: String
-    let subtitle: String
+private struct CurrentLocationPill: View {
+    @ObservedObject var locationProvider: LocationProvider
+    private let height: CGFloat = 62
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
+        HStack(spacing: 0) {
+            Text(locationProvider.displayLocationText)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary)
                 .lineLimit(1)
-            Text(subtitle)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .truncationMode(.tail)
+                .multilineTextAlignment(.leading)
+
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, minHeight: height, alignment: .leading)
+        .background(
+            Color.black.opacity(0.025),
+            in: UnevenRoundedRectangle(
+                cornerRadii: .init(
+                    topLeading: 8,
+                    bottomLeading: 8,
+                    bottomTrailing: height / 2,
+                    topTrailing: height / 2
+                ),
+                style: .continuous
+            )
+        )
     }
 }
 
@@ -1914,11 +1937,31 @@ private struct ExploreConnectionsPromoCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            ConnectionsPromoLowerBorder(topInset: 154)
                 .stroke(Color.black.opacity(0.06), lineWidth: 1)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+}
+
+private struct ConnectionsPromoLowerBorder: Shape {
+    let topInset: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let radius: CGFloat = 28
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + radius, y: rect.maxY),
+            control: CGPoint(x: rect.minX, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.maxY - radius),
+            control: CGPoint(x: rect.maxX, y: rect.maxY)
+        )
+        return path
     }
 }
 
@@ -2219,13 +2262,66 @@ private struct ExploreApiKeySheet: View {
     }
 }
 
+private struct PassbookUserContactCard: View {
+    let initials: String?
+    let displayName: String
+    let avatarImageData: Data?
+    let avatarURL: URL?
+    let joinedAt: Date?
+    let locationText: String
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 10) {
+                ProfileAvatar(
+                    kind: .user(initials: initials, imageData: avatarImageData, url: avatarURL),
+                    size: 88
+                )
+                .id("passbook-user-contact-avatar-\(displayName)")
+
+                VStack(spacing: 11) {
+                    Text(displayName)
+                        .font(.system(size: 24, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "location.fill")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+
+                        Text(locationText)
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.black.opacity(0.035), in: Capsule())
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .padding(22)
+        .frame(maxWidth: .infinity)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+    }
+}
+
 private struct PassbookMemorySection: View {
     let memories: [AgentMemory]
     let onSelect: (AgentMemory) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ExploreSectionHeader(title: "What I know about you")
+            ExploreSectionHeader(title: "Memory")
             if memories.isEmpty {
                 PassbookMemoryEmptyCard()
             } else {
@@ -2255,7 +2351,7 @@ private struct PassbookMemoryEmptyCard: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
+        .padding(20)
         .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
@@ -2280,14 +2376,16 @@ private struct PassbookMemoryCard: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(16)
+            .padding(20)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .stroke(Color.black.opacity(0.05))
             )
         }
         .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 }
 
@@ -2313,6 +2411,15 @@ private struct PassbookMemoryDetailCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !isEditing {
+                    Button("Edit", action: onEdit)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background(Color.black.opacity(0.06), in: Capsule())
+                        .buttonStyle(.plain)
+                }
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 13, weight: .bold))
@@ -2337,9 +2444,11 @@ private struct PassbookMemoryDetailCard: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(memory.title)
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    Text(memory.body)
-                        .font(.body)
-                        .foregroundStyle(.primary)
+                    if !memory.body.isSameMemoryText(as: memory.title) {
+                        Text(memory.body)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                    }
                 }
             }
 
@@ -2371,20 +2480,37 @@ private struct PassbookMemoryDetailCard: View {
                         Button("Use This", action: onApprove)
                             .buttonStyle(.borderedProminent)
                     }
-                    Button("Edit", action: onEdit)
-                        .buttonStyle(.bordered)
-                    Button("Forget", role: .destructive, action: onForget)
-                        .buttonStyle(.bordered)
+                    Button(action: onForget) {
+                        Text("Forget")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 18)
+                            .frame(height: 40)
+                            .background(Color.red.opacity(0.20), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(20)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .padding(26)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 34, style: .continuous)
                 .stroke(Color.black.opacity(0.05))
         )
+    }
+}
+
+private extension String {
+    func isSameMemoryText(as other: String) -> Bool {
+        memoryComparable == other.memoryComparable
+    }
+
+    var memoryComparable: String {
+        lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -2392,9 +2518,12 @@ private final class LocationProvider: NSObject, ObservableObject, CLLocationMana
     @Published private(set) var authorizationStatus: CLAuthorizationStatus
     @Published private(set) var coordinate: CLLocationCoordinate2D?
     @Published private(set) var lastError: String?
+    @Published private(set) var currentLocationName: String?
 
     private let manager = CLLocationManager()
+    private let geocoder = CLGeocoder()
     private var lastLocationRefresh: Date?
+    private var lastGeocodedCoordinate: CLLocationCoordinate2D?
 
     override init() {
         authorizationStatus = manager.authorizationStatus
@@ -2440,8 +2569,10 @@ private final class LocationProvider: NSObject, ObservableObject, CLLocationMana
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        coordinate = locations.last?.coordinate
+        guard let location = locations.last else { return }
+        coordinate = location.coordinate
         lastError = nil
+        updateLocationName(for: location)
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -2464,6 +2595,13 @@ private final class LocationProvider: NSObject, ObservableObject, CLLocationMana
         }
     }
 
+    var displayLocationText: String {
+        if let currentLocationName {
+            return currentLocationName
+        }
+        return statusText
+    }
+
     var permissionActionText: String {
         switch authorizationStatus {
         case .notDetermined:
@@ -2482,6 +2620,51 @@ private final class LocationProvider: NSObject, ObservableObject, CLLocationMana
         default:
             return "location.fill"
         }
+    }
+
+    private func updateLocationName(for location: CLLocation) {
+        if let lastGeocodedCoordinate,
+           abs(lastGeocodedCoordinate.latitude - location.coordinate.latitude) < 0.001,
+           abs(lastGeocodedCoordinate.longitude - location.coordinate.longitude) < 0.001 {
+            return
+        }
+
+        lastGeocodedCoordinate = location.coordinate
+        geocoder.cancelGeocode()
+        geocoder.reverseGeocodeLocation(location) { [weak self] placemarks, _ in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                guard let placemark = placemarks?.first else {
+                    self.currentLocationName = self.coordinateText(for: location.coordinate)
+                    return
+                }
+                self.currentLocationName = self.displayName(for: placemark)
+                    ?? self.coordinateText(for: location.coordinate)
+            }
+        }
+    }
+
+    private func displayName(for placemark: CLPlacemark) -> String? {
+        let parts = [
+            placemark.name,
+            placemark.locality,
+            placemark.administrativeArea
+        ]
+            .compactMap { value -> String? in
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (trimmed?.isEmpty == false) ? trimmed : nil
+            }
+
+        let deduped = parts.reduce(into: [String]()) { result, part in
+            if !result.contains(where: { $0.caseInsensitiveCompare(part) == .orderedSame }) {
+                result.append(part)
+            }
+        }
+        return deduped.isEmpty ? nil : deduped.prefix(2).joined(separator: ", ")
+    }
+
+    private func coordinateText(for coordinate: CLLocationCoordinate2D) -> String {
+        String(format: "%.4f, %.4f", coordinate.latitude, coordinate.longitude)
     }
 }
 
@@ -2775,9 +2958,9 @@ private struct ActivityGroupTile: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     Image(systemName: summary.symbolName)
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
-                        .frame(width: 32, height: 32, alignment: .topLeading)
+                        .frame(width: 24, height: 24, alignment: .topLeading)
                         .accessibilityHidden(true)
 
                     Spacer(minLength: 8)
@@ -2843,10 +3026,10 @@ private struct ActivityGroupDetailHeader: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: descriptor.symbolName)
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
-                    .frame(width: 58, height: 58)
-                    .background(descriptor.tintColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .frame(width: 30, height: 30)
+                    .background(descriptor.tintColor, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(descriptor.title)

@@ -111,6 +111,12 @@ interface ComposioConnectedAccount {
     toolkit?: { slug?: string };
     appName?: string;      // fallback field name in some API versions
     user_id?: string;
+    email?: string;
+    account_email?: string;
+    connected_account_email?: string;
+    account?: { email?: string };
+    data?: { email?: string; account_email?: string };
+    metadata?: { email?: string; account_email?: string };
 }
 
 interface ComposioSession {
@@ -177,6 +183,26 @@ async function listConnections(
     // Composio responses vary in shape between API versions; accept both
     // `{ items: [...] }` and a bare array.
     return Array.isArray(data) ? data : (data.items ?? data.data ?? []);
+}
+
+function connectedAccountEmail(conn: ComposioConnectedAccount | null | undefined): string | null {
+    if (!conn) return null;
+    const candidates = [
+        conn.account_email,
+        conn.connected_account_email,
+        conn.email,
+        conn.account?.email,
+        conn.data?.account_email,
+        conn.data?.email,
+        conn.metadata?.account_email,
+        conn.metadata?.email,
+    ];
+    for (const candidate of candidates) {
+        if (typeof candidate !== "string") continue;
+        const trimmed = candidate.trim();
+        if (trimmed.includes("@")) return trimmed;
+    }
+    return null;
 }
 
 function apiKeyToolkitSlugs(): string[] {
@@ -565,6 +591,7 @@ serve(async (req) => {
                             : true,
                         connection_id: conn?.id ?? null,
                         status: conn?.status ?? null,
+                        account_email: connectedAccountEmail(conn),
                     };
                 });
                 console.log(

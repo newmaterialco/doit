@@ -19,6 +19,8 @@ final class AuthModel {
     private(set) var avatarURL: URL?
     private(set) var avatarImageData: Data?
     private(set) var joinedAt: Date?
+    private(set) var email: String?
+    private(set) var phoneNumber: String?
     private var repairedOversizedAvatarMetadata = false
     private var listenerTask: Task<Void, Never>?
 
@@ -45,6 +47,8 @@ final class AuthModel {
         self.avatarURL = nil
         self.avatarImageData = nil
         self.joinedAt = nil
+        self.email = nil
+        self.phoneNumber = nil
         self.repairedOversizedAvatarMetadata = false
     }
 
@@ -114,6 +118,8 @@ final class AuthModel {
     private func apply(session: Session?) {
         if let s = session {
             self.state = .signedIn(userID: s.user.id)
+            self.email = s.user.email
+            self.phoneNumber = s.user.phone
             apply(userMetadata: s.user.userMetadata, createdAt: s.user.createdAt, userID: s.user.id)
             repairOversizedAvatarMetadataIfNeeded(s.user.userMetadata, userID: s.user.id, createdAt: s.user.createdAt)
         } else {
@@ -123,6 +129,8 @@ final class AuthModel {
             self.avatarURL = nil
             self.avatarImageData = nil
             self.joinedAt = nil
+            self.email = nil
+            self.phoneNumber = nil
             self.repairedOversizedAvatarMetadata = false
         }
     }
