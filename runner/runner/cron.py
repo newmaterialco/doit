@@ -17,6 +17,8 @@ from .cron_configure import (
 from .db import DB
 from .events import TASKS_CLOSE, TASKS_OPEN, extract_terminal_text, parse_spawned_tasks
 from .hermes import HermesClient
+from .hermes_memory import HermesMemoryStore
+from .memory_sync import mirror_hermes_memory_to_supabase, sync_active_memories_to_hermes
 from .spawn import apply_spawned_tasks
 from .prepare import CONNECTION_SLUGS
 from .push import Pusher, PushPayload
@@ -29,6 +31,11 @@ _CRON_INSTRUCTIONS = (
     "session with no prior conversation history. Complete the task described "
     "in the prompt end-to-end using Composio tools when needed. Do not ask "
     "clarifying questions — the prompt must be self-contained.\n\n"
+    "MEMORY. USER.md and MEMORY.md are loaded into this prompt at session "
+    "start. Use them. Save durable preferences, recurring people/places, "
+    "workflow conventions, and lessons learned with the memory tool. When the "
+    "job references prior work or context that is not in memory, call "
+    "session_search before giving up.\n\n"
     "SPAWNING TASKS. When the job discovers multiple independent actions "
     "(inbox scans, digests, recurring email checks), create separate todos "
     "for the user by ending your reply with one "
@@ -109,6 +116,10 @@ async def configure_one_cron_job(
         pending_messages=pending_bodies or None,
     )
 
+    memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
+    with suppress(Exception):
+        sync_active_memories_to_hermes(db, memory_store, user_id)
+
     hermes = HermesClient(endpoint)
     run_id: str | None = None
     final_text: str | None = None
@@ -130,6 +141,8 @@ async def configure_one_cron_job(
             if run_id is not None:
                 await hermes.stop_run(run_id)
         await hermes.aclose()
+        with suppress(Exception):
+            mirror_hermes_memory_to_supabase(db, memory_store, user_id)
 
     if pending_ids:
         db.mark_cron_messages_consumed(pending_ids)

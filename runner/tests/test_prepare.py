@@ -14,6 +14,7 @@ from runner.prepare import (
     CONNECTION_SLUGS,
     PREP_CLOSE,
     PREP_OPEN,
+    TODO_TOPICS,
     augment_cron_from_text,
     build_prepare_prompt,
     infer_recurring_schedule,
@@ -112,6 +113,40 @@ class ParsePrepareTests(unittest.TestCase):
         for expected in ("gmail", "googlecalendar", "slack", "notion", "hunter"):
             self.assertIn(expected, CONNECTION_SLUGS)
 
+    def test_known_topics_include_expected_broad_buckets(self) -> None:
+        for expected in ("communication", "research", "documents", "work", "other"):
+            self.assertIn(expected, TODO_TOPICS)
+
+    def test_topic_and_collection_roundtrip(self) -> None:
+        text = wrap(
+            '{"title":"Prep Acme board notes","connection_slug":"googledocs",'
+            '"topic":"work","collection_name":"Acme",'
+            '"summary":"Draft notes for the advisory call.","ready":true}'
+        )
+        result = parse_prepare(text)
+        assert result is not None
+        self.assertEqual(result.topic, "work")
+        self.assertEqual(result.collection_name, "Acme")
+
+    def test_unknown_topic_falls_back_to_other(self) -> None:
+        text = wrap(
+            '{"title":"x","connection_slug":null,'
+            '"topic":"acme-board-notes","ready":true}'
+        )
+        result = parse_prepare(text)
+        assert result is not None
+        self.assertEqual(result.topic, "other")
+
+    def test_generic_collection_is_dropped(self) -> None:
+        text = wrap(
+            '{"title":"Research laptops","connection_slug":null,'
+            '"topic":"shopping","collection_name":"shopping","ready":true}'
+        )
+        result = parse_prepare(text)
+        assert result is not None
+        self.assertEqual(result.topic, "shopping")
+        self.assertIsNone(result.collection_name)
+
     def test_cron_kind_roundtrips(self) -> None:
         text = wrap(
             '{"title":"Daily email check","connection_slug":"gmail",'
@@ -132,7 +167,8 @@ class ParsePrepareTests(unittest.TestCase):
             '"tasks":['
             '{"title":"Send rent email","connection_slug":"gmail","summary":"Email landlord."},'
             '{"title":"Book calendar hold","connection_slug":'
-            '"googlecalendar","summary":"Block time to review lease."}'
+            '"googlecalendar","topic":"scheduling","collection_name":"Lease",'
+            '"summary":"Block time to review lease."}'
             ']}'
         )
         result = parse_prepare(text)
@@ -140,6 +176,8 @@ class ParsePrepareTests(unittest.TestCase):
         self.assertEqual(len(result.additional_tasks), 1)
         self.assertEqual(result.additional_tasks[0].title, "Book calendar hold")
         self.assertEqual(result.additional_tasks[0].connection_slug, "googlecalendar")
+        self.assertEqual(result.additional_tasks[0].topic, "scheduling")
+        self.assertEqual(result.additional_tasks[0].collection_name, "Lease")
 
     def test_single_task_array_stays_on_original_row(self) -> None:
         text = wrap(
@@ -200,6 +238,7 @@ class BuildPreparePromptTests(unittest.TestCase):
         )
         self.assertIn("gmail", prompt)
         self.assertIn("slack", prompt)
+        self.assertIn("Allowed topic values", prompt)
 
     def test_prompt_includes_prior_user_response_when_resuming(self) -> None:
         prompt = build_prepare_prompt(

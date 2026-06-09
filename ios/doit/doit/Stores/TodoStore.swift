@@ -65,6 +65,9 @@ final class TodoStore {
         didSet { syncLiveActivities() }
     }
 
+    /// User-visible memories for Passbook and Settings > Memory.
+    var memories: [AgentMemory] = []
+
     /// User-facing message when the initial `loadAll()` fails. Cleared on
     /// the next successful load. Per-row refresh failures only log.
     var loadError: String?
@@ -129,6 +132,7 @@ final class TodoStore {
         artifactsByTodoID = [:]
         interactionsByTodoID = [:]
         agentActivityByTodoID = [:]
+        memories = []
         trackedTodoIDs = []
         pendingNewTodoID = nil
         pendingNewTodoCreatedAt = nil
@@ -201,9 +205,11 @@ final class TodoStore {
         do {
             async let todosTask = TodosAPI.list()
             async let cronTask: [CronJob] = (try? await CronJobsAPI.list()) ?? []
+            async let memoriesTask: [AgentMemory] = (try? await MemoriesAPI.list()) ?? []
             let fetched = try await todosTask
             todos = fetched
             cronJobs = await cronTask
+            memories = await memoriesTask.filter(\.isVisibleMemory)
             loadError = nil
             await refreshAllOpenInteractions()
             await refreshAllArtifacts()
@@ -376,6 +382,26 @@ final class TodoStore {
         }
     }
 
+    func refreshMemories() async {
+        do {
+            memories = try await MemoriesAPI.list().filter(\.isVisibleMemory)
+        } catch {
+            print("[store] refreshMemories failed: \(error)")
+        }
+    }
+
+    func refreshMemory(id: UUID) async {
+        do {
+            if let memory = try await MemoriesAPI.get(id), memory.isVisibleMemory {
+                upsertMemory(memory)
+            } else {
+                removeMemoryLocal(id: id)
+            }
+        } catch {
+            print("[store] refreshMemory(\(id)) failed: \(error)")
+        }
+    }
+
     // MARK: - Mutations (called from views)
 
     /// Append a row that was just inserted by `AddTodoView` so the list
@@ -444,6 +470,35 @@ final class TodoStore {
     func toggleComplete(_ todo: Todo) async {
         let next: TodoStatus = todo.status == .done ? .todo : .done
         await setStatus(todo.id, next)
+    }
+
+    func toggleStarred(_ todo: Todo) async {
+        let next = !todo.is_starred
+        patchTodoLocal(id: todo.id) { $0.is_starred = next }
+        do {
+            try await TodosAPI.setStarred(todo.id, isStarred: next)
+        } catch {
+            print("[store] toggleStarred(\(todo.id)) failed: \(error)")
+            await refreshTodo(id: todo.id)
+        }
+    }
+
+    func updateOrganization(_ todo: Todo, topic: TodoTopic?, collectionName: String?) async {
+        let normalizedCollection = collectionName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        patchTodoLocal(id: todo.id) {
+            $0.topic = topic?.rawValue
+            $0.collection_name = (normalizedCollection?.isEmpty ?? true) ? nil : normalizedCollection
+        }
+        do {
+            try await TodosAPI.updateOrganization(
+                todo.id,
+                topic: topic,
+                collectionName: normalizedCollection
+            )
+        } catch {
+            print("[store] updateOrganization(\(todo.id)) failed: \(error)")
+            await refreshTodo(id: todo.id)
+        }
     }
 
     /// Hard-delete a todo (and its cascaded children). Removes locally
@@ -562,6 +617,59 @@ final class TodoStore {
         }
     }
 
+    // MARK: - Memory mutations
+
+    func approveMemory(_ memory: AgentMemory) async {
+        patchMemoryLocal(id: memory.id) { $0.memory_status = .active; $0.sync_status = .pending }
+        do {
+            try await MemoriesAPI.approve(memory.id)
+            await refreshMemory(id: memory.id)
+        } catch {
+            print("[store] approveMemory(\(memory.id)) failed: \(error)")
+            await refreshMemory(id: memory.id)
+        }
+    }
+
+    func rejectMemory(_ memory: AgentMemory) async {
+        patchMemoryLocal(id: memory.id) { $0.memory_status = .rejected; $0.sync_status = .pending }
+        do {
+            try await MemoriesAPI.reject(memory.id)
+            await refreshMemory(id: memory.id)
+        } catch {
+            print("[store] rejectMemory(\(memory.id)) failed: \(error)")
+            await refreshMemory(id: memory.id)
+        }
+    }
+
+    func updateMemory(_ memory: AgentMemory, title: String, body: String) async {
+        patchMemoryLocal(id: memory.id) {
+            $0.title = title
+            $0.body = body
+            $0.memory_status = .active
+            $0.sync_status = .pending
+        }
+        do {
+            var updated = memory
+            updated.title = title
+            updated.body = body
+            try await MemoriesAPI.update(updated)
+            await refreshMemory(id: memory.id)
+        } catch {
+            print("[store] updateMemory(\(memory.id)) failed: \(error)")
+            await refreshMemory(id: memory.id)
+        }
+    }
+
+    func forgetMemory(_ memory: AgentMemory) async {
+        removeMemoryLocal(id: memory.id)
+        do {
+            try await MemoriesAPI.delete(memory.id)
+        } catch {
+            print("[store] forgetMemory(\(memory.id)) failed: \(error)")
+            await refreshMemory(id: memory.id)
+        }
+    }
+
     // MARK: - Local upsert helpers
 
     /// Insert or replace a todo row, keeping the list ordered by
@@ -621,6 +729,24 @@ final class TodoStore {
 
     private func removeCronJobLocal(id: UUID) {
         cronJobs.removeAll { $0.id == id }
+    }
+
+    private func upsertMemory(_ memory: AgentMemory) {
+        if let idx = memories.firstIndex(where: { $0.id == memory.id }) {
+            memories[idx] = memory
+        } else {
+            memories.append(memory)
+        }
+        memories = memories.filter(\.isVisibleMemory).sorted { $0.updated_at > $1.updated_at }
+    }
+
+    private func patchMemoryLocal(id: UUID, _ mutate: (inout AgentMemory) -> Void) {
+        guard let idx = memories.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&memories[idx])
+    }
+
+    private func removeMemoryLocal(id: UUID) {
+        memories.removeAll { $0.id == id }
     }
 
     private func recoverCronJobAfterRealtimeMiss(id: UUID) async {
@@ -695,6 +821,12 @@ final class TodoStore {
                 await MainActor.run {
                     _ = self?.agentActivityByTodoID.removeValue(forKey: todoID)
                 }
+            },
+            onMemoryChange: { [weak self] id in
+                await self?.refreshMemory(id: id)
+            },
+            onMemoryDelete: { [weak self] id in
+                await MainActor.run { self?.removeMemoryLocal(id: id) }
             },
             onUnknown: { [weak self] in
                 await self?.loadAll()

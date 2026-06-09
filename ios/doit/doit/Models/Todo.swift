@@ -39,6 +39,54 @@ enum TodoStatus: String, Codable, Sendable, CaseIterable {
     }
 }
 
+enum TodoTopic: String, Codable, Sendable, CaseIterable, Identifiable {
+    case communication
+    case scheduling
+    case research
+    case documents
+    case coding
+    case finance
+    case shopping
+    case travel
+    case personal
+    case work
+    case other
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .communication: return "Communication"
+        case .scheduling: return "Scheduling"
+        case .research: return "Research"
+        case .documents: return "Documents"
+        case .coding: return "Coding"
+        case .finance: return "Finance"
+        case .shopping: return "Shopping"
+        case .travel: return "Travel"
+        case .personal: return "Personal"
+        case .work: return "Work"
+        case .other: return "Other"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .communication: return "bubble.left.and.bubble.right.fill"
+        case .scheduling: return "calendar.badge.clock"
+        case .research: return "magnifyingglass"
+        case .documents: return "doc.text.fill"
+        case .coding: return "chevron.left.forwardslash.chevron.right"
+        case .finance: return "dollarsign.circle.fill"
+        case .shopping: return "cart.fill"
+        case .travel: return "airplane"
+        case .personal: return "person.crop.circle.fill"
+        case .work: return "briefcase.fill"
+        case .other: return "square.grid.2x2.fill"
+        }
+    }
+}
+
 struct Todo: Codable, Identifiable, Hashable, Sendable {
     let id: UUID
     let user_id: UUID
@@ -62,9 +110,25 @@ struct Todo: Codable, Identifiable, Hashable, Sendable {
     /// on the SSE stream (and reconciled against `GET /v1/runs/{id}` once
     /// each run ends). Optional so older rows decode cleanly; treat nil as 0.
     var total_tokens: Int64?
+    /// User-controlled pin for important completed tasks.
+    var is_starred: Bool
+    /// Broad category assigned during preparation. Unknown / missing values
+    /// fall back to `other` at the UI layer.
+    var topic: String?
+    /// Optional durable grouping for projects, companies, clients, or events.
+    var collection_name: String?
     let created_at: Date
     let updated_at: Date
     var completed_at: Date?
+
+    var effectiveTopic: TodoTopic {
+        topic.flatMap(TodoTopic.init(rawValue:)) ?? .other
+    }
+
+    var normalizedCollectionName: String? {
+        let trimmed = collection_name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false) ? trimmed : nil
+    }
 }
 
 /// Insert payload for a new todo. The DB fills in `id`, `user_id` (via RLS check),
@@ -338,11 +402,13 @@ enum MemoryTarget: String, Codable, Sendable, CaseIterable {
 enum MemorySource: String, Codable, Sendable {
     case user
     case hermes
+    case doit
 
     var label: String {
         switch self {
         case .user: return "Pinned"
         case .hermes: return "Learned by agent"
+        case .doit: return "Learned by Doit"
         }
     }
 }
@@ -351,6 +417,28 @@ enum MemorySyncStatus: String, Codable, Sendable {
     case pending
     case synced
     case failed
+}
+
+enum MemoryLifecycleStatus: String, Codable, Sendable {
+    case proposed
+    case active
+    case rejected
+    case deleted
+
+    var label: String {
+        switch self {
+        case .proposed: return "Suggested"
+        case .active: return "Active"
+        case .rejected: return "Rejected"
+        case .deleted: return "Forgotten"
+        }
+    }
+}
+
+enum MemoryConfidence: String, Codable, Sendable {
+    case high
+    case medium
+    case low
 }
 
 struct AgentMemory: Codable, Identifiable, Hashable, Sendable {
@@ -362,6 +450,11 @@ struct AgentMemory: Codable, Identifiable, Hashable, Sendable {
     var target: MemoryTarget?
     var source: MemorySource?
     var sync_status: MemorySyncStatus?
+    var memory_status: MemoryLifecycleStatus?
+    var memory_confidence: MemoryConfidence?
+    var memory_reason: String?
+    var source_todo_id: UUID?
+    var reviewed_at: Date?
     var sync_error: String?
     var last_sync_at: Date?
     let created_at: Date
@@ -370,6 +463,10 @@ struct AgentMemory: Codable, Identifiable, Hashable, Sendable {
     var effectiveTarget: MemoryTarget { target ?? .user }
     var effectiveSource: MemorySource { source ?? .user }
     var effectiveSyncStatus: MemorySyncStatus { sync_status ?? .pending }
+    var effectiveMemoryStatus: MemoryLifecycleStatus { memory_status ?? .active }
+    var isVisibleMemory: Bool { effectiveMemoryStatus != .deleted }
+    var isSuggestedMemory: Bool { effectiveMemoryStatus == .proposed }
+    var isActiveMemory: Bool { effectiveMemoryStatus == .active }
 }
 
 struct NewAgentMemory: Encodable, Sendable {
@@ -378,4 +475,12 @@ struct NewAgentMemory: Encodable, Sendable {
     let body: String
     let category: String?
     let target: String?
+}
+
+struct MemorySettings: Codable, Sendable {
+    let user_id: UUID
+    var automatic_suggestions_enabled: Bool
+    var custom_instructions: String?
+    let created_at: Date?
+    let updated_at: Date?
 }

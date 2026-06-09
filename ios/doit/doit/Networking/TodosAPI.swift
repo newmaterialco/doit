@@ -52,6 +52,39 @@ enum TodosAPI {
             .execute()
     }
 
+    static func setStarred(_ id: UUID, isStarred: Bool) async throws {
+        struct Patch: Encodable { let is_starred: Bool }
+        _ = try await Supa.client
+            .from("todos")
+            .update(Patch(is_starred: isStarred))
+            .eq("id", value: id)
+            .execute()
+    }
+
+    static func updateOrganization(
+        _ id: UUID,
+        topic: TodoTopic?,
+        collectionName: String?
+    ) async throws {
+        struct Patch: Encodable {
+            let topic: String?
+            let collection_name: String?
+        }
+        let normalizedCollection = collectionName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .limited(to: 80)
+        _ = try await Supa.client
+            .from("todos")
+            .update(
+                Patch(
+                    topic: topic?.rawValue,
+                    collection_name: (normalizedCollection?.isEmpty ?? true) ? nil : normalizedCollection
+                )
+            )
+            .eq("id", value: id)
+            .execute()
+    }
+
     static func update(_ id: UUID, title: String, detail: String?) async throws {
         struct Patch: Encodable { let title: String; let detail: String? }
         let normalizedTitle = title

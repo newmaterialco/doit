@@ -31,7 +31,7 @@ import sys
 from .config import load as load_config
 from .db import DB
 from .hermes_memory import HermesMemoryStore
-from .runner import _mirror_hermes_memory_to_supabase
+from .memory_sync import mirror_hermes_memory_to_supabase
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def _mirror_one(
 
     user_entries = store.read_entries("user") if user_path.exists() else []
     mem_entries = store.read_entries("memory") if mem_path.exists() else []
-    _mirror_hermes_memory_to_supabase(db, store, user_id)
+    mirror_hermes_memory_to_supabase(db, store, user_id)
     log.info(
         "mirrored %s: USER.md=%d entries, MEMORY.md=%d entries",
         profile_name,

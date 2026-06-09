@@ -95,6 +95,8 @@ struct IntegrationsView: View {
         do {
             toolkits = try await IntegrationsAPI.list()
             error = nil
+        } catch where IntegrationsAPI.isCancellation(error) {
+            print("[integrations] list cancelled")
         } catch {
             self.error = "Couldn't load integrations: \(error.localizedDescription)"
         }
@@ -158,8 +160,10 @@ struct IntegrationsView: View {
         busySlug = tk.slug
         defer { busySlug = nil }
         do {
-            try await IntegrationsAPI.disconnect(connectionID: cid)
+            try await IntegrationsAPI.disconnect(connectionID: cid, toolkit: tk.slug)
             await load(showSpinner: false)
+        } catch where IntegrationsAPI.isCancellation(error) {
+            print("[integrations] disconnect cancelled toolkit=\(tk.slug) connection=\(cid)")
         } catch {
             self.error = "Couldn't disconnect: \(error.localizedDescription)"
         }

@@ -209,6 +209,29 @@ class DB:
             apply_status=setting.get("apply_status"),
         )
 
+    def get_memory_settings(self, user_id: str) -> dict:
+        try:
+            resp = (
+                self._client.table("memory_settings")
+                .select("automatic_suggestions_enabled, custom_instructions")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                return {
+                    "automatic_suggestions_enabled": True,
+                    "custom_instructions": None,
+                }
+            return rows[0]
+        except Exception as e:
+            log.error("get_memory_settings(%s) failed: %s", user_id, e)
+            return {
+                "automatic_suggestions_enabled": True,
+                "custom_instructions": None,
+            }
+
     def get_todo(self, todo_id: str) -> dict | None:
         resp = (
             self._client.table("todos")
@@ -319,6 +342,22 @@ class DB:
             log.error("list_memories_for_sync(%s) failed: %s", user_id, e)
             return []
 
+    def list_active_memories_for_sync(self, user_id: str) -> list[dict]:
+        """Active memories that should be projected into Hermes files."""
+        try:
+            resp = (
+                self._client.table("memories")
+                .select("*")
+                .eq("user_id", user_id)
+                .eq("memory_status", "active")
+                .order("updated_at", desc=True)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            log.error("list_active_memories_for_sync(%s) failed: %s", user_id, e)
+            return []
+
     def list_synced_memories(self, user_id: str) -> list[dict]:
         """All rows that have a Hermes fingerprint, for the reverse sync diff."""
         try:
@@ -361,6 +400,79 @@ class DB:
         except Exception as e:
             log.error("mark_memory_sync_failed(%s) failed: %s", memory_id, e)
 
+    def mark_memory_deleted(self, memory_id: str) -> None:
+        """Soft-delete a memory so the next source-of-truth rewrite drops it."""
+        try:
+            self._client.table("memories").update(
+                {
+                    "memory_status": "deleted",
+                    "sync_status": "pending",
+                    "hermes_fingerprint": None,
+                    "reviewed_at": datetime.now(UTC).isoformat(),
+                }
+            ).eq("id", memory_id).execute()
+        except Exception as e:
+            log.error("mark_memory_deleted(%s) failed: %s", memory_id, e)
+
+    def upsert_extracted_memory(
+        self,
+        *,
+        user_id: str,
+        target: str,
+        title: str,
+        body: str,
+        confidence: str,
+        reason: str,
+        source_todo_id: str,
+        memory_status: str,
+    ) -> None:
+        """Insert or refresh a memory candidate from the post-task extractor."""
+        try:
+            existing = (
+                self._client.table("memories")
+                .select("id, memory_status")
+                .eq("user_id", user_id)
+                .eq("target", target)
+                .eq("body", body)
+                .neq("memory_status", "deleted")
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            patch = {
+                "title": title[:_TITLE_MAX],
+                "body": body[:2000],
+                "target": target,
+                "source": "doit",
+                "memory_status": memory_status,
+                "memory_confidence": confidence,
+                "memory_reason": reason[:500] if reason else None,
+                "source_todo_id": source_todo_id,
+                "sync_status": "pending" if memory_status == "active" else "pending",
+                "hermes_fingerprint": None,
+                "sync_error": None,
+            }
+            if rows:
+                current = rows[0].get("memory_status")
+                # Do not resurrect memories the user already rejected unless
+                # they are encountered again as high-confidence active facts.
+                if current == "rejected" and memory_status != "active":
+                    return
+                self._client.table("memories").update(patch).eq(
+                    "id", rows[0]["id"]
+                ).execute()
+                return
+            row = {"user_id": user_id, "category": None, **patch}
+            self._client.table("memories").insert(row).execute()
+        except Exception as e:
+            log.error(
+                "upsert_extracted_memory(user=%s, target=%s, title=%r) failed: %s",
+                user_id,
+                target,
+                title,
+                e,
+            )
+
     def upsert_hermes_memory(
         self,
         *,
@@ -386,6 +498,7 @@ class DB:
                 "category": None,
                 "target": target,
                 "source": "hermes",
+                "memory_status": "active",
                 "sync_status": "synced",
                 "hermes_fingerprint": fingerprint,
                 "last_sync_at": when_iso,
@@ -945,6 +1058,8 @@ class DB:
         original_title: str,
         detail: str | None = None,
         connection_slug: str | None = None,
+        topic: str | None = None,
+        collection_name: str | None = None,
         preparation_summary: str | None = None,
         status: str = "todo",
     ) -> dict | None:
@@ -960,6 +1075,8 @@ class DB:
             original_title=original_title,
             detail=detail,
             connection_slug=connection_slug,
+            topic=topic,
+            collection_name=collection_name,
             preparation_summary=preparation_summary,
             spawn_key=None,
             spawned_by_todo_id=None,
@@ -1021,6 +1138,8 @@ class DB:
         original_title: str,
         detail: str | None = None,
         connection_slug: str | None = None,
+        topic: str | None = None,
+        collection_name: str | None = None,
         preparation_summary: str | None = None,
         spawn_key: str | None = None,
         spawned_by_todo_id: str | None = None,
@@ -1042,6 +1161,10 @@ class DB:
         }
         if connection_slug:
             row["connection_slug"] = connection_slug
+        if topic:
+            row["topic"] = topic
+        if collection_name:
+            row["collection_name"] = collection_name
         if preparation_summary:
             row["preparation_summary"] = preparation_summary
         if spawn_key:

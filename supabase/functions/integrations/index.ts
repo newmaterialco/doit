@@ -11,7 +11,7 @@
 //     -> { redirect_url: "https://...", connection_id: "..." }
 //   { action: "connect", toolkit: "hunter", api_key: "..." }
 //     -> { connected: true, connection_id: "..." }
-//   { action: "disconnect", connection_id: "..." }
+//   { action: "disconnect", connection_id: "...", toolkit?: "gmail" }
 //     -> { ok: true }
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -167,7 +167,7 @@ async function listConnections(
     userId: string,
 ): Promise<ComposioConnectedAccount[]> {
     const res = await composio(
-        `/api/v3/connected_accounts?user_ids=${encodeURIComponent(userId)}`,
+        `/api/v3/connected_accounts?user_ids=${encodeURIComponent(userId)}&limit=100`,
     );
     if (!res.ok) {
         const t = await res.text();
@@ -435,6 +435,47 @@ async function syncMcpSessionToolkit(
     }
 }
 
+async function syncMcpSessionConnections(userId: string): Promise<void> {
+    if (!COMPOSIO_MCP_SESSION_ID) {
+        console.warn("COMPOSIO_MCP_SESSION_ID unset; Hermes MCP session not synced");
+        return;
+    }
+    const { auth_configs, connected_accounts } = await buildSessionConnectionContext(
+        userId,
+        connectableSlugs(),
+    );
+    const patch: Record<string, unknown> = {};
+    if (Object.keys(auth_configs).length > 0) {
+        patch.auth_configs = auth_configs;
+    }
+    if (Object.keys(connected_accounts).length > 0) {
+        patch.connected_accounts = connected_accounts;
+    }
+    if (Object.keys(patch).length === 0) {
+        return;
+    }
+    const res = await composio(
+        `/api/v3.1/tool_router/session/${
+            encodeURIComponent(COMPOSIO_MCP_SESSION_ID)
+        }`,
+        { method: "PATCH", body: JSON.stringify(patch) },
+    );
+    if (!res.ok) {
+        const t = await res.text();
+        console.error("mcp session full sync failed:", res.status, t);
+        return;
+    }
+    console.log(
+        "mcp session full sync",
+        JSON.stringify({
+            connected: Object.entries(connected_accounts).map(([slug, ids]) => ({
+                slug,
+                connection_id: ids[0],
+            })),
+        }),
+    );
+}
+
 async function deleteConnection(connectionId: string): Promise<void> {
     const res = await composio(
         `/api/v3/connected_accounts/${encodeURIComponent(connectionId)}`,
@@ -526,6 +567,24 @@ serve(async (req) => {
                         status: conn?.status ?? null,
                     };
                 });
+                console.log(
+                    "integrations list",
+                    JSON.stringify({
+                        user_id: userId,
+                        connected: toolkits
+                            .filter((t) => t.connected)
+                            .map((t) => ({
+                                slug: t.slug,
+                                connection_id: t.connection_id,
+                                status: t.status,
+                            })),
+                    }),
+                );
+                // OAuth redirects complete outside this Edge Function. The
+                // first list/refresh after returning to the app is therefore
+                // the reliable point to sync new OAuth connected_account IDs
+                // into Hermes' long-lived Composio MCP session.
+                await syncMcpSessionConnections(userId);
                 return json({ toolkits });
             }
             case "connect": {
@@ -558,28 +617,58 @@ serve(async (req) => {
                 return json(result);
             }
             case "disconnect": {
-                if (!body.connection_id) {
+                if (!body.connection_id && !body.toolkit) {
                     return json({ error: "missing_connection_id" }, 400);
                 }
                 // Re-check ownership: only delete if this connection belongs
                 // to the calling user (Composio scopes by user_id).
                 const conns = await listConnections(userId);
-                if (!conns.some((c) => c.id === body.connection_id)) {
-                    return json({ error: "not_found" }, 404);
+                const requestedToolkit = (body.toolkit ?? "").toLowerCase();
+                const exact = body.connection_id
+                    ? conns.find((c) => c.id === body.connection_id)
+                    : undefined;
+                const inferredToolkit = (
+                    exact?.toolkit?.slug ?? exact?.appName ?? requestedToolkit
+                ).toLowerCase();
+                const targets = conns.filter((c) => {
+                    if (exact && c.id === exact.id) return true;
+                    const slug = (c.toolkit?.slug ?? c.appName ?? "")
+                        .toLowerCase();
+                    return Boolean(requestedToolkit && slug === requestedToolkit);
+                });
+                console.log(
+                    "integrations disconnect",
+                    JSON.stringify({
+                        user_id: userId,
+                        connection_id: body.connection_id ?? null,
+                        toolkit: requestedToolkit || null,
+                        exact: exact?.id ?? null,
+                        targets: targets.map((c) => ({
+                            id: c.id,
+                            slug: (c.toolkit?.slug ?? c.appName ?? "")
+                                .toLowerCase(),
+                            status: c.status,
+                        })),
+                    }),
+                );
+                if (targets.length === 0) {
+                    // The iOS app may hold a stale connection_id after a
+                    // previous disconnect, a Composio-side deletion, or a
+                    // catalog/auth-config migration. Treat that as already
+                    // disconnected so the client can refresh the list instead
+                    // of pinning the user behind a 404 toast.
+                    return json({ ok: true, already_disconnected: true });
                 }
-                await deleteConnection(body.connection_id);
+                for (const target of targets) {
+                    await deleteConnection(target.id);
+                }
                 const catalogEntry = CATALOG.find((t) =>
-                    t.auth_type === "api_key" &&
-                    conns.some((c) =>
-                        c.id === body.connection_id &&
-                        (c.toolkit?.slug ?? c.appName ?? "").toLowerCase() ===
-                            t.slug
-                    )
+                    t.slug === (requestedToolkit || inferredToolkit)
                 );
                 if (catalogEntry) {
                     await syncMcpSessionToolkit(catalogEntry.slug, null);
                 }
-                return json({ ok: true });
+                return json({ ok: true, deleted: targets.length });
             }
             default:
                 return json({ error: "unknown_action" }, 400);

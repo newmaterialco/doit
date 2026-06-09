@@ -59,6 +59,22 @@ CONNECTION_SLUGS: frozenset[str] = frozenset(
     }
 )
 
+TODO_TOPICS: frozenset[str] = frozenset(
+    {
+        "communication",
+        "scheduling",
+        "research",
+        "documents",
+        "coding",
+        "finance",
+        "shopping",
+        "travel",
+        "personal",
+        "work",
+        "other",
+    }
+)
+
 
 PREP_INSTRUCTIONS = (
     "You are the PREPARATION pass for a personal assistant. You will NOT "
@@ -73,6 +89,11 @@ PREP_INSTRUCTIONS = (
     "Preserve the user's intent AND important specifics.\",\n"
     "  \"connection_slug\": \"<one of the allowed slugs from the prompt, "
     "or null if no external connection is needed / you cannot pick one>\",\n"
+    "  \"topic\": \"communication\" | \"scheduling\" | \"research\" | "
+    "\"documents\" | \"coding\" | \"finance\" | \"shopping\" | \"travel\" | "
+    "\"personal\" | \"work\" | \"other\",\n"
+    "  \"collection_name\": \"Short durable project/company/client/event name, "
+    "or null when there is no named collection\",\n"
     "  \"summary\": \"One short sentence describing the planned action.\",\n"
     "  \"kind\": \"task\" | \"cron\",\n"
     "  \"schedule\": \"Required when kind=cron. Hermes-style schedule string "
@@ -80,7 +101,8 @@ PREP_INSTRUCTIONS = (
     "  \"schedule_display\": \"Human-readable schedule for the UI when kind=cron "
     "(e.g. 'Every day at 9:00 AM').\",\n"
     "  \"tasks\": [\n"
-    "    {\"title\": \"...\", \"connection_slug\": null, \"summary\": \"...\"}\n"
+    "    {\"title\": \"...\", \"connection_slug\": null, \"topic\": \"work\", "
+    "\"collection_name\": null, \"summary\": \"...\"}\n"
     "  ],\n"
     "  \"ready\": true | false,\n"
     "  \"clarification\": {\n"
@@ -111,6 +133,13 @@ PREP_INSTRUCTIONS = (
     "target of the action just to make the title shorter.\n"
     "- Pick connection_slug only from the list of allowed slugs supplied "
     "in the prompt. If unsure, use null.\n"
+    "- Pick topic only from the allowed topic values supplied in the prompt. "
+    "Use other if none of the values fit.\n"
+    "- Set collection_name only for a durable named thing the user is likely "
+    "to return to: a project, company, client, event, household initiative, "
+    "or named area of responsibility. Do NOT create collections for generic "
+    "task types like emails, research, calendar, shopping, or documents. "
+    "Normalize obvious repeats into one short display name when possible.\n"
     "- Set kind=\"cron\" when the user wants a RECURRING automation on a "
     "schedule (daily email check, hourly monitoring, weekly reports). "
     "One-off tasks are kind=\"task\" (default). Cron jobs must include "
@@ -143,6 +172,8 @@ class PrepTask:
 
     title: str
     connection_slug: str | None = None
+    topic: str | None = None
+    collection_name: str | None = None
     summary: str | None = None
 
 
@@ -154,6 +185,8 @@ class PrepResult:
     kind: str = "task"
     title: str | None = None
     connection_slug: str | None = None
+    topic: str | None = None
+    collection_name: str | None = None
     summary: str | None = None
     schedule: str | None = None
     schedule_display: str | None = None
@@ -201,6 +234,11 @@ def parse_prepare(
     if slug:
         slug_lc = slug.lower()
         slug = slug_lc if slug_lc in allowed_slugs else None
+    topic = _clean_str(data.get("topic"), max_len=32)
+    if topic:
+        topic_lc = topic.lower()
+        topic = topic_lc if topic_lc in TODO_TOPICS else "other"
+    collection_name = _clean_collection_name(data.get("collection_name"))
 
     ready_raw = data.get("ready")
     ready = True if ready_raw is None else bool(ready_raw)
@@ -223,9 +261,20 @@ def parse_prepare(
             t_slug = _clean_str(item.get("connection_slug"), max_len=64)
             if t_slug:
                 t_slug = t_slug.lower() if t_slug.lower() in allowed_slugs else None
+            t_topic = _clean_str(item.get("topic"), max_len=32)
+            if t_topic:
+                t_topic_lc = t_topic.lower()
+                t_topic = t_topic_lc if t_topic_lc in TODO_TOPICS else "other"
+            t_collection_name = _clean_collection_name(item.get("collection_name"))
             t_summary = _clean_str(item.get("summary"), max_len=400)
             parsed_tasks.append(
-                PrepTask(title=t_title, connection_slug=t_slug, summary=t_summary)
+                PrepTask(
+                    title=t_title,
+                    connection_slug=t_slug,
+                    topic=t_topic,
+                    collection_name=t_collection_name,
+                    summary=t_summary,
+                )
             )
     # The prep contract says `tasks[0]` is represented by the original todo
     # row; only tasks after the first should become new rows. This also
@@ -264,6 +313,8 @@ def parse_prepare(
         kind=kind,
         title=title,
         connection_slug=slug,
+        topic=topic,
+        collection_name=collection_name,
         summary=summary,
         schedule=schedule,
         schedule_display=schedule_display,
@@ -298,11 +349,14 @@ def build_prepare_prompt(
     """
     task = f"{title}\n\n{detail}".strip() if detail else title
     slugs = ", ".join(sorted(allowed_slugs))
+    topics = ", ".join(sorted(TODO_TOPICS))
     lines = [
         "New todo to prepare (do NOT execute it):",
         task,
         "",
         f"Allowed connection_slug values: [{slugs}] or null.",
+        f"Allowed topic values: [{topics}].",
+        "Optional collection_name should be a short durable project, company, client, event, or named responsibility; use null for generic tasks.",
     ]
     if prior:
         prior_prompt = (prior.get("prompt") or "").strip()
@@ -474,6 +528,29 @@ def _clean_str(value: Any, *, max_len: int) -> str | None:
     if not text:
         return None
     return text[:max_len]
+
+
+def _clean_collection_name(value: Any) -> str | None:
+    text = _clean_str(value, max_len=80)
+    if text is None:
+        return None
+    generic = {
+        "calendar",
+        "coding",
+        "communication",
+        "documents",
+        "emails",
+        "finance",
+        "other",
+        "research",
+        "scheduling",
+        "shopping",
+        "travel",
+        "work",
+    }
+    if text.lower() in generic:
+        return None
+    return re.sub(r"\s+", " ", text)
 
 
 def _clean_option(option: Any) -> dict[str, Any] | None:

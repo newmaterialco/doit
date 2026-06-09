@@ -25,6 +25,11 @@ struct TodoListView: View {
     @State private var showAddSheet = false
     @State private var showSettings = false
     @State private var settingsSheetIsVisible = false
+    @State private var selectedCompletedActivityFilter: CompletedActivityFilter = .allActivity
+    @State private var selectedCompletedActivityPageID: CompletedActivityFilter? = .allActivity
+    @State private var selectedActivityGroup: ActivityGroupDescriptor?
+    @State private var showActivityGroupDetail = false
+    @State private var activityGroupDetailIsVisible = false
     @State private var selectedSectionID: Int? = TodoListSection.todo.index
     @State private var scrubbedSectionID: Int?
     @State private var navigationPath = NavigationPath()
@@ -36,6 +41,10 @@ struct TodoListView: View {
     @State private var suggestionsError: String?
     @State private var suggestionsHasLoaded = false
     @State private var showSuggestedInfo = false
+    @State private var selectedPassbookMemory: AgentMemory?
+    @State private var passbookMemoryIsEditing = false
+    @State private var passbookMemoryDraftTitle = ""
+    @State private var passbookMemoryDraftBody = ""
     @State private var exploreToolkits: [Toolkit] = []
     @State private var exploreToolkitsLoading = true
     @State private var exploreToolkitsHasLoaded = false
@@ -85,7 +94,7 @@ struct TodoListView: View {
                             bottomControls
                         }
                     }
-                    .offset(y: settingsHomeOffset)
+                    .offset(y: presentationHomeOffset)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationBarTitleDisplayMode(.inline)
@@ -179,6 +188,16 @@ struct TodoListView: View {
                     .zIndex(7)
             }
 
+            if let selectedPassbookMemory {
+                memoryDetailBackdrop
+                    .transition(.opacity)
+                    .zIndex(6)
+
+                memoryDetailPanel(for: selectedPassbookMemory)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(7)
+            }
+
             if showSettings {
                 Color.white
                     .ignoresSafeArea()
@@ -189,6 +208,18 @@ struct TodoListView: View {
                 SettingsTopOverlay(onDismiss: dismissSettings)
                     .offset(y: settingsSheetOffset)
                     .zIndex(10)
+            }
+
+            if showActivityGroupDetail, let selectedActivityGroup {
+                Color.white
+                    .ignoresSafeArea()
+                    .opacity(activityGroupDetailIsVisible ? 1 : 0)
+                    .animation(settingsPresentationAnimation, value: activityGroupDetailIsVisible)
+                    .zIndex(8)
+
+                activityGroupDetailOverlay(for: selectedActivityGroup)
+                    .offset(y: activityGroupDetailOffset)
+                    .zIndex(9)
             }
         }
     }
@@ -266,7 +297,8 @@ struct TodoListView: View {
                         TaskSectionHeader(
                             title: "Suggested",
                             trailingIconName: "info.circle.fill",
-                            trailingAction: presentSuggestedInfo
+                            trailingAction: presentSuggestedInfo,
+                            verticalPadding: 0
                         )
                             .padding(.top, activeItems.isEmpty ? 8 : 14)
 
@@ -277,17 +309,12 @@ struct TodoListView: View {
                             onLoadMore: triggerLoadMoreSuggestions,
                             onSelect: selectSuggestion
                         )
-                        .padding(.top, 8)
                         .padding(.bottom, 2)
                     }
 
                     if !completedItems.isEmpty {
-                        TaskSectionHeader(title: "Done")
+                        completedActivitySection(completedItems)
                             .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 2)
-
-                        ForEach(completedItems) { todo in
-                            todoCard(for: todo)
-                        }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -303,10 +330,89 @@ struct TodoListView: View {
     }
 
     @ViewBuilder
-    private func todoCard(for todo: Todo) -> some View {
+    private func completedActivitySection(_ completedItems: [Todo]) -> some View {
+        CompletedActivityToggle(
+            selection: selectedCompletedActivityFilter,
+            onSelect: setCompletedActivityFilter
+        )
+        .padding(.top, 4)
+        .padding(.bottom, 4)
+
+        ScrollView(.horizontal) {
+            LazyHStack(alignment: .top, spacing: 0) {
+                ForEach(CompletedActivityFilter.allCases) { filter in
+                    completedActivityPage(filter, completedItems: completedItems)
+                        .containerRelativeFrame(.horizontal)
+                        .id(filter)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollIndicators(.hidden)
+        .scrollPosition(id: $selectedCompletedActivityPageID)
+        .padding(.horizontal, -16)
+        .onChange(of: selectedCompletedActivityPageID) { _, newValue in
+            guard let newValue, newValue != selectedCompletedActivityFilter else { return }
+            selectedCompletedActivityFilter = newValue
+            playSectionHaptic()
+        }
+    }
+
+    @ViewBuilder
+    private func completedActivityPage(
+        _ filter: CompletedActivityFilter,
+        completedItems: [Todo]
+    ) -> some View {
+        VStack(spacing: 10) {
+            switch filter {
+        case .allActivity:
+            ForEach(completedItems) { todo in
+                todoCard(for: todo, identityScope: filter.rawValue)
+            }
+        case .starred:
+            let starredItems = completedItems.filter(\.is_starred)
+            if starredItems.isEmpty {
+                ActivityEmptyCard(
+                    title: "No starred tasks yet",
+                    message: "Star completed tasks from the task detail menu to keep them here.",
+                    systemImage: "star.fill"
+                )
+            } else {
+                ForEach(starredItems) { todo in
+                    todoCard(for: todo, identityScope: filter.rawValue)
+                }
+            }
+        case .topics:
+            let summaries = activityGroupSummaries(from: completedItems)
+            if summaries.isEmpty {
+                ActivityEmptyCard(
+                    title: "No topics yet",
+                    message: "Completed tasks will appear here once doit assigns topics or collections.",
+                    systemImage: "square.grid.2x2.fill"
+                )
+            } else {
+                ActivityGroupGrid(summaries: summaries) { descriptor in
+                    playLightHaptic()
+                    presentActivityGroup(descriptor)
+                }
+                .padding(.top, 2)
+            }
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    @ViewBuilder
+    private func todoCard(
+        for todo: Todo,
+        identityScope: String? = nil,
+        onOpenOverride: (() -> Void)? = nil
+    ) -> some View {
         let interaction = store.openInteractions[todo.id]
         let activity = store.agentActivityByTodoID[todo.id]
         let isDeleting = deletingTodoIDs.contains(todo.id)
+        let identity = identityScope.map { "\(todo.id.uuidString):\($0)" } ?? todo.id.uuidString
         TodoCard(
             todo: todo,
             connectionSlugs: connectionSlugs(for: todo),
@@ -316,7 +422,11 @@ struct TodoListView: View {
                 && store.respondingInteractionID == interaction?.id,
             onOpen: {
                 playLightHaptic()
-                navigationPath.append(TodoListDestination.todo(todo.id))
+                if let onOpenOverride {
+                    onOpenOverride()
+                } else {
+                    navigationPath.append(TodoListDestination.todo(todo.id))
+                }
             },
             onDoIt: { Task { await store.request(todo) } },
             onToggleComplete: { Task { await store.toggleComplete(todo) } },
@@ -331,10 +441,10 @@ struct TodoListView: View {
                 }
             }
         )
-        .id(todo.id)
+        .id(identity)
         .modifier(
             OptionalMatchedGeometryEffect(
-                id: cronHandoffGeometryID(forTodo: todo.id) ?? todo.id.uuidString,
+                id: identityScope == nil ? (cronHandoffGeometryID(forTodo: todo.id) ?? todo.id.uuidString) : nil,
                 namespace: taskCardNamespace,
                 isSource: true
             )
@@ -358,6 +468,8 @@ struct TodoListView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                ExploreSectionHeader(title: "Basics")
+
                 ExploreLocationCard(
                     locationProvider: locationProvider,
                     actions: Array(locationActions.prefix(3)),
@@ -366,21 +478,19 @@ struct TodoListView: View {
                     }
                 )
 
+                ExploreSectionHeader(title: "Integrations")
+
                 ExploreConnectionsPromoCard {
                     playLightHaptic()
                     presentSettings()
                 }
 
-                ForEach(exploreCategories) { category in
-                    ExploreSectionHeader(title: category.title)
-                    ExploreHorizontalRow {
-                        ForEach(category.items) { item in
-                            ExploreActionTile(item: item, style: category.cardStyle) {
-                                openSuggestedTask(item.prompt)
-                            }
-                        }
+                PassbookMemorySection(
+                    memories: passbookMemories,
+                    onSelect: { memory in
+                        presentMemoryDetail(memory)
                     }
-                }
+                )
             }
             .padding(.horizontal, 16)
             .padding(.top, 116)
@@ -388,7 +498,16 @@ struct TodoListView: View {
         }
         .refreshable {
             locationProvider.refreshIfAuthorized()
+            await store.refreshMemories()
         }
+    }
+
+    private var passbookMemories: [AgentMemory] {
+        store.memories
+            .filter { $0.effectiveTarget == .user }
+            .filter { $0.effectiveMemoryStatus == .proposed || $0.effectiveMemoryStatus == .active }
+            .prefix(6)
+            .map { $0 }
     }
 
     private var scheduledSectionPage: some View {
@@ -552,6 +671,15 @@ struct TodoListView: View {
         }
     }
 
+    private func setCompletedActivityFilter(_ filter: CompletedActivityFilter) {
+        guard selectedCompletedActivityFilter != filter else { return }
+        playSectionHaptic()
+        selectedCompletedActivityFilter = filter
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+            selectedCompletedActivityPageID = filter
+        }
+    }
+
     private func playLightHaptic() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
@@ -568,8 +696,12 @@ struct TodoListView: View {
         settingsSheetIsVisible ? 0 : -UIScreen.main.bounds.height
     }
 
-    private var settingsHomeOffset: CGFloat {
-        settingsSheetIsVisible ? UIScreen.main.bounds.height : 0
+    private var activityGroupDetailOffset: CGFloat {
+        activityGroupDetailIsVisible ? 0 : -UIScreen.main.bounds.height
+    }
+
+    private var presentationHomeOffset: CGFloat {
+        (settingsSheetIsVisible || activityGroupDetailIsVisible) ? UIScreen.main.bounds.height : 0
     }
 
     private func presentSettings() {
@@ -579,6 +711,35 @@ struct TodoListView: View {
                 settingsSheetIsVisible = true
             }
         }
+    }
+
+    private func presentActivityGroup(_ descriptor: ActivityGroupDescriptor) {
+        selectedActivityGroup = descriptor
+        showActivityGroupDetail = true
+        DispatchQueue.main.async {
+            withAnimation(settingsPresentationAnimation) {
+                activityGroupDetailIsVisible = true
+            }
+        }
+    }
+
+    private func dismissActivityGroupDetail() {
+        withAnimation(settingsPresentationAnimation) {
+            activityGroupDetailIsVisible = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            if !activityGroupDetailIsVisible {
+                showActivityGroupDetail = false
+                selectedActivityGroup = nil
+            }
+        }
+    }
+
+    private func openTodoFromActivityGroup(_ todo: Todo) {
+        activityGroupDetailIsVisible = false
+        showActivityGroupDetail = false
+        selectedActivityGroup = nil
+        navigationPath.append(TodoListDestination.todo(todo.id))
     }
 
     private func dismissSettings() {
@@ -617,6 +778,88 @@ struct TodoListView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 
+    private var memoryDetailBackdrop: some View {
+        Color.black.opacity(0.16)
+            .ignoresSafeArea(.all)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                playLightHaptic()
+                dismissMemoryDetail()
+            }
+    }
+
+    private func memoryDetailPanel(for memory: AgentMemory) -> some View {
+        VStack {
+            Spacer()
+            PassbookMemoryDetailCard(
+                memory: memory,
+                isEditing: $passbookMemoryIsEditing,
+                draftTitle: $passbookMemoryDraftTitle,
+                draftBody: $passbookMemoryDraftBody,
+                onClose: {
+                    playLightHaptic()
+                    dismissMemoryDetail()
+                },
+                onEdit: {
+                    passbookMemoryDraftTitle = memory.title
+                    passbookMemoryDraftBody = memory.body
+                    passbookMemoryIsEditing = true
+                },
+                onSave: {
+                    Task { await savePassbookMemory(memory) }
+                },
+                onApprove: {
+                    Task {
+                        await store.approveMemory(memory)
+                        dismissMemoryDetail()
+                    }
+                },
+                onForget: {
+                    Task {
+                        if memory.isSuggestedMemory {
+                            await store.rejectMemory(memory)
+                        } else {
+                            await store.forgetMemory(memory)
+                        }
+                        dismissMemoryDetail()
+                    }
+                }
+            )
+            .padding(.horizontal, 18)
+            .padding(.bottom, 20)
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+
+    private func activityGroupDetailOverlay(for descriptor: ActivityGroupDescriptor) -> some View {
+        let todos = activityTodos(for: descriptor)
+        return VStack(spacing: 0) {
+            ActivityGroupDetailHeader(
+                descriptor: descriptor,
+                count: todos.count,
+                onDismiss: {
+                    playLightHaptic()
+                    dismissActivityGroupDetail()
+                }
+            )
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(todos) { todo in
+                        todoCard(for: todo) {
+                            openTodoFromActivityGroup(todo)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 96)
+            }
+            .refreshable { await store.loadAll() }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white)
+    }
+
     private func presentSuggestedInfo() {
         playLightHaptic()
         withAnimation(settingsPresentationAnimation) {
@@ -628,6 +871,32 @@ struct TodoListView: View {
         withAnimation(settingsPresentationAnimation) {
             showSuggestedInfo = false
         }
+    }
+
+    private func presentMemoryDetail(_ memory: AgentMemory) {
+        playLightHaptic()
+        passbookMemoryDraftTitle = memory.title
+        passbookMemoryDraftBody = memory.body
+        passbookMemoryIsEditing = false
+        withAnimation(settingsPresentationAnimation) {
+            selectedPassbookMemory = memory
+        }
+    }
+
+    private func dismissMemoryDetail() {
+        withAnimation(settingsPresentationAnimation) {
+            selectedPassbookMemory = nil
+            passbookMemoryIsEditing = false
+        }
+    }
+
+    private func savePassbookMemory(_ memory: AgentMemory) async {
+        let title = passbookMemoryDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = passbookMemoryDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !body.isEmpty else { return }
+        await store.updateMemory(memory, title: title, body: body)
+        passbookMemoryIsEditing = false
+        selectedPassbookMemory = store.memories.first { $0.id == memory.id } ?? memory
     }
 
     private func playSectionHaptic() {
@@ -647,9 +916,68 @@ struct TodoListView: View {
         }
     }
 
+    private func activityGroupSummaries(from completedItems: [Todo]) -> [ActivityGroupSummary] {
+        let collections = Dictionary(grouping: completedItems.compactMap { todo -> (String, Todo)? in
+            guard let name = todo.normalizedCollectionName else { return nil }
+            return (name, todo)
+        }, by: { $0.0 })
+            .map { name, pairs in
+                let todos = pairs.map { $0.1 }.sorted(by: activitySort)
+                return ActivityGroupSummary(
+                    descriptor: .collection(name),
+                    count: todos.count,
+                    previewTitles: todos.prefix(3).map(\.title),
+                    latestUpdate: todos.first?.updated_at ?? .distantPast
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.latestUpdate == rhs.latestUpdate {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.latestUpdate > rhs.latestUpdate
+            }
+
+        let topics = Dictionary(grouping: completedItems, by: \.effectiveTopic)
+            .map { topic, todos in
+                let sortedTodos = todos.sorted(by: activitySort)
+                return ActivityGroupSummary(
+                    descriptor: .topic(topic),
+                    count: sortedTodos.count,
+                    previewTitles: sortedTodos.prefix(3).map(\.title),
+                    latestUpdate: sortedTodos.first?.updated_at ?? .distantPast
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.latestUpdate == rhs.latestUpdate {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.latestUpdate > rhs.latestUpdate
+            }
+
+        return collections + topics
+    }
+
+    private func activityTodos(for descriptor: ActivityGroupDescriptor) -> [Todo] {
+        completedTodos.filter { todo in
+            switch descriptor.kind {
+            case .collection(let name):
+                return todo.normalizedCollectionName?.caseInsensitiveCompare(name) == .orderedSame
+            case .topic(let topic):
+                return todo.effectiveTopic == topic
+            }
+        }
+    }
+
+    private func activitySort(_ lhs: Todo, _ rhs: Todo) -> Bool {
+        if lhs.updated_at == rhs.updated_at {
+            return lhs.created_at > rhs.created_at
+        }
+        return lhs.updated_at > rhs.updated_at
+    }
+
     private var taskLayoutSignature: String {
         store.todos
-            .map { "\($0.id.uuidString):\($0.status.rawValue):\($0.updated_at.ISO8601Format())" }
+            .map { "\($0.id.uuidString):\($0.status.rawValue):\($0.is_starred):\($0.topic ?? ""):\($0.collection_name ?? ""):\($0.updated_at.ISO8601Format())" }
             .joined(separator: "|")
     }
 
@@ -841,6 +1169,8 @@ struct TodoListView: View {
             exploreToolkits = try await IntegrationsAPI.list()
             exploreToolkitsHasLoaded = true
             exploreError = nil
+        } catch where IntegrationsAPI.isCancellation(error) {
+            print("[integrations][explore] list cancelled")
         } catch {
             exploreError = "Couldn't load connections: \(error.localizedDescription)"
         }
@@ -901,8 +1231,13 @@ struct TodoListView: View {
         defer { exploreBusySlug = nil }
 
         do {
-            try await IntegrationsAPI.disconnect(connectionID: connectionID)
+            try await IntegrationsAPI.disconnect(
+                connectionID: connectionID,
+                toolkit: toolkit.slug
+            )
             await loadExploreToolkits(showSpinner: false, force: true)
+        } catch where IntegrationsAPI.isCancellation(error) {
+            print("[integrations][explore] disconnect cancelled toolkit=\(toolkit.slug) connection=\(connectionID)")
         } catch {
             exploreError = "Couldn't disconnect: \(error.localizedDescription)"
         }
@@ -1099,6 +1434,7 @@ private struct TaskSectionHeader: View {
     let title: String
     var trailingIconName: String? = nil
     var trailingAction: (() -> Void)? = nil
+    var verticalPadding: CGFloat = 3
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1128,8 +1464,7 @@ private struct TaskSectionHeader: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 4)
-        .padding(.bottom, 2)
+        .padding(.vertical, verticalPadding)
         .accessibilityAddTraits(.isHeader)
     }
 }
@@ -1393,25 +1728,20 @@ private struct ExploreLocationCard: View {
     @ObservedObject var locationProvider: LocationProvider
     let actions: [ExploreActionItem]
     let onSelectAction: (ExploreActionItem) -> Void
+    private let mapTileSize: CGFloat = 142
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
                 LocationMapSquareTile(locationProvider: locationProvider)
 
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 0) {
                     LocationInfoPill(title: "Home address", subtitle: "Add home")
+                        .frame(maxHeight: .infinity)
                     LocationInfoPill(title: "Work, school etc.", subtitle: "Add place")
+                        .frame(maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-
-            VStack(spacing: 8) {
-                ForEach(actions) { item in
-                    LocationSuggestionRow(item: item) {
-                        onSelectAction(item)
-                    }
-                }
+                .frame(maxWidth: .infinity, minHeight: mapTileSize, maxHeight: mapTileSize, alignment: .topLeading)
             }
         }
         .padding(14)
@@ -1563,15 +1893,9 @@ private struct ExploreConnectionsPromoCard: View {
             }
             .frame(height: 154)
 
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 Spacer()
-                    .frame(height: 6)
-
-                Text("Connect your tools")
-                    .font(.system(size: 22, weight: .medium, design: .rounded))
-                    .foregroundStyle(.black)
-                    .lineLimit(1)
-                    .multilineTextAlignment(.leading)
+                    .frame(height: 4)
 
                 Button(action: onSetup) {
                     Text("Setup connections")
@@ -1895,6 +2219,175 @@ private struct ExploreApiKeySheet: View {
     }
 }
 
+private struct PassbookMemorySection: View {
+    let memories: [AgentMemory]
+    let onSelect: (AgentMemory) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ExploreSectionHeader(title: "What I know about you")
+            if memories.isEmpty {
+                PassbookMemoryEmptyCard()
+            } else {
+                ForEach(memories) { memory in
+                    PassbookMemoryCard(
+                        memory: memory,
+                        onSelect: { onSelect(memory) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct PassbookMemoryEmptyCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(TodoCardStyle.primaryBlue)
+                .frame(width: 38, height: 38)
+                .background(TodoCardStyle.primaryBlueTint, in: Circle())
+            Text("Doit has not learned anything durable yet.")
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+            Text("After conversations, useful preferences and facts will appear here for review.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.black.opacity(0.05))
+        )
+    }
+}
+
+private struct PassbookMemoryCard: View {
+    let memory: AgentMemory
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                Text(memory.title)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(16)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.black.opacity(0.05))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PassbookMemoryDetailCard: View {
+    let memory: AgentMemory
+    @Binding var isEditing: Bool
+    @Binding var draftTitle: String
+    @Binding var draftBody: String
+    let onClose: () -> Void
+    let onEdit: () -> Void
+    let onSave: () -> Void
+    let onApprove: () -> Void
+    let onForget: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Memory")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                    Text(memory.isSuggestedMemory ? "Suggested by Doit" : "Remembered by Doit")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(Color.black.opacity(0.06), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            if isEditing {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Title", text: $draftTitle)
+                        .font(.headline)
+                        .textFieldStyle(.roundedBorder)
+                    TextEditor(text: $draftBody)
+                        .frame(minHeight: 110)
+                        .padding(8)
+                        .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(memory.title)
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    Text(memory.body)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                }
+            }
+
+            if let reason = memory.memory_reason, !reason.isEmpty, !isEditing {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Why Doit remembered this")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(reason)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 10) {
+                if isEditing {
+                    Button("Cancel") {
+                        isEditing = false
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Save", action: onSave)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                            draftBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                } else {
+                    if memory.isSuggestedMemory {
+                        Button("Use This", action: onApprove)
+                            .buttonStyle(.borderedProminent)
+                    }
+                    Button("Edit", action: onEdit)
+                        .buttonStyle(.bordered)
+                    Button("Forget", role: .destructive, action: onForget)
+                        .buttonStyle(.bordered)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(20)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.black.opacity(0.05))
+        )
+    }
+}
+
 private final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var authorizationStatus: CLAuthorizationStatus
     @Published private(set) var coordinate: CLLocationCoordinate2D?
@@ -2094,6 +2587,298 @@ private enum ExploreCardStyle: Hashable {
     }
 }
 
+private enum CompletedActivityFilter: String, CaseIterable, Identifiable {
+    case allActivity
+    case starred
+    case topics
+
+    var id: String { rawValue }
+
+    var index: Int {
+        switch self {
+        case .allActivity: return 0
+        case .starred: return 1
+        case .topics: return 2
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .allActivity: return "All Activity"
+        case .starred: return "Starred"
+        case .topics: return "Topics"
+        }
+    }
+}
+
+private struct ActivityGroupDescriptor: Identifiable, Hashable {
+    enum Kind: Hashable {
+        case collection(String)
+        case topic(TodoTopic)
+    }
+
+    let kind: Kind
+
+    static func collection(_ name: String) -> ActivityGroupDescriptor {
+        ActivityGroupDescriptor(kind: .collection(name))
+    }
+
+    static func topic(_ topic: TodoTopic) -> ActivityGroupDescriptor {
+        ActivityGroupDescriptor(kind: .topic(topic))
+    }
+
+    var id: String {
+        switch kind {
+        case .collection(let name): return "collection:\(name.lowercased())"
+        case .topic(let topic): return "topic:\(topic.rawValue)"
+        }
+    }
+
+    var title: String {
+        switch kind {
+        case .collection(let name): return name
+        case .topic(let topic): return topic.label
+        }
+    }
+
+    var symbolName: String {
+        switch kind {
+        case .collection: return "folder.fill"
+        case .topic(let topic): return topic.symbolName
+        }
+    }
+
+    var tintColor: Color {
+        switch kind {
+        case .collection(let name):
+            return Self.collectionColor(for: name)
+        case .topic(let topic):
+            return topic.tileColor
+        }
+    }
+
+    private static func collectionColor(for name: String) -> Color {
+        let palette: [Color] = [
+            Color(red: 0.20, green: 0.42, blue: 0.90),
+            Color(red: 0.44, green: 0.33, blue: 0.88),
+            Color(red: 0.09, green: 0.56, blue: 0.60),
+            Color(red: 0.80, green: 0.36, blue: 0.18),
+            Color(red: 0.67, green: 0.28, blue: 0.62),
+            Color(red: 0.22, green: 0.55, blue: 0.32)
+        ]
+        let seed = name.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        return palette[seed % palette.count]
+    }
+}
+
+private extension TodoTopic {
+    var tileColor: Color {
+        switch self {
+        case .communication: return Color(red: 0.00, green: 0.48, blue: 1.00)
+        case .scheduling: return Color(red: 0.36, green: 0.42, blue: 0.88)
+        case .research: return Color(red: 0.00, green: 0.58, blue: 0.52)
+        case .documents: return Color(red: 0.28, green: 0.52, blue: 0.80)
+        case .coding: return Color(red: 0.17, green: 0.18, blue: 0.24)
+        case .finance: return Color(red: 0.16, green: 0.58, blue: 0.30)
+        case .shopping: return Color(red: 0.94, green: 0.48, blue: 0.16)
+        case .travel: return Color(red: 0.02, green: 0.60, blue: 0.86)
+        case .personal: return Color(red: 0.88, green: 0.38, blue: 0.52)
+        case .work: return Color(red: 0.38, green: 0.36, blue: 0.76)
+        case .other: return Color(red: 0.42, green: 0.46, blue: 0.52)
+        }
+    }
+}
+
+private struct ActivityGroupSummary: Identifiable, Hashable {
+    let descriptor: ActivityGroupDescriptor
+    let count: Int
+    let previewTitles: [String]
+    let latestUpdate: Date
+
+    var id: String { descriptor.id }
+    var title: String { descriptor.title }
+    var symbolName: String { descriptor.symbolName }
+    var tintColor: Color { descriptor.tintColor }
+}
+
+private struct CompletedActivityToggle: View {
+    let selection: CompletedActivityFilter
+    let onSelect: (CompletedActivityFilter) -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let inset: CGFloat = 4
+            let pillHeight: CGFloat = 38
+            let segmentWidth = (proxy.size.width - inset * 2) / CGFloat(CompletedActivityFilter.allCases.count)
+            let pillY = (proxy.size.height - pillHeight) / 2
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.86))
+                    .frame(width: segmentWidth, height: pillHeight)
+                    .offset(
+                        x: inset + segmentWidth * CGFloat(selection.index),
+                        y: pillY
+                    )
+                    .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.88), value: selection)
+
+                HStack(spacing: 0) {
+                    ForEach(CompletedActivityFilter.allCases) { filter in
+                        Button {
+                            onSelect(filter)
+                        } label: {
+                            Text(filter.title)
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(selection == filter ? Color.black : Color.black.opacity(0.48))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: pillHeight)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selection == filter ? AccessibilityTraits.isSelected : AccessibilityTraits())
+                    }
+                }
+                .padding(.horizontal, inset)
+                .offset(y: pillY)
+            }
+        }
+        .frame(height: 46)
+        .background(Color.black.opacity(0.05), in: Capsule())
+    }
+}
+
+private struct ActivityGroupGrid: View {
+    let summaries: [ActivityGroupSummary]
+    let onSelect: (ActivityGroupDescriptor) -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(summaries) { summary in
+                ActivityGroupTile(summary: summary) {
+                    onSelect(summary.descriptor)
+                }
+            }
+        }
+    }
+}
+
+private struct ActivityGroupTile: View {
+    let summary: ActivityGroupSummary
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    Image(systemName: summary.symbolName)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32, alignment: .topLeading)
+                        .accessibilityHidden(true)
+
+                    Spacer(minLength: 8)
+
+                    Text("\(summary.count)")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+
+                Spacer(minLength: 0)
+
+                Text(summary.title)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
+            .background(summary.tintColor, in: RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(summary.title), \(summary.count) completed tasks")
+    }
+}
+
+private struct ActivityEmptyCard: View {
+    let title: String
+    let message: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .foregroundStyle(TodoCardStyle.primaryBlue)
+
+            Text(title)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.82))
+
+            Text(message)
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .foregroundStyle(TodoCardStyle.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
+    }
+}
+
+private struct ActivityGroupDetailHeader: View {
+    let descriptor: ActivityGroupDescriptor
+    let count: Int
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: descriptor.symbolName)
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(width: 58, height: 58)
+                    .background(descriptor.tintColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(descriptor.title)
+                        .font(.system(size: 28, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(2)
+
+                    Text("\(count) completed task\(count == 1 ? "" : "s")")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                        .frame(width: 30, height: 30)
+                        .background(Color.primary.opacity(0.06), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .background(Color.white)
+    }
+}
+
 private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     case todo
     case scheduled
@@ -2230,7 +3015,7 @@ private struct CronJobCard: View {
                 }
 
                 Text(job.scheduleLabel)
-                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(TodoCardStyle.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -2238,7 +3023,7 @@ private struct CronJobCard: View {
 
                 Button(action: onOpen) {
                     Text(job.name)
-                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.black)
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)

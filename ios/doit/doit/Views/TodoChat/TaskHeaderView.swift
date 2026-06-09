@@ -41,6 +41,7 @@ struct TaskHeaderView: View {
     /// Sourced from `TodoStore.agentActivityByTodoID`.
     let agentActivity: AgentActivity?
     let onBack: () -> Void
+    let onToggleStar: () -> Void
     let onDelete: () -> Void
 
     /// Midlines (in `TaskHeaderTitleBlock` space) of every component the
@@ -61,6 +62,7 @@ struct TaskHeaderView: View {
         agentStatus: String? = nil,
         agentActivity: AgentActivity? = nil,
         onBack: @escaping () -> Void,
+        onToggleStar: @escaping () -> Void = {},
         onDelete: @escaping () -> Void
     ) {
         self.todo = todo
@@ -68,6 +70,7 @@ struct TaskHeaderView: View {
         self.agentStatus = agentStatus
         self.agentActivity = agentActivity
         self.onBack = onBack
+        self.onToggleStar = onToggleStar
         self.onDelete = onDelete
     }
 
@@ -123,6 +126,12 @@ struct TaskHeaderView: View {
             Spacer(minLength: 0)
 
             Menu {
+                Button(action: onToggleStar) {
+                    Label(
+                        todo.is_starred ? "Unstar Task" : "Star Task",
+                        systemImage: todo.is_starred ? "star.slash" : "star"
+                    )
+                }
                 Button("Delete Task", role: .destructive, action: onDelete)
             } label: {
                 Image(systemName: "ellipsis")

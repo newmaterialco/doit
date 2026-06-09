@@ -7,13 +7,45 @@ struct MemoryView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var showAddSheet = false
+    @State private var automaticSuggestionsEnabled = true
+    @State private var customInstructions = ""
+    @State private var savingSettings = false
 
     var body: some View {
         List {
             Section {
-                Text("What Hermes remembers across your todos. The agent is the source of truth — this screen is a live mirror of its USER.md and MEMORY.md. Anything tagged \"Learned by agent\" was saved by Hermes itself; entries you add show up as \"Pinned\" once the next run picks them up. Memory is bounded, so the agent will consolidate older notes over time.")
+                Text("This controls what Doit will remember for future tasks. Doit suggests durable preferences and facts after conversations, you can pin your own, and active memories are synced into Hermes before the next run.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("How memory works") {
+                Label("Passbook shows new things Doit learned about you.", systemImage: "menucard")
+                Label("Settings lets you approve, edit, or forget them.", systemImage: "slider.horizontal.3")
+                Label("Only active memories are sent to the agent.", systemImage: "checkmark.seal")
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+            Section("Controls") {
+                Toggle("Automatic memory suggestions", isOn: $automaticSuggestionsEnabled)
+                    .onChange(of: automaticSuggestionsEnabled) { _, _ in
+                        Task { await saveSettings() }
+                    }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Custom memory instructions")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Example: remember writing preferences, but do not remember personal contacts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $customInstructions)
+                        .frame(minHeight: 90)
+                    Button(savingSettings ? "Saving..." : "Save Instructions") {
+                        Task { await saveSettings() }
+                    }
+                    .disabled(savingSettings)
+                }
             }
 
             if loading && memories.isEmpty {
@@ -29,12 +61,12 @@ struct MemoryView: View {
                     ContentUnavailableView(
                         "Nothing remembered yet",
                         systemImage: "brain.head.profile",
-                        description: Text("Tap + to pin something the agent should remember. Hermes will also add things here on its own as it works on your todos.")
+                        description: Text("Tap + to pin something Doit should remember. Suggested memories from conversations will show up here and in Passbook.")
                     )
                 }
             } else {
-                ForEach(MemoryTarget.allCases, id: \.self) { target in
-                    let group = memories.filter { $0.effectiveTarget == target }
+                ForEach(memorySections, id: \.id) { section in
+                    let group = section.memories
                     if !group.isEmpty {
                         Section {
                             ForEach(group) { memory in
@@ -45,14 +77,26 @@ struct MemoryView: View {
                                 } label: {
                                     MemoryRow(memory: memory)
                                 }
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    if memory.isSuggestedMemory {
+                                        Button("Use This") {
+                                            Task { await approve(memory) }
+                                        }
+                                        .tint(.green)
+                                        Button("Reject") {
+                                            Task { await reject(memory) }
+                                        }
+                                        .tint(.orange)
+                                    }
+                                }
                             }
                             .onDelete { offsets in
                                 deleteRows(in: group, at: offsets)
                             }
                         } header: {
-                            Text(target.label)
+                            Text(section.title)
                         } footer: {
-                            Text(target.hint)
+                            Text(section.hint)
                         }
                     }
                 }
@@ -91,14 +135,68 @@ struct MemoryView: View {
         return nil
     }
 
+    private var memorySections: [MemorySection] {
+        [
+            MemorySection(
+                id: "suggested",
+                title: "Suggested",
+                hint: "Review these before Doit uses them automatically.",
+                memories: memories.filter { $0.effectiveMemoryStatus == .proposed }
+            ),
+            MemorySection(
+                id: "about-you",
+                title: MemoryTarget.user.label,
+                hint: "Active preferences, identity, communication style. Lands in USER.md.",
+                memories: memories.filter { $0.effectiveMemoryStatus == .active && $0.effectiveTarget == .user }
+            ),
+            MemorySection(
+                id: "agent-notes",
+                title: MemoryTarget.memory.label,
+                hint: "Active workflow facts, conventions, lessons. Lands in MEMORY.md.",
+                memories: memories.filter { $0.effectiveMemoryStatus == .active && $0.effectiveTarget == .memory }
+            ),
+            MemorySection(
+                id: "rejected",
+                title: "Rejected",
+                hint: "Doit will not use these unless you edit and save them again.",
+                memories: memories.filter { $0.effectiveMemoryStatus == .rejected }
+            ),
+        ]
+    }
+
     private func load() async {
         loading = true
         defer { loading = false }
         do {
-            memories = try await MemoriesAPI.list()
+            async let memoriesTask = MemoriesAPI.list()
+            if let userID {
+                async let settingsTask = MemorySettingsAPI.get(userID: userID)
+                let settings = try await settingsTask
+                automaticSuggestionsEnabled = settings.automatic_suggestions_enabled
+                customInstructions = settings.custom_instructions ?? ""
+            }
+            memories = try await memoriesTask
             error = nil
         } catch {
             self.error = "Couldn't load memories: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveSettings() async {
+        guard let userID else { return }
+        savingSettings = true
+        defer { savingSettings = false }
+        do {
+            let settings = try await MemorySettingsAPI.upsert(
+                userID: userID,
+                automaticSuggestionsEnabled: automaticSuggestionsEnabled,
+                customInstructions: customInstructions
+            )
+            automaticSuggestionsEnabled = settings.automatic_suggestions_enabled
+            customInstructions = settings.custom_instructions ?? ""
+            error = nil
+        } catch {
+            self.error = "Couldn't save memory settings: \(error.localizedDescription)"
         }
     }
 
@@ -133,6 +231,24 @@ struct MemoryView: View {
         }
     }
 
+    private func approve(_ memory: AgentMemory) async {
+        do {
+            try await MemoriesAPI.approve(memory.id)
+            await load()
+        } catch {
+            self.error = "Couldn't approve memory: \(error.localizedDescription)"
+        }
+    }
+
+    private func reject(_ memory: AgentMemory) async {
+        do {
+            try await MemoriesAPI.reject(memory.id)
+            await load()
+        } catch {
+            self.error = "Couldn't reject memory: \(error.localizedDescription)"
+        }
+    }
+
     private func deleteRows(in group: [AgentMemory], at offsets: IndexSet) {
         let toDelete = offsets.map { group[$0] }
         memories.removeAll { row in toDelete.contains(where: { $0.id == row.id }) }
@@ -142,6 +258,13 @@ struct MemoryView: View {
             }
         }
     }
+}
+
+private struct MemorySection {
+    let id: String
+    let title: String
+    let hint: String
+    let memories: [AgentMemory]
 }
 
 private struct MemoryRow: View {
@@ -167,6 +290,12 @@ private struct MemoryRow: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
+            if let reason = memory.memory_reason, memory.isSuggestedMemory {
+                Text(reason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
             if let error = memory.sync_error, !error.isEmpty,
                memory.effectiveSyncStatus == .failed {
                 Text(error)
@@ -183,14 +312,26 @@ private struct MemorySyncBadge: View {
 
     var body: some View {
         let (text, color): (String, Color) = {
-            switch (memory.effectiveSource, memory.effectiveSyncStatus) {
-            case (.hermes, _):
+            switch (memory.effectiveMemoryStatus, memory.effectiveSource, memory.effectiveSyncStatus) {
+            case (.proposed, _, _):
+                return ("Suggested", .orange)
+            case (.rejected, _, _):
+                return ("Rejected", .gray)
+            case (.deleted, _, _):
+                return ("Forgotten", .gray)
+            case (.active, .hermes, _):
                 return ("Learned by agent", .purple)
-            case (.user, .synced):
-                return ("Pinned", .green)
-            case (.user, .pending):
+            case (.active, .doit, .synced):
+                return ("Learned", .blue)
+            case (.active, .doit, .pending):
                 return ("Syncing", .orange)
-            case (.user, .failed):
+            case (.active, .doit, .failed):
+                return ("Sync failed", .red)
+            case (.active, .user, .synced):
+                return ("Pinned", .green)
+            case (.active, .user, .pending):
+                return ("Syncing", .orange)
+            case (.active, .user, .failed):
                 return ("Sync failed", .red)
             }
         }()

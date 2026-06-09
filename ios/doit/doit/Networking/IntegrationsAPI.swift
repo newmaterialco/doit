@@ -31,6 +31,12 @@ private struct IntegrationsErrorBody: Codable {
 enum IntegrationsAPI {
     private(set) static var cachedToolkits: [Toolkit]?
 
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
+    }
+
     static func userFacingError(_ error: Error) -> String {
         if let fnError = error as? FunctionsError,
            case .httpError(_, let data) = fnError,
@@ -55,9 +61,16 @@ enum IntegrationsAPI {
     static func list() async throws -> [Toolkit] {
         struct Body: Codable { let action: String }
         struct Resp: Codable { let toolkits: [Toolkit] }
+        let requestID = UUID().uuidString.prefix(8)
+        print("[integrations][\(requestID)] list start")
         let resp: Resp = try await Supa.client.functions
             .invoke("integrations", options: .init(body: Body(action: "list")))
         cachedToolkits = resp.toolkits
+        let connected = resp.toolkits
+            .filter(\.connected)
+            .map { "\($0.slug)=\($0.connection_id ?? "nil")" }
+            .joined(separator: ", ")
+        print("[integrations][\(requestID)] list ok connected=[\(connected)]")
         return resp.toolkits
     }
 
@@ -74,13 +87,32 @@ enum IntegrationsAPI {
             )
     }
 
-    static func disconnect(connectionID: String) async throws {
-        struct Body: Codable { let action: String; let connection_id: String }
-        struct Resp: Codable { let ok: Bool }
-        let _: Resp = try await Supa.client.functions
+    static func disconnect(connectionID: String, toolkit: String? = nil) async throws {
+        struct Body: Codable {
+            let action: String
+            let connection_id: String
+            let toolkit: String?
+        }
+        struct Resp: Codable {
+            let ok: Bool
+            let deleted: Int?
+            let already_disconnected: Bool?
+        }
+        let requestID = UUID().uuidString.prefix(8)
+        print("[integrations][\(requestID)] disconnect start toolkit=\(toolkit ?? "nil") connection=\(connectionID)")
+        let resp: Resp = try await Supa.client.functions
             .invoke(
                 "integrations",
-                options: .init(body: Body(action: "disconnect", connection_id: connectionID))
+                options: .init(
+                    body: Body(
+                        action: "disconnect",
+                        connection_id: connectionID,
+                        toolkit: toolkit
+                    )
+                )
             )
+        print(
+            "[integrations][\(requestID)] disconnect ok deleted=\(resp.deleted ?? -1) alreadyDisconnected=\(resp.already_disconnected ?? false)"
+        )
     }
 }

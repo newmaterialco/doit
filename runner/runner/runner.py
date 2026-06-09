@@ -32,6 +32,15 @@ from .hermes_memory import (
     MemoryTarget,
     fingerprint as memory_fingerprint,
 )
+from .memory_extraction import (
+    MEMORY_EXTRACT_INSTRUCTIONS,
+    build_memory_extraction_prompt,
+    parse_memory_extraction,
+)
+from .memory_sync import (
+    mirror_hermes_memory_to_supabase,
+    sync_active_memories_to_hermes,
+)
 from .model_settings import AgentModelApplier
 from .prepare import (
     CONNECTION_SLUGS,
@@ -244,7 +253,7 @@ async def run_one_todo(
     #      a nudge to curate them via its own ``memory`` tool (dedupe,
     #      replace older entries) rather than treating them as opaque text.
     memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
-    staged_memories = _sync_pending_memories_to_hermes(db, memory_store, user_id)
+    staged_memories = sync_active_memories_to_hermes(db, memory_store, user_id)
     task_context = (
         _task_context_for_prompt(db, todo_id)
         if resume is not None or pending_bodies
@@ -473,7 +482,15 @@ async def run_one_todo(
         # failed, or hit an interaction pause — Hermes may have persisted new
         # facts before any of those transitions.
         with suppress(Exception):
-            _mirror_hermes_memory_to_supabase(db, memory_store, user_id)
+            mirror_hermes_memory_to_supabase(db, memory_store, user_id)
+        if terminal_status == "done":
+            with suppress(Exception):
+                await _extract_memories_after_todo(
+                    db,
+                    todo,
+                    endpoint=endpoint,
+                    memory_store=memory_store,
+                )
 
     # Terminal push.
     if terminal_status == "done":
@@ -593,7 +610,7 @@ async def prepare_one_todo(
 
     memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
     with suppress(Exception):
-        _sync_pending_memories_to_hermes(db, memory_store, user_id)
+        sync_active_memories_to_hermes(db, memory_store, user_id)
 
     prep_prompt = build_prepare_prompt(
         title=raw_title,
@@ -668,6 +685,10 @@ async def prepare_one_todo(
         updates["title"] = result.title
     if result.connection_slug:
         updates["connection_slug"] = result.connection_slug
+    if result.topic:
+        updates["topic"] = result.topic
+    if result.collection_name:
+        updates["collection_name"] = result.collection_name
     if result.summary:
         updates["preparation_summary"] = result.summary
 
@@ -795,6 +816,8 @@ async def prepare_one_todo(
             original_title=extra.title,
             detail=None,
             connection_slug=extra.connection_slug,
+            topic=extra.topic,
+            collection_name=extra.collection_name,
             preparation_summary=extra.summary,
             status="requested",
         )
@@ -1699,6 +1722,74 @@ async def _watch_for_cancel(
 
 def _short(s: str, limit: int = 80) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "\u2026"
+
+
+async def _extract_memories_after_todo(
+    db: DB,
+    todo: dict,
+    *,
+    endpoint,
+    memory_store: HermesMemoryStore,
+) -> None:
+    """Run Doit's post-task memory extraction pass for a completed todo."""
+    todo_id = str(todo["id"])
+    user_id = str(todo["user_id"])
+    settings = db.get_memory_settings(user_id)
+    if settings.get("automatic_suggestions_enabled") is False:
+        return
+    active_memories = db.list_active_memories_for_sync(user_id)
+    prompt = build_memory_extraction_prompt(
+        todo=todo,
+        task_context=_task_context_for_prompt(db, todo_id),
+        existing_memories=active_memories,
+        custom_instructions=settings.get("custom_instructions"),
+    )
+
+    hermes = HermesClient(endpoint)
+    run_id: str | None = None
+    try:
+        run_id = await hermes.start_run(
+            prompt,
+            session_id=f"doit-memory-extract-{todo_id}",
+            session_key=_session_key_for_user(user_id),
+            instructions=MEMORY_EXTRACT_INSTRUCTIONS,
+        )
+        final_text = await asyncio.wait_for(
+            _collect_memory_extraction_text(hermes, run_id),
+            timeout=90.0,
+        )
+    finally:
+        with suppress(Exception):
+            if run_id is not None:
+                await hermes.stop_run(run_id)
+        await hermes.aclose()
+
+    candidates = parse_memory_extraction(final_text or "")
+    if not candidates:
+        return
+    for candidate in candidates:
+        memory_status = "active" if candidate.should_auto_activate else "proposed"
+        db.upsert_extracted_memory(
+            user_id=user_id,
+            target=candidate.target,
+            title=candidate.title,
+            body=candidate.body,
+            confidence=candidate.confidence,
+            reason=candidate.reason,
+            source_todo_id=todo_id,
+            memory_status=memory_status,
+        )
+    sync_active_memories_to_hermes(db, memory_store, user_id)
+
+
+async def _collect_memory_extraction_text(hermes: HermesClient, run_id: str) -> str:
+    final: str | None = None
+    async for ev in hermes.stream_events(run_id):
+        text = extract_terminal_text(ev.event, ev.data)
+        if text is not None:
+            final = text
+            break
+    return final or ""
 
 
 def _sync_pending_memories_to_hermes(

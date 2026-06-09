@@ -50,6 +50,8 @@ enum TodoRealtimeHub {
         /// place.
         var onAgentActivityChange: (UUID, AgentActivity?) async -> Void = { _, _ in }
         var onAgentActivityDelete: (UUID) async -> Void = { _ in }
+        var onMemoryChange: (UUID) async -> Void = { _ in }
+        var onMemoryDelete: (UUID) async -> Void = { _ in }
         /// Fallback when we can't pull a row id out of the payload —
         /// the store should run a full `loadAll()`.
         var onUnknown: () async -> Void = {}
@@ -319,6 +321,29 @@ enum TodoRealtimeHub {
         }
     }
 
+    private static func handleMemoryAction(_ action: AnyAction) async {
+        switch action {
+        case .insert(let a):
+            if let id = uuid(from: a.record, key: "id") {
+                await userHandlers.onMemoryChange(id)
+            } else {
+                await userHandlers.onUnknown()
+            }
+        case .update(let a):
+            if let id = uuid(from: a.record, key: "id") {
+                await userHandlers.onMemoryChange(id)
+            } else {
+                await userHandlers.onUnknown()
+            }
+        case .delete(let a):
+            if let id = uuid(from: a.oldRecord, key: "id") {
+                await userHandlers.onMemoryDelete(id)
+            } else {
+                await userHandlers.onUnknown()
+            }
+        }
+    }
+
     private static func uuid(from record: [String: AnyJSON], key: String) -> UUID? {
         guard let raw = record[key]?.stringValue else { return nil }
         return UUID(uuidString: raw)
@@ -380,6 +405,9 @@ enum TodoRealtimeHub {
             connection_slug: record["connection_slug"]?.stringValue,
             preparation_summary: record["preparation_summary"]?.stringValue,
             total_tokens: record["total_tokens"]?.stringValue.flatMap(Int64.init),
+            is_starred: record["is_starred"]?.boolValue ?? false,
+            topic: record["topic"]?.stringValue,
+            collection_name: record["collection_name"]?.stringValue,
             created_at: createdAt,
             updated_at: updatedAt,
             completed_at: date(from: record["completed_at"]?.stringValue)
@@ -477,6 +505,12 @@ enum TodoRealtimeHub {
                 table: "todo_agent_activity",
                 filter: userFilter
             )
+            let memories = channel.postgresChange(
+                AnyAction.self,
+                schema: "public",
+                table: "memories",
+                filter: userFilter
+            )
 
             do {
                 try await channel.subscribeWithError()
@@ -524,6 +558,13 @@ enum TodoRealtimeHub {
                         label: "todo_agent_activity",
                         stream: agentActivity,
                         onAction: handleAgentActivityAction
+                    )
+                }
+                group.addTask {
+                    await consumeStream(
+                        label: "memories",
+                        stream: memories,
+                        onAction: handleMemoryAction
                     )
                 }
             }
