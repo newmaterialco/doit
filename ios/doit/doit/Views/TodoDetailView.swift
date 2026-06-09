@@ -31,10 +31,24 @@ struct TodoDetailView: View {
     @State private var uploading = false
     @State private var sending = false
 
-    /// Split between the task header and chat thread. Start balanced so the
-    /// detail context and the latest chat both have useful space; the user
-    /// can drag, mini, or full either side via the split's drag pill.
-    @State private var splitDetent: SplitDetent = .fraction(0.5)
+    /// Notch 1 (~17% task) — auto-open when the agent is waiting on a reply.
+    private static let chatAutoExpandedTopFraction = 1.0 / 6.0
+    /// Notch 2 (~33% task) — manual expand when the user taps a collapsed pill
+    /// (the "Chat" pill at the bottom or the truncated task title at the top).
+    private static let chatTappedExpandedTopFraction = 2.0 / 6.0
+
+    private static var chatExpandedDetent: SplitDetent {
+        .fraction(chatAutoExpandedTopFraction)
+    }
+
+    private static var chatTappedDetent: SplitDetent {
+        .fraction(chatTappedExpandedTopFraction)
+    }
+
+    /// Split between the task header and chat thread. Usually opens with chat
+    /// collapsed (`.topFull`); when the agent has an open follow-up we start at
+    /// `chatExpandedDetent` so the question and composer are visible.
+    @State private var splitDetent: SplitDetent = .topFull
 
     /// Detent the user was sitting on when they tapped the composer. We
     /// auto-snap to `.bottomFull` while the chat field is focused so the
@@ -149,6 +163,8 @@ struct TodoDetailView: View {
                 )
             }
         )
+        .collapsedTapDetent(Self.chatTappedDetent)
+        .collapsedTopTapDetent(Self.chatTappedDetent)
         .handleTrailingText(formattedTokens(current?.total_tokens))
         // The vendor split positions everything (handle pill, mini
         // overlay, wrappers) with absolute offsets and `.ignoresSafeArea()`
@@ -163,8 +179,18 @@ struct TodoDetailView: View {
         // since that one only exists on the concrete split type and
         // erasing to `some View` first would hide it.
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .onChange(of: openInteractionAwaitingReplyID) { _, interactionID in
+            // Agent posted a follow-up (quick-reply buttons or a freeform
+            // question) while we were collapsed — expand chat so it's in view.
+            guard interactionID != nil, splitDetent == .topFull else { return }
+            withAnimation(.smooth(duration: 0.4)) {
+                splitDetent = Self.chatExpandedDetent
+            }
+        }
         .toolbar(.hidden, for: .navigationBar)
         .task(id: todoID) {
+            applyInitialSplitDetent()
+            detentBeforeFocus = nil
             // Realtime for the task row, interactions, and artifacts flows
             // through the app-scoped user feed → `TodoStore`. The hub's
             // per-todo watch only covers chat-only tables (`todo_steps`,
@@ -261,6 +287,24 @@ struct TodoDetailView: View {
         interactions.last(where: { $0.status == .open })
     }
 
+    /// Open follow-up the user still needs to answer — quick-reply buttons
+    /// and/or a freeform question in the composer. We consult both the full
+    /// interaction history and the list-scoped open snapshot because the
+    /// detail view can appear before `refreshInteractions` lands.
+    private var interactionAwaitingUserReply: TodoInteraction? {
+        for candidate in [openInteraction, store.openInteractions[todoID]] {
+            guard let interaction = candidate,
+                  interaction.status == .open
+            else { continue }
+            return interaction
+        }
+        return nil
+    }
+
+    private var openInteractionAwaitingReplyID: UUID? {
+        interactionAwaitingUserReply?.id
+    }
+
     /// Summary blurb from the agent's currently-open interaction, shown
     /// in the task header as a "what I'm waiting on" status. `nil`
     /// while there's nothing open so the header doesn't grow a
@@ -303,6 +347,12 @@ struct TodoDetailView: View {
     }
 
     // MARK: - Actions
+
+    private func applyInitialSplitDetent() {
+        splitDetent = interactionAwaitingUserReply != nil
+            ? Self.chatExpandedDetent
+            : .topFull
+    }
 
     private func takePhoto() {
         #if targetEnvironment(simulator)

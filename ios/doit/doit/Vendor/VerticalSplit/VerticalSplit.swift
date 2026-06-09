@@ -63,6 +63,12 @@ public struct VerticalSplit<
     private var minimalPillTextMaxWidth: CGFloat { 220 }
 
     @Binding var detent: SplitDetent
+    /// Detent when the user taps the pill after the bottom pane was collapsed
+    /// (`.topFull` — e.g. the "Chat" pill). Defaults to 50/50.
+    var collapsedTapDetent: SplitDetent = .fraction(0.5)
+    /// Detent when the user taps the pill after the top pane was collapsed
+    /// (`.bottomFull` — truncated task title at the top). Defaults to 50/50.
+    var collapsedTopTapDetent: SplitDetent = .fraction(0.5)
     @State var didSetInitialSplit = false
 
     var shouldLog = false
@@ -168,22 +174,24 @@ public struct VerticalSplit<
                 }
             }
             .onEnded { value in
-                if value.translation.height < 2, hideTop || hideBottom {
-                    let targetSplit: SplitDetent = .fraction(0.5)
-                    let targetPartition = getSnappedPartition(for: notches / 2)
-
+                // Use `initialMinimal`, not `hideTop || hideBottom`: `onChanged`
+                // already clears those flags while the finger is down, so a tap
+                // on the collapsed pill would otherwise fall through to the drag
+                // snap logic and land on `.bottomMini`.
+                if value.translation.height < 2, initialMinimal {
+                    let expandingFromCollapsedTop = initialTop
                     withTransaction(transaction) {
                         hideTop = false
                         hideBottom = false
-                        partition = targetPartition
-                        topHeight = cardHeight + targetPartition
                         overscroll = 0
                         translationBeforeOverscroll = 0
                     }
                     initialPartition = nil
                     initialMinimal = false
                     initialTop = false
-                    detent = targetSplit
+                    detent = expandingFromCollapsedTop
+                        ? collapsedTopTapDetent
+                        : collapsedTapDetent
                     return
                 }
                 let translation = (initialPartition ?? 0) + value.translation.height

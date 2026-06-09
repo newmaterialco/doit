@@ -27,6 +27,7 @@ struct TodoListView: View {
     @State private var settingsSheetIsVisible = false
     @State private var selectedCompletedActivityFilter: CompletedActivityFilter = .allActivity
     @State private var selectedCompletedActivityPageID: CompletedActivityFilter? = .allActivity
+    @State private var completedActivityPageHeights: [CompletedActivityFilter: CGFloat] = [:]
     @State private var selectedActivityGroup: ActivityGroupDescriptor?
     @State private var showActivityGroupDetail = false
     @State private var activityGroupDetailIsVisible = false
@@ -356,11 +357,24 @@ struct TodoListView: View {
         .scrollIndicators(.hidden)
         .scrollPosition(id: $selectedCompletedActivityPageID)
         .padding(.horizontal, -16)
+        .frame(height: selectedCompletedActivityPageHeight)
+        .animation(.smooth(duration: 0.24), value: selectedCompletedActivityPageHeight)
+        .onPreferenceChange(CompletedActivityPageHeightPreferenceKey.self) { heights in
+            completedActivityPageHeights.merge(heights) { _, new in new }
+        }
         .onChange(of: selectedCompletedActivityPageID) { _, newValue in
             guard let newValue, newValue != selectedCompletedActivityFilter else { return }
             selectedCompletedActivityFilter = newValue
             playSectionHaptic()
         }
+    }
+
+    private var selectedCompletedActivityPageHeight: CGFloat? {
+        guard let height = completedActivityPageHeights[selectedCompletedActivityFilter],
+              height > 0 else {
+            return nil
+        }
+        return height
     }
 
     @ViewBuilder
@@ -405,6 +419,14 @@ struct TodoListView: View {
             }
         }
         .padding(.horizontal, 16)
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: CompletedActivityPageHeightPreferenceKey.self,
+                    value: [filter: proxy.size.height]
+                )
+            }
+        }
     }
 
     @ViewBuilder
@@ -2321,7 +2343,7 @@ private struct PassbookMemorySection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ExploreSectionHeader(title: "Memory")
+            ExploreSectionHeader(title: "Memories")
             if memories.isEmpty {
                 PassbookMemoryEmptyCard()
             } else {
@@ -2791,6 +2813,17 @@ private enum CompletedActivityFilter: String, CaseIterable, Identifiable {
         case .starred: return "Starred"
         case .topics: return "Topics"
         }
+    }
+}
+
+private struct CompletedActivityPageHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: [CompletedActivityFilter: CGFloat] = [:]
+
+    static func reduce(
+        value: inout [CompletedActivityFilter: CGFloat],
+        nextValue: () -> [CompletedActivityFilter: CGFloat]
+    ) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 
@@ -3390,9 +3423,10 @@ private struct TodoCard: View {
             Text(displayTitle)
                 .font(.system(size: 20, weight: .regular, design: .rounded))
                 .foregroundStyle(Color.black)
-                .lineLimit(3)
+                .lineLimit(todo.status == .done ? nil : 3)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -3418,12 +3452,20 @@ private struct TodoCard: View {
     private var topRowTrailing: some View {
         Group {
             if connectionSlugs.isEmpty {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.black.opacity(0.28))
-                    .frame(width: 20, height: 20)
+                if todo.is_starred {
+                    StarConnectionChip(size: TodoCardStyle.connectionLogoChipSize)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.28))
+                        .frame(width: 20, height: 20)
+                }
             } else {
-                ConnectionLogosRow(slugs: connectionSlugs, chipSize: TodoCardStyle.connectionLogoChipSize)
+                ConnectionLogosRow(
+                    slugs: connectionSlugs,
+                    chipSize: TodoCardStyle.connectionLogoChipSize,
+                    showsStar: todo.is_starred
+                )
             }
         }
     }
@@ -3670,30 +3712,36 @@ struct PillButton: View {
 /// Stacked Composio toolkit logos (e.g. Sheets + Gmail on one task).
 struct ConnectionLogosRow: View {
     let slugs: [String]
+    let showsStar: Bool
     private let chipSize: CGFloat
 
-    init(slugs: [String], chipSize: CGFloat = 24) {
+    init(slugs: [String], chipSize: CGFloat = 24, showsStar: Bool = false) {
         self.slugs = slugs
+        self.showsStar = showsStar
         self.chipSize = chipSize
     }
 
-    init(slugs: [String], iconSize: CGFloat, spacing _: CGFloat) {
+    init(slugs: [String], iconSize: CGFloat, spacing _: CGFloat, showsStar: Bool = false) {
         self.slugs = slugs
+        self.showsStar = showsStar
         self.chipSize = iconSize + 8
     }
 
     private var overlap: CGFloat {
-        chipSize * 0.25
+        chipSize * 0.38
     }
 
     var body: some View {
-        if !slugs.isEmpty {
+        if !slugs.isEmpty || showsStar {
             HStack(spacing: -overlap) {
                 ForEach(slugs, id: \.self) { slug in
                     ConnectionLogoChip(slug: slug, size: chipSize)
                 }
+                if showsStar {
+                    StarConnectionChip(size: chipSize)
+                }
             }
-            .animation(.smooth(duration: 0.25), value: slugs)
+            .animation(.smooth(duration: 0.25), value: slugs + (showsStar ? ["__star"] : []))
         }
     }
 }
@@ -3712,6 +3760,23 @@ private struct ConnectionLogoChip: View {
                     .strokeBorder(Color.black.opacity(0.10), lineWidth: 1)
             }
             .accessibilityLabel("Connection: \(slug)")
+    }
+}
+
+private struct StarConnectionChip: View {
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: "star.fill")
+            .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
+            .foregroundStyle(Color.yellow)
+            .frame(width: size, height: size)
+            .background(Color.white, in: Circle())
+            .overlay {
+                Circle()
+                    .strokeBorder(Color.black.opacity(0.10), lineWidth: 1)
+            }
+            .accessibilityLabel("Starred")
     }
 }
 

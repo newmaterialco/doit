@@ -11,7 +11,6 @@ struct AddTodoView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
-    @State private var saving = false
     @State private var error: String?
     @State private var voice = VoiceRecorder()
     @State private var isTranscribing = false
@@ -129,7 +128,7 @@ struct AddTodoView: View {
                 Button {
                     beginSave()
                 } label: {
-                    Text(saving ? "Creating…" : "Create")
+                    Text("Create")
                         .font(.system(.body, design: .rounded).weight(.semibold))
                         .foregroundStyle(canCreate ? .white : .secondary)
                         .padding(.horizontal, 12)
@@ -137,7 +136,7 @@ struct AddTodoView: View {
                         .background(canCreate ? Color.blue : Color.gray.opacity(0.16), in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(!canCreate || saving)
+                .disabled(!canCreate)
             }
         }
         .padding(.horizontal, 20)
@@ -330,7 +329,6 @@ struct AddTodoView: View {
 
     private var canCreate: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !saving
             && !isTranscribing
             && !voice.isRecording
     }
@@ -341,38 +339,40 @@ struct AddTodoView: View {
 
     private func beginSave() {
         guard canCreate else { return }
-        saving = true
-        Task { await save() }
+        playLightHaptic()
+
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imagesToUpload = pendingImages
+        dismiss()
+
+        Task {
+            do {
+                let todo = try await TodosAPI.create(
+                    title: trimmedTitle,
+                    detail: nil,
+                    userID: userID
+                )
+                await uploadPendingAttachments(
+                    forTodoID: todo.id,
+                    images: imagesToUpload
+                )
+                onCreated(todo)
+            } catch {
+                print("[AddTodoView] create failed: \(error)")
+            }
+        }
     }
 
     private func playLightHaptic() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
-    private func save() async {
-        guard saving else { return }
-        defer { saving = false }
-        do {
-            let todo = try await TodosAPI.create(
-                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-                detail: nil,
-                userID: userID
-            )
-            // Upload pending attachments after the todo exists. We surface
-            // failures inline but still consider the task created so the
-            // user doesn't lose their typed text on a flaky network.
-            await uploadPendingAttachments(forTodoID: todo.id)
-            onCreated(todo)
-            dismiss()
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func uploadPendingAttachments(forTodoID todoID: UUID) async {
-        guard !pendingImages.isEmpty else { return }
-        var failures = 0
-        for item in pendingImages {
+    private func uploadPendingAttachments(
+        forTodoID todoID: UUID,
+        images: [PendingImage]
+    ) async {
+        guard !images.isEmpty else { return }
+        for item in images {
             do {
                 _ = try await AttachmentsAPI.upload(
                     image: item.image,
@@ -380,13 +380,8 @@ struct AddTodoView: View {
                     userID: userID
                 )
             } catch {
-                failures += 1
+                print("[AddTodoView] attachment upload failed: \(error)")
             }
-        }
-        if failures > 0 {
-            self.error = failures == 1
-                ? "1 image couldn't upload. Open the task to retry."
-                : "\(failures) images couldn't upload. Open the task to retry."
         }
     }
 

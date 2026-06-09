@@ -70,4 +70,18 @@ public extension VerticalSplit {
         copy.handleTrailingText = text
         return copy
     }
+
+    /// Detent when the user taps the bottom pane's pill (`.topFull`, e.g. "Chat").
+    func collapsedTapDetent(_ detent: SplitDetent) -> Self {
+        var copy = self
+        copy.collapsedTapDetent = detent
+        return copy
+    }
+
+    /// Detent when the user taps the top pane's pill (`.bottomFull`, truncated title).
+    func collapsedTopTapDetent(_ detent: SplitDetent) -> Self {
+        var copy = self
+        copy.collapsedTopTapDetent = detent
+        return copy
+    }
 }

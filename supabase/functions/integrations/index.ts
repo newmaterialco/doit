@@ -217,7 +217,7 @@ async function buildSessionConnectionContext(
     connected_accounts: Record<string, string[]>;
 }> {
     const auth_configs: Record<string, string> = {};
-        for (const slug of apiKeyToolkitSlugs()) {
+    for (const slug of apiKeyToolkitSlugs()) {
         if (toolkits.includes(slug)) {
             auth_configs[slug] = await getOrCreateAuthConfig(slug, "API_KEY");
         }
@@ -250,6 +250,11 @@ async function createSession(
             enable_wait_for_connections: false,
             enable_connection_removal: true,
         },
+        // Do not expose Composio's remote workbench/bashing tools. They
+        // require the API-key-level `proxy_execute` entitlement and lead the
+        // agent into a dead end when unavailable; app-specific toolkit tools
+        // (Gmail, Sheets, Figma, etc.) remain available through search/execute.
+        workbench: { enable: false },
     };
     if (Object.keys(auth_configs).length > 0) {
         payload.auth_configs = auth_configs;

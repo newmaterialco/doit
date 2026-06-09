@@ -102,6 +102,10 @@ def _session_payload(user_id: str, toolkits: list[str], api_key: str) -> dict[st
             "enable_wait_for_connections": False,
             "enable_connection_removal": True,
         },
+        # Keep Composio remote workbench disabled. It requires the API-key
+        # level proxy_execute entitlement and is not needed for app toolkit
+        # actions; exposing it causes the agent to choose a broken path.
+        "workbench": {"enable": False},
     }
     if auth_configs:
         payload["auth_configs"] = auth_configs

@@ -117,7 +117,7 @@ struct TaskHeaderView: View {
                     .truncationMode(.tail)
                     .accessibilityLabel("Created \(humanizedDate(todo.created_at))")
 
-                if !connectionSlugs.isEmpty {
+                if !connectionSlugs.isEmpty || todo.is_starred {
                     headerMetadataDot
                     connectionLogosRow
                 }
@@ -161,7 +161,8 @@ struct TaskHeaderView: View {
         ConnectionLogosRow(
             slugs: connectionSlugs,
             iconSize: TaskHeaderLayout.headerConnectionIconSize,
-            spacing: 5
+            spacing: 5,
+            showsStar: todo.is_starred
         )
     }
 
