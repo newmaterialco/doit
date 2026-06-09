@@ -6,7 +6,6 @@ import SwiftUI
 private enum TaskHeaderLayout {
     static let statusIconSize: CGFloat = 28
     static let statusIconSpacing: CGFloat = 12
-    static var titleLeadingInset: CGFloat { statusIconSize + statusIconSpacing }
     static let headerDateFontSize: CGFloat = 15
     static let headerConnectionIconSize: CGFloat = 18
     static let headerMetadataDotSize: CGFloat = 4
@@ -14,10 +13,10 @@ private enum TaskHeaderLayout {
     static let headerToTitleSpacing: CGFloat = 12
     /// Breathing room below the final artifact card before the split handle /
     /// chat panel begins.
-    static let artifactsBottomPadding: CGFloat = 24
-    static let connectorCornerRadius: CGFloat = 8
-    /// Space between the horizontal connector stub and the component edge.
-    static let connectorComponentGap: CGFloat = 8
+    static let artifactsBottomPadding: CGFloat = 18
+    static let artifactSeparatorLength: CGFloat = 10
+    static let artifactSeparatorThickness: CGFloat = 3
+    static let artifactSeparatorSpacing: CGFloat = 5
 }
 
 /// Top panel of the split-screen detail view: a compact action row with
@@ -43,12 +42,10 @@ struct TaskHeaderView: View {
     let onBack: () -> Void
     let onToggleStar: () -> Void
     let onDelete: () -> Void
+    /// Opens the chat panel — wired from the detail view when the user taps
+    /// the live activity card stack under the title.
+    let onTapActivity: () -> Void
 
-    /// Midlines (in `TaskHeaderTitleBlock` space) of every component the
-    /// timeline connector branches into — activity card, status, each
-    /// artifact. Sorted before drawing so the trunk extends as more
-    /// deliverables appear.
-    @State private var connectorBranchYs: [CGFloat] = []
     @State private var isEmailBatchExpanded = false
 
     /// Explicit memberwise init so Xcode's incremental compiler can't
@@ -63,7 +60,8 @@ struct TaskHeaderView: View {
         agentActivity: AgentActivity? = nil,
         onBack: @escaping () -> Void,
         onToggleStar: @escaping () -> Void = {},
-        onDelete: @escaping () -> Void
+        onDelete: @escaping () -> Void,
+        onTapActivity: @escaping () -> Void = {}
     ) {
         self.todo = todo
         self.artifacts = artifacts
@@ -72,6 +70,7 @@ struct TaskHeaderView: View {
         self.onBack = onBack
         self.onToggleStar = onToggleStar
         self.onDelete = onDelete
+        self.onTapActivity = onTapActivity
     }
 
     var body: some View {
@@ -166,12 +165,6 @@ struct TaskHeaderView: View {
         )
     }
 
-    private var hasContentBelowTitle: Bool {
-        if let activity = agentActivity, shouldShowActivityCard(activity) { return true }
-        if shouldShowAgentStatus { return true }
-        return !artifacts.isEmpty
-    }
-
     private var shouldShowAgentStatus: Bool {
         guard let status = agentStatus, !status.isEmpty else { return false }
         return agentActivity?.isRunning != true
@@ -187,67 +180,43 @@ struct TaskHeaderView: View {
         activity.resolvedPhase != .idle
     }
 
-    /// Checkmark, title, and any agent-status / artifact cards share one
-    /// row so a timeline connector can descend from the icon and curve into
-    /// the title-aligned content below.
+    /// Checkmark and title share one row; activity cards and artifacts span full width below.
     @ViewBuilder
     private var taskTitleBlock: some View {
-        HStack(alignment: .top, spacing: TaskHeaderLayout.statusIconSpacing) {
-            StatusIndicatorIcon(status: todo.status)
-                .frame(
-                    width: TaskHeaderLayout.statusIconSize,
-                    height: TaskHeaderLayout.statusIconSize
-                )
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: TaskHeaderLayout.statusIconSpacing) {
+                StatusIndicatorIcon(status: todo.status)
+                    .frame(
+                        width: TaskHeaderLayout.statusIconSize,
+                        height: TaskHeaderLayout.statusIconSize
+                    )
 
-            VStack(alignment: .leading, spacing: 16) {
-                Text(todo.title)
-                    .font(.system(size: 20, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(3)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(todo.title)
+                        .font(.system(size: 20, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(3)
 
-                if let activity = agentActivity, shouldShowActivityCard(activity) {
-                    AgentActivityCard(activity: activity, isTaskActive: todo.status.isActive)
-                        .connectorAnchor()
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    if shouldShowAgentStatus, let status = agentStatus {
+                        agentStatusBox(text: status)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                 }
-
-                if shouldShowAgentStatus, let status = agentStatus {
-                    agentStatusBox(text: status)
-                        .connectorAnchor()
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-
-                if !artifacts.isEmpty {
-                    artifactsSection()
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .coordinateSpace(name: "TaskHeaderTitleBlock")
-        .onPreferenceChange(ConnectorBranchYsKey.self) { ys in
-            connectorBranchYs = ys
-                .filter { $0 > TaskHeaderLayout.statusIconSize }
-                .sorted()
-        }
-        .background {
-            if hasContentBelowTitle, !connectorBranchYs.isEmpty {
-                GeometryReader { proxy in
-                    TaskHeaderConnectorShape(
-                        iconCenterX: TaskHeaderLayout.statusIconSize / 2,
-                        contentLeadingX: TaskHeaderLayout.titleLeadingInset,
-                        iconBottomY: TaskHeaderLayout.statusIconSize,
-                        branchYs: connectorBranchYs,
-                        cornerRadius: TaskHeaderLayout.connectorCornerRadius,
-                        componentGap: TaskHeaderLayout.connectorComponentGap
-                    )
-                    .stroke(
-                        Color.secondary.opacity(0.28),
-                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
-                    )
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .animation(.smooth(duration: 0.3), value: connectorBranchYs)
+
+            if let activity = agentActivity, shouldShowActivityCard(activity) {
+                Button(action: onTapActivity) {
+                    AgentActivityCard(activity: activity, isTaskActive: todo.status.isActive)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open chat")
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            if !artifacts.isEmpty {
+                artifactsSection()
             }
         }
     }
@@ -288,14 +257,19 @@ struct TaskHeaderView: View {
     @ViewBuilder
     private func artifactsSection() -> some View {
         let grouped = TodoArtifact.groupedForDisplay(artifacts)
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(grouped.primary) { artifact in
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(grouped.primary.enumerated()), id: \.element.id) { index, artifact in
+                if index > 0 {
+                    artifactSeparator
+                }
                 TaskArtifactView(artifact: artifact)
-                    .connectorAnchor()
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             if !grouped.emailDrafts.isEmpty {
+                if !grouped.primary.isEmpty {
+                    artifactSeparator
+                }
                 emailArtifactsSection(emails: grouped.emailDrafts)
             }
         }
@@ -304,14 +278,25 @@ struct TaskHeaderView: View {
         .padding(.bottom, TaskHeaderLayout.artifactsBottomPadding)
     }
 
+    private var artifactSeparator: some View {
+        Capsule(style: .continuous)
+            .fill(Color.secondary.opacity(0.28))
+            .frame(
+                width: TaskHeaderLayout.artifactSeparatorThickness,
+                height: TaskHeaderLayout.artifactSeparatorLength
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, TaskHeaderLayout.artifactSeparatorSpacing)
+            .accessibilityHidden(true)
+    }
+
     @ViewBuilder
     private func emailArtifactsSection(emails: [TodoArtifact]) -> some View {
         if emails.count == 1, let email = emails.first {
             TaskArtifactView(artifact: email)
-                .connectorAnchor()
                 .transition(.opacity.combined(with: .move(edge: .top)))
         } else {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
                 Button {
                     withAnimation(.smooth(duration: 0.25)) {
                         isEmailBatchExpanded.toggle()
@@ -320,12 +305,15 @@ struct TaskHeaderView: View {
                     emailBatchPill(emails: emails)
                 }
                 .buttonStyle(.plain)
-                .connectorAnchor()
                 .accessibilityLabel(isEmailBatchExpanded ? "Hide \(emails.count) sent emails" : "Show \(emails.count) sent emails")
 
                 if isEmailBatchExpanded {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(emails) { artifact in
+                    Group {
+                        artifactSeparator
+                        ForEach(Array(emails.enumerated()), id: \.element.id) { index, artifact in
+                            if index > 0 {
+                                artifactSeparator
+                            }
                             TaskArtifactView(artifact: artifact)
                         }
                     }
@@ -344,8 +332,9 @@ struct TaskHeaderView: View {
 
     private func emailBatchPill(emails: [TodoArtifact]) -> some View {
         HStack(alignment: .center, spacing: 10) {
-            ConnectionLogo(slug: emails.first?.emailProvider ?? "gmail")
-                .frame(width: 18, height: 18)
+            ArtifactCardLeadingIcon(glyphSize: 12, circleSize: 28) {
+                ConnectionLogo(slug: emails.first?.emailProvider ?? "gmail")
+            }
 
             Text("\(emails.count) emails sent")
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
@@ -358,7 +347,7 @@ struct TaskHeaderView: View {
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(isEmailBatchExpanded ? 180 : 0))
         }
-        .padding(18)
+        .padding(ArtifactCardLayout.contentPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -412,162 +401,6 @@ struct StatusIndicatorIcon: View {
     }
 }
 
-/// Timeline stroke from the checkmark column toward attached content.
-/// A vertical trunk runs under the status icon; each anchored component
-/// gets a horizontal branch with the same rounded 90° elbow. The trunk
-/// lengthens as more `branchYs` are reported.
-private struct TaskHeaderConnectorShape: Shape {
-    var iconCenterX: CGFloat
-    var contentLeadingX: CGFloat
-    var iconBottomY: CGFloat
-    var branchYs: [CGFloat]
-    var cornerRadius: CGFloat
-    var componentGap: CGFloat
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let branches = branchYs
-            .map { min(max($0, iconBottomY + 1), rect.maxY) }
-            .sorted()
-        guard let firstY = branches.first else { return path }
-
-        let r = cornerRadius
-        let trunkX = iconCenterX
-        let stubX = contentLeadingX - componentGap
-        let lastY = branches.last ?? firstY
-
-        if branches.count == 1 {
-            drawCurvedBranch(
-                into: &path,
-                trunkX: trunkX,
-                stubX: stubX,
-                iconBottomY: iconBottomY,
-                branchY: firstY,
-                radius: r
-            )
-            return path
-        }
-
-        drawCurvedBranch(
-            into: &path,
-            trunkX: trunkX,
-            stubX: stubX,
-            iconBottomY: iconBottomY,
-            branchY: firstY,
-            radius: r
-        )
-
-        // Stop the trunk where the last elbow begins — not at the
-        // artifact midline — so we don't draw a short vertical tail
-        // past the final horizontal stub.
-        let trunkEndY = lastY - r
-        if trunkEndY > firstY + 1 {
-            path.move(to: CGPoint(x: trunkX, y: firstY))
-            path.addLine(to: CGPoint(x: trunkX, y: trunkEndY))
-        }
-
-        for y in branches.dropFirst() {
-            drawCurvedStubFromTrunk(
-                into: &path,
-                trunkX: trunkX,
-                stubX: stubX,
-                branchY: y,
-                radius: r
-            )
-        }
-
-        return path
-    }
-
-    /// Vertical drop from the status icon into the first branch elbow.
-    private func drawCurvedBranch(
-        into path: inout Path,
-        trunkX: CGFloat,
-        stubX: CGFloat,
-        iconBottomY: CGFloat,
-        branchY: CGFloat,
-        radius: CGFloat
-    ) {
-        path.move(to: CGPoint(x: trunkX, y: iconBottomY))
-        path.addLine(to: CGPoint(x: trunkX, y: branchY - radius))
-        drawCurvedElbow(
-            into: &path,
-            trunkX: trunkX,
-            stubX: stubX,
-            branchY: branchY,
-            radius: radius
-        )
-    }
-
-    /// Horizontal stub off the trunk (same elbow as the first branch).
-    private func drawCurvedStubFromTrunk(
-        into path: inout Path,
-        trunkX: CGFloat,
-        stubX: CGFloat,
-        branchY: CGFloat,
-        radius: CGFloat
-    ) {
-        guard stubX > trunkX else { return }
-        path.move(to: CGPoint(x: trunkX, y: branchY - radius))
-        drawCurvedElbow(
-            into: &path,
-            trunkX: trunkX,
-            stubX: stubX,
-            branchY: branchY,
-            radius: radius
-        )
-    }
-
-    private func drawCurvedElbow(
-        into path: inout Path,
-        trunkX: CGFloat,
-        stubX: CGFloat,
-        branchY: CGFloat,
-        radius: CGFloat
-    ) {
-        let r = radius
-        path.addArc(
-            center: CGPoint(x: trunkX + r, y: branchY - r),
-            radius: r,
-            startAngle: .radians(.pi),
-            endAngle: .radians(.pi / 2),
-            clockwise: true
-        )
-        if stubX > trunkX + r {
-            path.addLine(to: CGPoint(x: stubX, y: branchY))
-        }
-    }
-}
-
-/// Collects every anchored component midline so the connector can
-/// branch to each asset / status card below the title.
-private struct ConnectorBranchYsKey: PreferenceKey {
-    static var defaultValue: [CGFloat] = []
-    static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) {
-        value.append(contentsOf: nextValue())
-    }
-}
-
-private struct ConnectorAnchorModifier: ViewModifier {
-    func body(content: Content) -> some View {
-        content.background {
-            GeometryReader { geo in
-                let midY = geo.frame(in: .named("TaskHeaderTitleBlock")).midY
-                Color.clear.preference(
-                    key: ConnectorBranchYsKey.self,
-                    value: midY > 0 ? [midY] : []
-                )
-            }
-        }
-    }
-}
-
-private extension View {
-    func connectorAnchor() -> some View {
-        modifier(ConnectorAnchorModifier())
-    }
-}
-
 // MARK: - Artifact card
 
 /// Compact card the agent uses to surface a final deliverable — a created
@@ -589,6 +422,7 @@ struct TaskArtifactView: View {
             case .image: ImageArtifactCard(artifact: artifact)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -619,8 +453,7 @@ private struct ArtifactCardShell<Content: View>: View {
     var body: some View {
         let card = VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                icon
-                    .frame(width: 20, height: 20)
+                ArtifactCardLeadingIcon { icon }
                 Text(title)
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
@@ -633,7 +466,7 @@ private struct ArtifactCardShell<Content: View>: View {
             }
             content()
         }
-        .padding(18)
+        .padding(ArtifactCardLayout.contentPadding)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.white)
@@ -643,6 +476,7 @@ private struct ArtifactCardShell<Content: View>: View {
                 .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
         if let onTap {
             Button(action: onTap) { card }
@@ -678,8 +512,7 @@ private struct LinkArtifactCard: View {
     @ViewBuilder
     private func cardBody(title: String, url: URL?) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            providerIcon
-                .frame(width: 20, height: 20)
+            ArtifactCardLeadingIcon { providerIcon }
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -712,7 +545,7 @@ private struct LinkArtifactCard: View {
                 .accessibilityLabel("Open link")
             }
         }
-        .padding(18)
+        .padding(ArtifactCardLayout.contentPadding)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.white)
@@ -722,6 +555,7 @@ private struct LinkArtifactCard: View {
                 .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -730,23 +564,23 @@ private struct LinkArtifactCard: View {
             ConnectionLogo(slug: slug)
         } else {
             Image(systemName: "link")
-                .font(.system(size: 14, weight: .regular))
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(.secondary)
         }
     }
 }
 
 /// Sent email preview styled like the chat's Gmail draft card: provider
-/// logo, bold subject, recipients, and the full body in one tile.
+/// logo, bold subject, recipients, and a truncated body with expand.
 private struct EmailArtifactCard: View {
     let artifact: TodoArtifact
 
     var body: some View {
         let draft = artifact.emailDraft
-        HStack(alignment: .top, spacing: 14) {
-            ConnectionLogo(slug: artifact.emailProvider)
-                .frame(width: 20, height: 20)
-                .padding(.top, 4)
+        HStack(alignment: .top, spacing: 10) {
+            ArtifactCardLeadingIcon {
+                ConnectionLogo(slug: artifact.emailProvider)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(artifact.title ?? draft?.subject ?? "Sent email")
@@ -764,17 +598,14 @@ private struct EmailArtifactCard: View {
                             .truncationMode(.tail)
                     }
 
-                    Text(draft.body)
-                        .font(.system(size: 15, weight: .regular, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    if !draft.body.isEmpty {
+                        TruncatableArtifactText(text: draft.body, lineLimit: 4)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(18)
+        .padding(ArtifactCardLayout.contentPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -802,53 +633,65 @@ private struct CalendarArtifactCard: View {
         ArtifactCardShell(
             icon: AnyView(
                 Image(systemName: "calendar")
-                    .font(.system(size: 14, weight: .regular))
+                    .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(.secondary)
             ),
             title: title
         ) {
-            VStack(alignment: .leading, spacing: 6) {
-                if let when = event.flatMap({ Self.formatRange($0.start, $0.end) }) {
-                    Label(when, systemImage: "clock")
-                        .labelStyle(.titleAndIcon)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
-                if let location = event?.location, !location.isEmpty {
-                    Label(location, systemImage: "mappin.and.ellipse")
-                        .labelStyle(.titleAndIcon)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let attendees = event?.attendees, !attendees.isEmpty {
-                    Label(attendees.joined(separator: ", "),
-                          systemImage: "person.2.fill")
-                        .labelStyle(.titleAndIcon)
-                        .font(.system(size: 12, weight: .regular, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let url = event?.url {
-                    Button {
-                        openURL(url)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "calendar.badge.plus")
-                                .font(.system(size: 12, weight: .semibold))
-                            Text("Open in Calendar")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        }
-                        .foregroundStyle(Color.blue)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 10)
-                        .background(Color.blue.opacity(0.12), in: Capsule())
+            ArtifactTruncatableSection(isTruncatable: isTruncatable(event: event)) { isExpanded in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let when = event.flatMap({ Self.formatRange($0.start, $0.end) }) {
+                        Label(when, systemImage: "clock")
+                            .labelStyle(.titleAndIcon)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(isExpanded ? nil : 2)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, 2)
+                    if let location = event?.location, !location.isEmpty {
+                        Label(location, systemImage: "mappin.and.ellipse")
+                            .labelStyle(.titleAndIcon)
+                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(isExpanded ? nil : 2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    if let attendees = event?.attendees, !attendees.isEmpty {
+                        Label(attendees.joined(separator: ", "),
+                              systemImage: "person.2.fill")
+                            .labelStyle(.titleAndIcon)
+                            .font(.system(size: 12, weight: .regular, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(isExpanded ? nil : 2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    if let url = event?.url {
+                        Button {
+                            openURL(url)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "calendar.badge.plus")
+                                    .font(.system(size: 12, weight: .semibold))
+                                Text("Open in Calendar")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            }
+                            .foregroundStyle(Color.blue)
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 10)
+                            .background(Color.blue.opacity(0.12), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
+                    }
                 }
             }
         }
+    }
+
+    private func isTruncatable(event: TodoArtifact.CalendarEvent?) -> Bool {
+        let location = event?.location ?? ""
+        let attendees = event?.attendees.joined(separator: ", ") ?? ""
+        if location.count > 60 || attendees.count > 60 { return true }
+        return (event?.attendees.count ?? 0) > 2
     }
 
     /// Formats a start/end pair in the same style the rest of the detail
@@ -870,9 +713,8 @@ private struct CalendarArtifactCard: View {
     }
 }
 
-/// Plain-text deliverable (e.g. a generated summary or snippet). Kept
-/// readable rather than scrollable; the text view selects so the user
-/// can copy it out.
+/// Plain-text deliverable (e.g. a generated summary or snippet). Long
+/// results collapse with a show-more affordance so the header stays compact.
 private struct TextArtifactCard: View {
     let artifact: TodoArtifact
 
@@ -881,18 +723,17 @@ private struct TextArtifactCard: View {
         ArtifactCardShell(
             icon: AnyView(
                 Image(systemName: "text.alignleft")
-                    .font(.system(size: 14, weight: .regular))
+                    .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(.secondary)
             ),
             title: artifact.title ?? "Result"
         ) {
             if !body.isEmpty {
-                Text(body)
-                    .font(.system(size: 14, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                TruncatableArtifactText(
+                    text: body,
+                    lineLimit: 4,
+                    foregroundStyle: Color.primary
+                )
             }
         }
     }

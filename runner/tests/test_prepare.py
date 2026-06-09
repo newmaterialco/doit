@@ -255,6 +255,33 @@ class BuildPreparePromptTests(unittest.TestCase):
         self.assertIn("Add Alice too", prompt)
         self.assertIn("Do not ask the same question", prompt)
 
+    def test_prompt_includes_existing_organization_examples(self) -> None:
+        prompt = build_prepare_prompt(
+            title="Find the latest Acme invoice",
+            detail="",
+            organization_examples=[
+                {
+                    "title": "Download Acme invoice from Gmail",
+                    "topic": "finance",
+                    "collection_name": "Acme",
+                }
+            ],
+        )
+        self.assertIn("Existing organization examples", prompt)
+        self.assertIn("Download Acme invoice from Gmail", prompt)
+        self.assertIn("topic=finance", prompt)
+        self.assertIn("collection_name=Acme", prompt)
+        self.assertIn("reuse matching organization", prompt)
+
+    def test_prompt_guides_invoice_tasks_to_finance(self) -> None:
+        prompt = build_prepare_prompt(
+            title="Upload the invoice for payment",
+            detail="",
+        )
+        self.assertIn("Invoice, billing, receipt", prompt)
+        self.assertIn('topic="finance"', prompt)
+        self.assertIn('topic="documents"', prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

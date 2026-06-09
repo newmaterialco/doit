@@ -2,8 +2,16 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+enum AddTodoLaunchAction: Equatable {
+    case note
+    case recordVoice
+    case camera
+    case photoLibrary
+}
+
 struct AddTodoView: View {
     let userID: UUID
+    let initialAction: AddTodoLaunchAction
     let onCreated: (Todo) -> Void
 
     /// Hard cap on attached images per task. Mirrors the runner-side budget.
@@ -17,11 +25,18 @@ struct AddTodoView: View {
     @State private var pendingImages: [PendingImage] = []
     @State private var photoSelections: [PhotosPickerItem] = []
     @State private var showCamera = false
+    @State private var showPhotoPicker = false
     @State private var preview: PreviewItem?
     @FocusState private var isEditorFocused: Bool
 
-    init(userID: UUID, initialTitle: String = "", onCreated: @escaping (Todo) -> Void) {
+    init(
+        userID: UUID,
+        initialTitle: String = "",
+        initialAction: AddTodoLaunchAction = .note,
+        onCreated: @escaping (Todo) -> Void
+    ) {
         self.userID = userID
+        self.initialAction = initialAction
         self.onCreated = onCreated
         _title = State(initialValue: initialTitle)
     }
@@ -75,8 +90,15 @@ struct AddTodoView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .presentationBackground(.white)
+            .photosPicker(
+                isPresented: $showPhotoPicker,
+                selection: $photoSelections,
+                maxSelectionCount: max(1, AddTodoView.maxAttachments - pendingImages.count),
+                matching: .images,
+                photoLibrary: .shared()
+            )
             .onAppear {
-                isEditorFocused = true
+                performLaunchAction()
             }
             .onDisappear {
                 voice.cancel()
@@ -228,17 +250,7 @@ struct AddTodoView: View {
 
     private var cameraButton: some View {
         Button {
-            error = nil
-            isEditorFocused = false
-            #if targetEnvironment(simulator)
-            self.error = "Camera isn't available on the simulator."
-            #else
-            if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                showCamera = true
-            } else {
-                self.error = "Camera isn't available on this device."
-            }
-            #endif
+            openCamera()
         } label: {
             Image(systemName: "camera.fill")
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -253,12 +265,9 @@ struct AddTodoView: View {
     }
 
     private var photoButton: some View {
-        PhotosPicker(
-            selection: $photoSelections,
-            maxSelectionCount: max(1, AddTodoView.maxAttachments - pendingImages.count),
-            matching: .images,
-            photoLibrary: .shared()
-        ) {
+        Button {
+            openPhotoLibrary()
+        } label: {
             Image(systemName: "photo.on.rectangle")
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
@@ -266,7 +275,6 @@ struct AddTodoView: View {
                 .background(Color.gray.opacity(0.12), in: Circle())
         }
         .buttonStyle(.plain)
-        .tint(.primary)
         .disabled(!canAddMoreAttachments)
         .opacity(canAddMoreAttachments ? 1 : 0.4)
         .accessibilityLabel("Pick photos from library")
@@ -383,6 +391,42 @@ struct AddTodoView: View {
                 print("[AddTodoView] attachment upload failed: \(error)")
             }
         }
+    }
+
+    // MARK: - Launch actions
+
+    private func performLaunchAction() {
+        switch initialAction {
+        case .note:
+            isEditorFocused = true
+        case .recordVoice:
+            Task { await startRecording() }
+        case .camera:
+            openCamera()
+        case .photoLibrary:
+            openPhotoLibrary()
+        }
+    }
+
+    private func openCamera() {
+        error = nil
+        isEditorFocused = false
+        #if targetEnvironment(simulator)
+        self.error = "Camera isn't available on the simulator."
+        #else
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            showCamera = true
+        } else {
+            self.error = "Camera isn't available on this device."
+        }
+        #endif
+    }
+
+    private func openPhotoLibrary() {
+        guard canAddMoreAttachments else { return }
+        error = nil
+        isEditorFocused = false
+        showPhotoPicker = true
     }
 
     // MARK: - Voice flow

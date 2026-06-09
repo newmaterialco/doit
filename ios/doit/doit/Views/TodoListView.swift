@@ -36,6 +36,7 @@ struct TodoListView: View {
     @State private var navigationPath = NavigationPath()
     @State private var deletingTodoIDs: Set<UUID> = []
     @State private var addSheetInitialTitle = ""
+    @State private var addSheetLaunchAction: AddTodoLaunchAction = .note
     @State private var centeredSuggestedTaskID: String?
     @State private var suggestedTasks: [SuggestedTask] = []
     @State private var suggestionsLoading = false
@@ -118,9 +119,16 @@ struct TodoListView: View {
                 }
                 .sheet(
                     isPresented: $showAddSheet,
-                    onDismiss: { addSheetInitialTitle = "" }
+                    onDismiss: {
+                        addSheetInitialTitle = ""
+                        addSheetLaunchAction = .note
+                    }
                 ) {
-                    AddTodoView(userID: userID, initialTitle: addSheetInitialTitle) { newTodo in
+                    AddTodoView(
+                        userID: userID,
+                        initialTitle: addSheetInitialTitle,
+                        initialAction: addSheetLaunchAction
+                    ) { newTodo in
                         // The store owns the list; insert there so realtime
                         // reconciliation can update the same row in place when
                         // the runner's prep pass finishes.
@@ -298,6 +306,14 @@ struct TodoListView: View {
                         todoCard(for: todo)
                     }
 
+                    CaptureToolbelt(
+                        onMic: { openAddSheet(action: .recordVoice) },
+                        onCamera: { openAddSheet(action: .camera) },
+                        onGallery: { openAddSheet(action: .photoLibrary) },
+                        onNote: { openAddSheet(action: .note) }
+                    )
+                    .padding(.top, activeItems.isEmpty ? 8 : 14)
+
                     if !suggestions.isEmpty {
                         TaskSectionHeader(
                             title: "Suggested",
@@ -305,7 +321,7 @@ struct TodoListView: View {
                             trailingAction: presentSuggestedInfo,
                             verticalPadding: 0
                         )
-                            .padding(.top, activeItems.isEmpty ? 8 : 14)
+                            .padding(.top, 6)
 
                         SuggestedTasksStrip(
                             suggestions: suggestions,
@@ -597,9 +613,7 @@ struct TodoListView: View {
             Spacer()
 
             Button {
-                playLightHaptic()
-                addSheetInitialTitle = ""
-                showAddSheet = true
+                openAddSheet()
             } label: {
                 Image(systemName: "plus")
                     .font(.title3.weight(.semibold))
@@ -1082,10 +1096,15 @@ struct TodoListView: View {
         openSuggestedTask(suggestion.title)
     }
 
-    private func openSuggestedTask(_ title: String) {
+    private func openAddSheet(title: String = "", action: AddTodoLaunchAction = .note) {
         playLightHaptic()
         addSheetInitialTitle = title
+        addSheetLaunchAction = action
         showAddSheet = true
+    }
+
+    private func openSuggestedTask(_ title: String) {
+        openAddSheet(title: title)
     }
 
     private var locationActions: [ExploreActionItem] {
@@ -1456,6 +1475,76 @@ struct TodoListView: View {
                 deletingTodoIDs.remove(id)
             }
         }
+    }
+}
+
+private struct CaptureToolbelt: View {
+    let onMic: () -> Void
+    let onCamera: () -> Void
+    let onGallery: () -> Void
+    let onNote: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            toolbeltButton(
+                icon: "mic.fill",
+                label: "Record voice note",
+                foreground: .white,
+                background: Color.black,
+                showsBorder: false,
+                action: onMic
+            )
+            toolbeltButton(
+                icon: "camera.fill",
+                label: "Take a photo",
+                foreground: .primary,
+                background: Color.white,
+                showsBorder: true,
+                action: onCamera
+            )
+            toolbeltButton(
+                icon: "photo.on.rectangle",
+                label: "Choose from library",
+                foreground: .primary,
+                background: Color.white,
+                showsBorder: true,
+                action: onGallery
+            )
+            toolbeltButton(
+                icon: "square.and.pencil",
+                label: "Write a note",
+                foreground: .primary,
+                background: Color.white,
+                showsBorder: true,
+                action: onNote
+            )
+        }
+    }
+
+    private func toolbeltButton(
+        icon: String,
+        label: String,
+        foreground: Color,
+        background: Color,
+        showsBorder: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(foreground)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(background, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay {
+                    if showsBorder {
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 

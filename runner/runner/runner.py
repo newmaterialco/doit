@@ -618,6 +618,10 @@ async def prepare_one_todo(
         allowed_slugs=CONNECTION_SLUGS,
         prior=prior,
         attachment_urls=_resolve_attachment_urls(db, todo_id),
+        organization_examples=db.get_todo_organization_examples(
+            user_id,
+            exclude_todo_id=todo_id,
+        ),
     )
     # Per-todo prep session so any USER.md edits we just staged are visible
     # in the prep snapshot, and so prep turns from different todos do not

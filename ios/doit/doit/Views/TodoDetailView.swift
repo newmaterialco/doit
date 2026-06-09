@@ -33,8 +33,8 @@ struct TodoDetailView: View {
 
     /// Notch 1 (~17% task) — auto-open when the agent is waiting on a reply.
     private static let chatAutoExpandedTopFraction = 1.0 / 6.0
-    /// Notch 2 (~33% task) — manual expand when the user taps a collapsed pill
-    /// (the "Chat" pill at the bottom or the truncated task title at the top).
+    /// Notch 2 (~33% task) — manual expand when the user taps the truncated
+    /// task-title pill at the top (`.bottomFull`).
     private static let chatTappedExpandedTopFraction = 2.0 / 6.0
 
     private static var chatExpandedDetent: SplitDetent {
@@ -115,7 +115,8 @@ struct TodoDetailView: View {
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 Task { await store.toggleStarred(current) }
                             },
-                            onDelete: deleteTask
+                            onDelete: deleteTask,
+                            onTapActivity: openChat
                         )
                     } else {
                         // Row was deleted (or RLS removed it) while we
@@ -163,7 +164,7 @@ struct TodoDetailView: View {
                 )
             }
         )
-        .collapsedTapDetent(Self.chatTappedDetent)
+        .collapsedTapDetent(Self.chatExpandedDetent)
         .collapsedTopTapDetent(Self.chatTappedDetent)
         .handleTrailingText(formattedTokens(current?.total_tokens))
         // The vendor split positions everything (handle pill, mini
@@ -352,6 +353,13 @@ struct TodoDetailView: View {
         splitDetent = interactionAwaitingUserReply != nil
             ? Self.chatExpandedDetent
             : .topFull
+    }
+
+    private func openChat() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.smooth(duration: 0.4)) {
+            splitDetent = Self.chatExpandedDetent
+        }
     }
 
     private func takePhoto() {

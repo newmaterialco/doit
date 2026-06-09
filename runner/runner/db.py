@@ -243,6 +243,39 @@ class DB:
         rows = resp.data or []
         return rows[0] if rows else None
 
+    def get_todo_organization_examples(
+        self,
+        user_id: str,
+        *,
+        exclude_todo_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Recent organized todos to keep prep topic/collection choices consistent."""
+        try:
+            resp = (
+                self._client.table("todos")
+                .select("id,title,topic,collection_name,updated_at,status")
+                .eq("user_id", user_id)
+                .order("updated_at", desc=True)
+                .limit(max(limit * 3, limit))
+                .execute()
+            )
+            rows = resp.data or []
+        except Exception as e:
+            log.error("get_todo_organization_examples(%s) failed: %s", user_id, e)
+            return []
+
+        examples: list[dict] = []
+        for row in rows:
+            if exclude_todo_id and row.get("id") == exclude_todo_id:
+                continue
+            if not (row.get("topic") or row.get("collection_name")):
+                continue
+            examples.append(row)
+            if len(examples) >= limit:
+                break
+        return examples
+
     def list_todo_attachments(self, todo_id: str) -> list[dict]:
         """All image attachments for a todo, oldest first.
 

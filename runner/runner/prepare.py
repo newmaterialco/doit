@@ -135,6 +135,14 @@ PREP_INSTRUCTIONS = (
     "in the prompt. If unsure, use null.\n"
     "- Pick topic only from the allowed topic values supplied in the prompt. "
     "Use other if none of the values fit.\n"
+    "- Prefer consistency with the user's existing organization examples in "
+    "the prompt. If a new todo is similar to an existing example, reuse the "
+    "same topic and collection_name unless the new request clearly belongs "
+    "somewhere else.\n"
+    "- Invoice, billing, receipt, reimbursement, payment, tax, and accounting "
+    "tasks should generally use topic=\"finance\". Use topic=\"documents\" "
+    "only when the task is primarily drafting, editing, organizing, or "
+    "retrieving a document and not about money/accounting.\n"
     "- Set collection_name only for a durable named thing the user is likely "
     "to return to: a project, company, client, event, household initiative, "
     "or named area of responsibility. Do NOT create collections for generic "
@@ -333,6 +341,7 @@ def build_prepare_prompt(
     allowed_slugs: frozenset[str] | set[str] = CONNECTION_SLUGS,
     prior: dict[str, Any] | None = None,
     attachment_urls: list[str] | None = None,
+    organization_examples: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the per-todo input the runner sends to Hermes for preparation.
 
@@ -357,7 +366,24 @@ def build_prepare_prompt(
         f"Allowed connection_slug values: [{slugs}] or null.",
         f"Allowed topic values: [{topics}].",
         "Optional collection_name should be a short durable project, company, client, event, or named responsibility; use null for generic tasks.",
+        "Consistency rules:",
+        "- Before choosing topic or collection_name, compare this todo to the existing organization examples below and reuse matching organization when appropriate.",
+        "- Invoice, billing, receipt, reimbursement, payment, tax, and accounting tasks should generally use topic=\"finance\". Use topic=\"documents\" only when the task is just drafting, editing, organizing, or retrieving a document.",
     ]
+    if organization_examples:
+        lines += ["", "Existing organization examples for this user:"]
+        for example in organization_examples[:20]:
+            title_text = _clean_str(example.get("title"), max_len=90)
+            topic = _clean_str(example.get("topic"), max_len=32)
+            collection_name = _clean_collection_name(example.get("collection_name"))
+            if not title_text or not (topic or collection_name):
+                continue
+            org_parts = []
+            if topic:
+                org_parts.append(f"topic={topic}")
+            if collection_name:
+                org_parts.append(f"collection_name={collection_name}")
+            lines.append(f"- {title_text} ({', '.join(org_parts)})")
     if prior:
         prior_prompt = (prior.get("prompt") or "").strip()
         response = prior.get("response") or {}

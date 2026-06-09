@@ -33,12 +33,12 @@ struct ImageArtifactCard: View {
             header
             preview(ref: ref)
             if let caption = caption(ref: ref), !caption.isEmpty {
-                Text(caption)
-                    .font(.system(size: 13, weight: .regular, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                TruncatableArtifactText(
+                    text: caption,
+                    lineLimit: 3,
+                    font: .system(size: 13, weight: .regular, design: .rounded),
+                    foregroundStyle: .secondary
+                )
             }
             if let err = state.loadError {
                 Text(err)
@@ -46,7 +46,7 @@ struct ImageArtifactCard: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(18)
+        .padding(ArtifactCardLayout.contentPadding)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.white)
@@ -56,6 +56,7 @@ struct ImageArtifactCard: View {
                 .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: ref?.storagePath ?? "") {
             await state.load(from: artifact)
         }
@@ -68,9 +69,8 @@ struct ImageArtifactCard: View {
 
     @ViewBuilder
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            providerIcon
-                .frame(width: 20, height: 20)
+        HStack(alignment: .top, spacing: 10) {
+            ArtifactCardLeadingIcon { providerIcon }
             Text(artifact.title ?? defaultTitle)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.primary)
@@ -88,7 +88,7 @@ struct ImageArtifactCard: View {
             ConnectionLogo(slug: slug)
         } else {
             Image(systemName: "photo")
-                .font(.system(size: 14, weight: .regular))
+                .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(.secondary)
         }
     }

@@ -31,31 +31,31 @@ struct AudioArtifactCard: View {
         let clip = artifact.audio
         VStack(alignment: .leading, spacing: 0) {
             playerHeader
-                .padding(.horizontal, 18)
-                .padding(.top, 16)
+                .padding(.horizontal, ArtifactCardLayout.contentPadding)
+                .padding(.top, ArtifactCardLayout.verticalSectionPadding)
                 .padding(.bottom, 4)
 
             playerControls
-                .padding(.horizontal, 18)
-                .padding(.bottom, 16)
+                .padding(.horizontal, ArtifactCardLayout.contentPadding)
+                .padding(.bottom, ArtifactCardLayout.verticalSectionPadding)
 
             if let text = clip?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
                !text.isEmpty {
                 Divider()
-                    .padding(.horizontal, 18)
-                Text(text)
-                    .font(.system(size: 16, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .padding(18)
+                    .padding(.horizontal, ArtifactCardLayout.contentPadding)
+                TruncatableArtifactText(
+                    text: text,
+                    lineLimit: 4,
+                    font: .system(size: 16, weight: .regular, design: .rounded),
+                    foregroundStyle: Color.primary
+                )
+                .padding(ArtifactCardLayout.contentPadding)
             } else if let err = state.loadError {
                 Text(err)
                     .font(.system(size: 12, weight: .regular, design: .rounded))
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 16)
+                    .padding(.horizontal, ArtifactCardLayout.contentPadding)
+                    .padding(.bottom, ArtifactCardLayout.verticalSectionPadding)
             }
         }
         .background(
@@ -67,6 +67,7 @@ struct AudioArtifactCard: View {
                 .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: clip?.storagePath ?? "") {
             await state.load(from: artifact)
         }
@@ -77,12 +78,13 @@ struct AudioArtifactCard: View {
 
     @ViewBuilder
     private var playerHeader: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "waveform")
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
-                .symbolEffect(.variableColor.iterative, isActive: state.isPlaying)
+        HStack(alignment: .top, spacing: 10) {
+            ArtifactCardLeadingIcon {
+                Image(systemName: "waveform")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .symbolEffect(.variableColor.iterative, isActive: state.isPlaying)
+            }
 
             Text(artifact.title ?? "Spoken summary")
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
