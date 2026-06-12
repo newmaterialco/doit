@@ -187,6 +187,25 @@ class MemoryExtractionTests(unittest.TestCase):
         self.assertIn("my wife Alessandra", prompt)
         self.assertIn("medium-confidence user memory", prompt)
 
+    def test_parse_extracts_symbol_name(self) -> None:
+        text = (
+            f"{MEMORY_OPEN}\n"
+            '{"memories":[{"target":"user","title":"Flight preferences",'
+            '"body":"Prefers aisle seats on long flights.",'
+            '"confidence":"medium","reason":"Travel preference.",'
+            '"symbol_name":"airplane"}]}'
+            f"\n{MEMORY_CLOSE}"
+        )
+        memories = parse_memory_extraction(text)
+        self.assertEqual(len(memories), 1)
+        self.assertEqual(memories[0].symbol_name, "airplane")
+
+    def test_prompt_mentions_symbol_name(self) -> None:
+        from runner.memory_extraction import MEMORY_EXTRACT_INSTRUCTIONS
+
+        self.assertIn("symbol_name", MEMORY_EXTRACT_INSTRUCTIONS)
+        self.assertIn("person.crop.circle", MEMORY_EXTRACT_INSTRUCTIONS)
+
     def test_medium_confidence_memory_stores_active(self) -> None:
         text = (
             f"{MEMORY_OPEN}\n"

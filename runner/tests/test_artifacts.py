@@ -21,6 +21,7 @@ from runner.events import (
     _ARTIFACT_KINDS,
     collapse_done_leadins,
     merge_terminal_translated,
+    normalize_email_artifact_payload,
     normalize_visible_reply,
     parse_artifacts,
     strip_artifacts,
@@ -331,6 +332,50 @@ class TranslateFinalArtifactTests(unittest.TestCase):
         assert effect is not None
         self.assertEqual(effect.new_status, "done")
         self.assertEqual(effect.artifacts, [])
+
+
+class EmailArtifactStatusTests(unittest.TestCase):
+    def test_missing_status_defaults_to_drafted(self) -> None:
+        body = wrap(
+            '{"key":"email","type":"email","title":"Late rent",'
+            '"payload":{"to":["lord@x.com"],"subject":"Late rent",'
+            '"body":"Hi"}}'
+        )
+        artifacts = parse_artifacts(body)
+        self.assertEqual(len(artifacts), 1)
+        self.assertEqual(artifacts[0].payload.get("status"), "drafted")
+
+    def test_explicit_statuses_are_preserved(self) -> None:
+        for status in ("drafted", "sent", "scheduled"):
+            body = wrap(
+                '{"key":"email","type":"email",'
+                f'"payload":{{"subject":"x","body":"y","status":"{status}"}}}}'
+            )
+            artifacts = parse_artifacts(body)
+            self.assertEqual(artifacts[0].payload.get("status"), status)
+
+    def test_status_aliases_normalize(self) -> None:
+        for raw, expected in (("draft", "drafted"), ("schedule", "scheduled")):
+            body = wrap(
+                '{"key":"email","type":"email",'
+                f'"payload":{{"subject":"x","body":"y","status":"{raw}"}}}}'
+            )
+            artifacts = parse_artifacts(body)
+            self.assertEqual(artifacts[0].payload.get("status"), expected)
+
+    def test_unknown_status_falls_back_to_drafted(self) -> None:
+        body = wrap(
+            '{"key":"email","type":"email",'
+            '"payload":{"subject":"x","body":"y","status":"queued"}}'
+        )
+        artifacts = parse_artifacts(body)
+        self.assertEqual(artifacts[0].payload.get("status"), "drafted")
+
+    def test_normalize_helper_is_case_insensitive(self) -> None:
+        payload = normalize_email_artifact_payload(
+            {"subject": "x", "body": "y", "status": "SENT"}
+        )
+        self.assertEqual(payload["status"], "sent")
 
 
 if __name__ == "__main__":

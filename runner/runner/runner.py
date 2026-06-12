@@ -17,7 +17,12 @@ import httpx
 from .browse_skill import maybe_prefetch_browse_skill
 from .config import Config, load
 from .db import AgentModelSetting, DB
-from .activity import AgentActivityService, ActivitySnapshot
+from .activity import (
+    AgentActivityService,
+    ActivitySnapshot,
+    execution_start_snapshot,
+    prep_queue_snapshot,
+)
 from .events import (
     ArtifactRequest,
     TTSCall,
@@ -229,6 +234,13 @@ async def run_one_todo(
             return
 
     log.info("processing todo %s user=%s title=%r", todo_id, user_id, title)
+    _write_activity(
+        db,
+        todo_id=todo_id,
+        user_id=user_id,
+        snapshot=execution_start_snapshot(todo),
+        hermes_run_id=None,
+    )
 
     endpoint = db.get_user_hermes(user_id)
     if endpoint is None:
@@ -818,6 +830,16 @@ async def prepare_one_todo(
         # execution anyway so the existing "no profile" error surfaces on the
         # task card without the user having to tap Do it first.
         db.update_todo(todo_id, {"status": "requested"})
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=AgentActivityService().initial(
+                phase="starting",
+                title="Starting task",
+            ),
+            hermes_run_id=None,
+        )
         return
 
     model_setting = db.get_agent_model_setting(user_id)
@@ -916,6 +938,16 @@ async def prepare_one_todo(
         # the task on the list.
         log.info("prep produced no result for todo %s; auto-queuing for execution", todo_id)
         db.update_todo(todo_id, {"status": "requested"})
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=AgentActivityService().initial(
+                phase="starting",
+                title="Starting task",
+            ),
+            hermes_run_id=run_id,
+        )
         return
 
     # Safety nets, both keyed on the same recurrence detector so they can
@@ -1024,27 +1056,35 @@ async def prepare_one_todo(
         db,
         todo_id=todo_id,
         user_id=user_id,
-        snapshot=AgentActivityService().initial(
-            phase="starting",
-            title="Starting task",
-        ),
+        snapshot=prep_queue_snapshot(summary=result.summary),
         hermes_run_id=run_id,
     )
 
-    # Multi-task split: insert extras as already-prepared todos that also
-    # auto-run. Keeps the UX consistent — every row created from the
-    # `+` sheet starts working without an extra tap.
+    # Multi-task split: insert extras as prepared todos that inherit the
+    # parent's original request so execution prompts keep full context.
+    # They stay at status=todo so only the primary row auto-runs — split
+    # children must not surprise-start after the parent finishes.
+    parent_original = (todo.get("original_title") or raw_title or "").strip()
+    parent_detail = detail.strip() if detail else None
     for extra in result.additional_tasks:
+        split_detail = parent_detail
+        if extra.summary:
+            split_detail = (
+                f"From the same request: {parent_original}\n\n{extra.summary}"
+                if parent_original
+                else extra.summary
+            )
         db.insert_prepared_todo(
             user_id=user_id,
             title=extra.title,
-            original_title=extra.title,
-            detail=None,
+            original_title=parent_original or extra.title,
+            detail=split_detail,
             connection_slug=extra.connection_slug,
             topic=extra.topic,
             collection_name=extra.collection_name,
             preparation_summary=extra.summary,
-            status="requested",
+            spawned_by_todo_id=todo_id,
+            status="todo",
         )
 
 
@@ -1450,7 +1490,7 @@ async def _consume_run(
         db,
         todo_id=todo_id,
         user_id=user_id,
-        snapshot=activity.initial(phase="starting", title="Starting agent…"),
+        snapshot=execution_start_snapshot(todo),
         hermes_run_id=run_id,
     )
     heartbeat_task = asyncio.create_task(activity_heartbeat())
@@ -2627,6 +2667,7 @@ async def _extract_memories_after_todo(
             reason=candidate.reason,
             source_todo_id=todo_id,
             memory_status=storage_status_for_extracted_memory(candidate),
+            symbol_name=candidate.symbol_name,
         )
     sync_active_memories_to_hermes(db, memory_store, user_id)
 

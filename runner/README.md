@@ -258,5 +258,10 @@ ssh "$DOIT_VM_HOST" '
     to populate Settings > Memory from an existing profile without
     running a todo. Useful as a smoke test for "did Hermes remember
     anything about me?".
+  - **Passbook icons**: each Passbook-visible memory stores an SF Symbol
+    name (`symbol_name`). Agent-extracted memories pick one during the
+    post-task extraction pass; user-pinned rows use a lightweight keyword
+    heuristic on device. Backfill existing rows with
+    `python -m runner.backfill_memory_symbols_cli`.
   - The fallback `_build_prompt` no longer enumerates the user's memory
     list — that path is gone now that the frozen snapshot does the job.

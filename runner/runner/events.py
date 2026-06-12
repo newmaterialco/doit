@@ -692,6 +692,30 @@ def strip_activity(text: str) -> str:
     return _ACTIVITY_RE.sub("", text)
 
 
+_EMAIL_STATUSES = frozenset({"drafted", "sent", "scheduled"})
+_EMAIL_STATUS_ALIASES = {
+    "draft": "drafted",
+    "schedule": "scheduled",
+}
+
+
+def normalize_email_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Ensure email artifacts carry a canonical ``status`` in the payload."""
+    out = dict(payload)
+    raw = str(out.get("status") or "").strip().lower()
+    canonical = _EMAIL_STATUS_ALIASES.get(raw, raw)
+    if canonical in _EMAIL_STATUSES:
+        out["status"] = canonical
+    else:
+        if raw:
+            log.warning(
+                "email artifact has unknown status=%r; defaulting to drafted",
+                raw,
+            )
+        out["status"] = "drafted"
+    return out
+
+
 def parse_artifacts(text: str) -> list[ArtifactRequest]:
     """Extract every ``[[DOIT_ARTIFACT]]`` block from the model's final reply.
 
@@ -726,6 +750,8 @@ def parse_artifacts(text: str) -> list[ArtifactRequest]:
         title = str(title_raw).strip()[:200] if title_raw else None
         payload_raw = data.get("payload")
         payload = payload_raw if isinstance(payload_raw, dict) else {}
+        if kind == "email":
+            payload = normalize_email_artifact_payload(payload)
         # Deduplicate within one reply on the same key: the agent gets one
         # row per key per turn; later blocks win, matching the upsert
         # semantics in `db.upsert_artifact`.

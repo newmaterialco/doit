@@ -83,6 +83,11 @@ final class TodoStore {
     /// cron, switch to the "Scheduled" section.
     var pendingNewTodoID: UUID?
 
+    /// Bumps when a pending `+` sheet todo may have converted to cron or
+    /// finished prep so `TodoListView` can run the handoff animation without
+    /// relying on a computed property that SwiftUI might not re-evaluate.
+    private(set) var cronHandoffRevision: Int = 0
+
     // MARK: - Internals
 
     private(set) var userID: UUID?
@@ -100,6 +105,13 @@ final class TodoStore {
     /// Creation timestamp for `pendingNewTodoID`, used to distinguish a cron
     /// conversion from older scheduled jobs already in the list.
     private var pendingNewTodoCreatedAt: Date?
+    /// Scoped fallback refresh while the pending todo is still in `preparing`.
+    /// Covers realtime delivery gaps without polling the whole list.
+    private var pendingSurfaceWatchTask: Task<Void, Never>?
+    /// Coalesces overlapping `loadAll()` calls from reconnect, scene-active,
+    /// and pull-to-refresh so they don't race.
+    private var loadAllTask: Task<Void, Never>?
+    private let networkReachability = NetworkReachability()
 
     // MARK: - Lifecycle
 
@@ -117,6 +129,11 @@ final class TodoStore {
             handlers: makeUserFeedHandlers()
         )
 
+        networkReachability.onConnectivityRestored = { [weak self] in
+            await self?.reconcileAfterConnectivityRestored()
+        }
+        networkReachability.start()
+
         Task { await loadAll() }
     }
 
@@ -124,6 +141,10 @@ final class TodoStore {
     /// user signing in on the same device doesn't see stale data.
     func stop() {
         TodoRealtimeHub.stopUserFeed()
+        networkReachability.stop()
+        networkReachability.onConnectivityRestored = nil
+        loadAllTask?.cancel()
+        loadAllTask = nil
         liveActivityManager.endAll()
         userID = nil
         todos = []
@@ -136,6 +157,9 @@ final class TodoStore {
         trackedTodoIDs = []
         pendingNewTodoID = nil
         pendingNewTodoCreatedAt = nil
+        pendingSurfaceWatchTask?.cancel()
+        pendingSurfaceWatchTask = nil
+        cronHandoffRevision = 0
         loadError = nil
     }
 
@@ -183,10 +207,8 @@ final class TodoStore {
     func beginTracking(todoID: UUID) {
         trackedTodoIDs.insert(todoID)
         Task {
-            await refreshTodo(id: todoID)
-            await refreshArtifacts(for: todoID)
+            await refreshTodoSurface(id: todoID)
             await refreshInteractions(for: todoID)
-            await refreshAgentActivity(for: todoID)
         }
     }
 
@@ -202,6 +224,48 @@ final class TodoStore {
     /// Full reload from REST. Used on `start()`, scene activation, and as a
     /// fallback when the realtime hub reports an unidentified change.
     func loadAll() async {
+        if let existing = loadAllTask {
+            await existing.value
+            return
+        }
+        let task = Task { @MainActor in
+            await performLoadAll()
+        }
+        loadAllTask = task
+        await task.value
+        loadAllTask = nil
+    }
+
+    /// Refresh everything the list card needs for one todo: row, live
+    /// activity, open interaction, and artifacts.
+    func refreshTodoSurface(id: UUID) async {
+        await refreshTodo(id: id)
+        await refreshAgentActivity(for: id)
+        await refreshOpenInteraction(for: id)
+        await refreshArtifacts(for: id)
+    }
+
+    /// Reconcile a todo's list surface with one retry for in-flight tasks.
+    func refreshTodoSurfaceWithRetry(id: UUID) async {
+        await refreshTodoSurface(id: id)
+        guard let todo = todo(id: id), todo.status.isActive else { return }
+        try? await Task.sleep(for: .milliseconds(450))
+        print("[store][refresh_surface] retry id=\(id)")
+        await refreshTodoSurface(id: id)
+    }
+
+    /// Catch up active todos after network returns from an outage.
+    private func reconcileAfterConnectivityRestored() async {
+        await loadAll()
+        let activeIDs = todos.filter { $0.status.isActive }.map(\.id)
+        guard !activeIDs.isEmpty else { return }
+        print("[store][refresh_surface] network reconcile active=\(activeIDs.count)")
+        for id in activeIDs {
+            await refreshTodoSurfaceWithRetry(id: id)
+        }
+    }
+
+    private func performLoadAll() async {
         do {
             async let todosTask = TodosAPI.list()
             async let cronTask: [CronJob] = (try? await CronJobsAPI.list()) ?? []
@@ -343,7 +407,9 @@ final class TodoStore {
     // MARK: - Batch refresh
 
     private func refreshAllOpenInteractions() async {
-        let ids = todos.filter { $0.status == .needs_input }.map(\.id)
+        let ids = todos
+            .filter { $0.status != .done && $0.status != .cancelled }
+            .map(\.id)
         guard !ids.isEmpty else {
             openInteractions = [:]
             return
@@ -411,6 +477,34 @@ final class TodoStore {
         pendingNewTodoID = todo.id
         pendingNewTodoCreatedAt = todo.created_at
         upsertTodo(todo)
+        startPendingTodoSurfaceWatch(id: todo.id)
+    }
+
+    private func startPendingTodoSurfaceWatch(id: UUID) {
+        pendingSurfaceWatchTask?.cancel()
+        pendingSurfaceWatchTask = Task { [weak self] in
+            var attempts = 0
+            while !Task.isCancelled, attempts < 90 {
+                attempts += 1
+                guard let self else { return }
+                if let todo = self.todo(id: id) {
+                    await self.refreshTodoSurface(id: id)
+                    if todo.status != .preparing {
+                        self.notifyCronHandoffIfNeeded()
+                        return
+                    }
+                } else {
+                    self.notifyCronHandoffIfNeeded()
+                    return
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func notifyCronHandoffIfNeeded() {
+        guard pendingNewTodoID != nil else { return }
+        cronHandoffRevision &+= 1
     }
 
     /// Complete the visual handoff when the pending todo has disappeared and
@@ -665,12 +759,18 @@ final class TodoStore {
     /// `created_at` descending (matches `TodosAPI.list()`).
     private func upsertTodo(_ todo: Todo) {
         if let idx = todos.firstIndex(where: { $0.id == todo.id }) {
+            let existing = todos[idx]
+            if existing.updated_at > todo.updated_at {
+                print("[store] upsertTodo skip stale id=\(todo.id) local=\(existing.updated_at) incoming=\(todo.updated_at)")
+                return
+            }
             todos[idx] = todo
         } else {
             todos.append(todo)
             todos.sort { $0.created_at > $1.created_at }
         }
         syncLiveActivities()
+        notifyCronHandoffIfNeeded()
         if todo.id == pendingNewTodoID, !todo.status.isActive {
             // Row reached a terminal/idle status (done, failed, cancelled,
             // or needs_auth/input that requires the user). The auto-run
@@ -697,6 +797,7 @@ final class TodoStore {
         artifactsByTodoID.removeValue(forKey: id)
         interactionsByTodoID.removeValue(forKey: id)
         agentActivityByTodoID.removeValue(forKey: id)
+        notifyCronHandoffIfNeeded()
         // Don't clear pendingNewTodoID here; the list observer treats
         // "pending row vanished" + "new cron arrived" as a signal to flip
         // sections.
@@ -709,6 +810,7 @@ final class TodoStore {
             cronJobs.append(job)
             cronJobs.sort { $0.created_at > $1.created_at }
         }
+        notifyCronHandoffIfNeeded()
     }
 
     private func patchCronJobLocal(id: UUID, _ mutate: (inout CronJob) -> Void) {
@@ -759,7 +861,7 @@ final class TodoStore {
                 } else {
                     print("[store] realtime todo id=\(id) missing payload; fetching")
                 }
-                await self.refreshTodo(id: id)
+                await self.refreshTodoSurfaceWithRetry(id: id)
             },
             onTodoDelete: { [weak self] id in
                 await MainActor.run { self?.removeTodoLocal(id: id) }
@@ -804,7 +906,7 @@ final class TodoStore {
                 } else {
                     print("[store] realtime activity todo=\(todoID) missing payload; fetching")
                 }
-                await self.refreshAgentActivity(for: todoID)
+                await self.refreshTodoSurfaceWithRetry(id: todoID)
             },
             onAgentActivityDelete: { [weak self] todoID in
                 await MainActor.run {

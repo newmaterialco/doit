@@ -2,9 +2,9 @@
 
 These tests pin two contracts:
 
-* ``insert_prepared_todo(status=...)`` honours the caller's status, which
-  the prep pipeline uses to insert auto-run extras alongside the original
-  `+` sheet submission.
+* ``insert_prepared_todo(status=...)`` honours the caller's status. Split
+  extras from prep now default to ``status='todo'`` so they wait for an
+  explicit Do it tap instead of auto-running after the parent finishes.
 * ``insert_spawned_todo`` defaults to ``status='todo'`` so agent-spawned
   and cron-spawned tasks keep waiting for the user to tap Do it,
   preserving the existing UX.
@@ -63,11 +63,8 @@ def _make_db() -> tuple[DB, dict[str, Any]]:
 
 
 class InsertPreparedTodoStatusTests(unittest.TestCase):
-    def test_prepared_split_writes_requested(self) -> None:
-        # The `+` sheet prep pass calls insert_prepared_todo with
-        # status='requested' for each extra task in a multi-task split,
-        # so the auto-run UX is consistent across all rows the user
-        # implicitly created in one submission.
+    def test_prepared_split_can_opt_into_requested(self) -> None:
+        # Callers that explicitly pass status='requested' still auto-run.
         db, recorder = _make_db()
         db.insert_prepared_todo(
             user_id="u1",
@@ -75,12 +72,14 @@ class InsertPreparedTodoStatusTests(unittest.TestCase):
             original_title="Book calendar hold",
             connection_slug="googlecalendar",
             preparation_summary="Block time to review lease.",
+            spawned_by_todo_id="parent-1",
             status="requested",
         )
         self.assertEqual(recorder["table"], "todos")
         self.assertEqual(recorder["row"]["status"], "requested")
         self.assertEqual(recorder["row"]["title"], "Book calendar hold")
         self.assertEqual(recorder["row"]["connection_slug"], "googlecalendar")
+        self.assertEqual(recorder["row"]["spawned_by_todo_id"], "parent-1")
 
     def test_prepared_default_status_is_todo(self) -> None:
         # Older callers that don't opt into auto-run should still land

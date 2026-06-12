@@ -166,21 +166,24 @@ struct TodoListView: View {
                 .onChange(of: cronHandoffSignature) { _, _ in
                     reconcilePendingCronHandoff()
                 }
+                .onChange(of: store.cronHandoffRevision) { _, _ in
+                    reconcilePendingCronHandoff()
+                }
                 .onChange(of: push.pendingTodoID) { _, newID in
                     guard let id = newID else { return }
                     // Push tap → open that todo. Refresh its row first so the
                     // detail view doesn't render against a stale list snapshot.
-                    Task { await store.refreshTodo(id: id) }
+                    Task { await store.refreshTodoSurfaceWithRetry(id: id) }
                     navigationPath.append(TodoListDestination.todo(id))
                     push.pendingTodoID = nil
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .todoRemoteUpdate)) { note in
-                    // Foreground push: refresh only the affected row instead of
-                    // reloading the whole list. Falls back to a full reload if
-                    // the payload didn't carry a todo id.
+                    // Foreground push: refresh the affected todo's full list
+                    // surface instead of reloading the whole list. Falls back
+                    // to a full reload if the payload didn't carry a todo id.
                     if let id = TodoRemoteUpdate.todoID(from: note) {
                         print("[list] push refresh todo=\(id)")
-                        Task { await store.refreshTodo(id: id) }
+                        Task { await store.refreshTodoSurfaceWithRetry(id: id) }
                     } else {
                         print("[list] push refresh (no id) → full reload")
                         Task { await store.loadAll() }
@@ -404,8 +407,11 @@ struct TodoListView: View {
         VStack(spacing: 10) {
             switch filter {
         case .allActivity:
-            ForEach(completedItems) { todo in
-                todoCard(for: todo, identityScope: filter.rawValue)
+            ForEach(completedActivityDaySections(from: completedItems)) { section in
+                ActivityDateDivider(date: section.day)
+                ForEach(section.todos) { todo in
+                    todoCard(for: todo, identityScope: filter.rawValue)
+                }
             }
         case .topics:
             let summaries = activityGroupSummaries(from: completedItems)
@@ -936,11 +942,43 @@ struct TodoListView: View {
 
     private var completedTodos: [Todo] {
         store.todos.filter { $0.status == .done }.sorted { lhs, rhs in
-            if lhs.updated_at == rhs.updated_at {
+            let lhsDate = completedActivityDate(for: lhs)
+            let rhsDate = completedActivityDate(for: rhs)
+            if lhsDate == rhsDate {
                 return lhs.created_at > rhs.created_at
             }
-            return lhs.updated_at > rhs.updated_at
+            return lhsDate > rhsDate
         }
+    }
+
+    private func completedActivityDate(for todo: Todo) -> Date {
+        todo.completed_at ?? todo.updated_at
+    }
+
+    private func completedActivityDaySections(from items: [Todo]) -> [CompletedActivityDaySection] {
+        let calendar = Calendar.current
+        var sections: [CompletedActivityDaySection] = []
+        var currentDay: Date?
+        var currentTodos: [Todo] = []
+
+        for todo in items {
+            let day = calendar.startOfDay(for: completedActivityDate(for: todo))
+            if day != currentDay {
+                if let currentDay, !currentTodos.isEmpty {
+                    sections.append(CompletedActivityDaySection(day: currentDay, todos: currentTodos))
+                }
+                currentDay = day
+                currentTodos = [todo]
+            } else {
+                currentTodos.append(todo)
+            }
+        }
+
+        if let currentDay, !currentTodos.isEmpty {
+            sections.append(CompletedActivityDaySection(day: currentDay, todos: currentTodos))
+        }
+
+        return sections
     }
 
     private func activityGroupSummaries(from completedItems: [Todo]) -> [ActivityGroupSummary] {
@@ -1792,13 +1830,22 @@ private struct SuggestedTaskTile: View {
 
 private struct ExploreSectionHeader: View {
     let title: String
+    var detail: String? = nil
 
     var body: some View {
-        Text(title)
-            .font(.system(size: 18, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 8)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary)
+            Spacer(minLength: 8)
+            if let detail {
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 8)
     }
 }
 
@@ -2414,17 +2461,28 @@ private struct PassbookMemorySection: View {
     let memories: [AgentMemory]
     let onSelect: (AgentMemory) -> Void
 
+    private var lastUpdatedLabel: String? {
+        guard let latest = memories.map(\.updated_at).max() else { return nil }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: latest, relativeTo: Date())
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ExploreSectionHeader(title: "Memories")
+            ExploreSectionHeader(title: "Memories", detail: lastUpdatedLabel)
             if memories.isEmpty {
                 PassbookMemoryEmptyCard()
             } else {
-                ForEach(memories) { memory in
-                    PassbookMemoryCard(
-                        memory: memory,
-                        onSelect: { onSelect(memory) }
-                    )
+                VStack(spacing: 2) {
+                    ForEach(Array(memories.enumerated()), id: \.element.id) { index, memory in
+                        PassbookMemoryCard(
+                            memory: memory,
+                            isFirst: index == 0,
+                            isLast: index == memories.count - 1,
+                            onSelect: { onSelect(memory) }
+                        )
+                    }
                 }
             }
         }
@@ -2455,13 +2513,37 @@ private struct PassbookMemoryEmptyCard: View {
     }
 }
 
+private enum PassbookMemoryRowMetrics {
+    static let outerCornerRadius: CGFloat = 24
+    static let innerCornerRadius: CGFloat = 4
+
+    static func cornerRadii(isFirst: Bool, isLast: Bool) -> RectangleCornerRadii {
+        RectangleCornerRadii(
+            topLeading: isFirst ? outerCornerRadius : innerCornerRadius,
+            bottomLeading: isLast ? outerCornerRadius : innerCornerRadius,
+            bottomTrailing: isLast ? outerCornerRadius : innerCornerRadius,
+            topTrailing: isFirst ? outerCornerRadius : innerCornerRadius
+        )
+    }
+}
+
 private struct PassbookMemoryCard: View {
     let memory: AgentMemory
+    let isFirst: Bool
+    let isLast: Bool
     let onSelect: () -> Void
+
+    private var rowShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            cornerRadii: PassbookMemoryRowMetrics.cornerRadii(isFirst: isFirst, isLast: isLast),
+            style: .continuous
+        )
+    }
 
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 12) {
+                PassbookMemorySymbolAvatar(memory: memory)
                 Text(memory.title)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
@@ -2471,16 +2553,33 @@ private struct PassbookMemoryCard: View {
                     .font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(20)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .padding(.leading, 14)
+            .padding(.trailing, 20)
+            .padding(.vertical, 14)
+            .background(Color.white, in: rowShape)
+            .contentShape(rowShape)
             .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                rowShape
                     .stroke(Color.black.opacity(0.05))
             )
         }
         .buttonStyle(.plain)
-        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .contentShape(rowShape)
+    }
+}
+
+private struct PassbookMemorySymbolAvatar: View {
+    let memory: AgentMemory
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.black.opacity(0.06))
+            Image(systemName: memory.effectiveSymbolName)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.secondary.opacity(0.72))
+        }
+        .frame(width: 40, height: 40)
     }
 }
 
@@ -2878,6 +2977,51 @@ private enum CompletedActivityFilter: String, CaseIterable, Identifiable {
         case .allActivity: return "All Activity"
         case .topics: return "Categories"
         }
+    }
+}
+
+private struct CompletedActivityDaySection: Identifiable {
+    let day: Date
+    let todos: [Todo]
+
+    var id: Date { day }
+}
+
+private struct ActivityDateDivider: View {
+    let date: Date
+
+    var body: some View {
+        Text(Self.label(for: date))
+            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .foregroundStyle(Color.black.opacity(0.36))
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 4)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Day-only labels for the All Activity list: anchored to today /
+    /// yesterday while fresh, then "Mon June, 15" style dates (with a
+    /// year suffix when the day falls in a different calendar year).
+    private static func label(for date: Date) -> String {
+        let calendar = Calendar.current
+        let now = Date()
+
+        if calendar.isDateInToday(date) {
+            return "today"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "yesterday"
+        }
+
+        let weekday = date.formatted(.dateTime.weekday(.abbreviated))
+        let month = date.formatted(.dateTime.month(.wide))
+        let day = date.formatted(.dateTime.day())
+        var label = "\(weekday) \(month), \(day)"
+        if !calendar.isDate(date, equalTo: now, toGranularity: .year) {
+            let year = date.formatted(.dateTime.year())
+            label += ", \(year)"
+        }
+        return label
     }
 }
 
@@ -3289,6 +3433,7 @@ private struct CronJobCard: View {
     private static let contentHorizontalPadding: CGFloat = 14
     private static let contentTopPadding: CGFloat = 12
     private static let contentBottomPadding: CGFloat = 16
+    private static let footerHeight: CGFloat = 54
     private static let footerBackground = Color(
         red: 0xF6 / 255,
         green: 0xF7 / 255,
@@ -3322,7 +3467,7 @@ private struct CronJobCard: View {
 
                 Button(action: onOpen) {
                     Text(job.name)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.black)
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
@@ -3330,6 +3475,8 @@ private struct CronJobCard: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, Self.contentHorizontalPadding)
             .padding(.top, Self.contentTopPadding)
@@ -3346,7 +3493,7 @@ private struct CronJobCard: View {
                 )
                 .fill(Color.white)
             }
-            .frame(maxWidth: .infinity, minHeight: 148, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -3379,7 +3526,7 @@ private struct CronJobCard: View {
                 }
             }
             .padding(.horizontal, Self.contentHorizontalPadding)
-            .padding(.vertical, 8)
+            .frame(height: Self.footerHeight)
             .background(Self.footerBackground)
         }
         .frame(maxWidth: .infinity, minHeight: 214, alignment: .topLeading)
@@ -3611,12 +3758,14 @@ private struct TodoCard: View {
         // is actually working ("Searching Gmail…"). We only trust it
         // for active statuses so the card doesn't flash a stale title
         // once the run lands in a terminal state.
-        if let activity, todo.status.isActive, activity.isRunning {
-            return activity.primaryStatusText
+        if let activity, todo.status.isActive {
+            if activity.isRunning || activity.resolvedPhase == .starting {
+                return activity.primaryStatusText
+            }
         }
         switch todo.status {
         case .preparing:
-            if let activity, activity.isRunning {
+            if let activity, activity.isRunning || activity.resolvedPhase == .starting {
                 return activity.primaryStatusText
             }
             if let summary = todo.preparation_summary, !summary.isEmpty {
@@ -3624,8 +3773,16 @@ private struct TodoCard: View {
             }
             return "Preparing task..."
         case .todo: return "Ready to get started..."
-        case .requested: return "Starting..."
-        case .running: return "Working..."
+        case .requested:
+            if let activity, !activity.primaryStatusText.isEmpty {
+                return activity.primaryStatusText
+            }
+            return "Queued to run..."
+        case .running:
+            if let activity, !activity.primaryStatusText.isEmpty {
+                return activity.primaryStatusText
+            }
+            return "Working..."
         case .needs_auth: return "Connect an account to continue"
         case .needs_input: return "Needs your input"
         case .done: return "Done"
@@ -3720,6 +3877,10 @@ private struct TodoToggle: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Color.white)
+                } else if status.isActive {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(TodoCardStyle.muted)
                 } else {
                     Circle()
                         .strokeBorder(TodoCardStyle.muted, lineWidth: 3)
@@ -3729,7 +3890,13 @@ private struct TodoToggle: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(status == .done ? "Mark as not done" : "Mark as done")
+        .accessibilityLabel(toggleAccessibilityLabel)
+    }
+
+    private var toggleAccessibilityLabel: String {
+        if status == .done { return "Mark as not done" }
+        if status.isActive { return "Task in progress" }
+        return "Mark as done"
     }
 }
 

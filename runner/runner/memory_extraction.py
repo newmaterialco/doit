@@ -59,7 +59,8 @@ MEMORY_EXTRACT_INSTRUCTIONS = (
     "      \"title\": \"Short label, <= 120 chars; not the full fact\",\n"
     "      \"body\": \"One compact durable fact, <= 500 chars\",\n"
     "      \"confidence\": \"high\" | \"medium\" | \"low\",\n"
-    "      \"reason\": \"Why this should be remembered, <= 240 chars\"\n"
+    "      \"reason\": \"Why this should be remembered, <= 240 chars\",\n"
+    "      \"symbol_name\": \"SF Symbol for Passbook row, e.g. person.crop.circle, airplane, figure.hiking, envelope.fill\"\n"
     "    }\n"
     "  ]\n"
     "}\n"
@@ -70,6 +71,10 @@ MEMORY_EXTRACT_INSTRUCTIONS = (
     "Use target=\"user\" for user preferences, identity, communication style, "
     "contacts, and recurring personal context. Use target=\"memory\" for Doit's "
     "workflow notes, tool quirks, project conventions, and lessons learned. "
+    "Pick symbol_name from Apple's SF Symbols that fits the memory topic "
+    "(contact/person -> person.crop.circle, travel -> airplane, hiking -> "
+    "figure.hiking, email -> envelope.fill, address/home -> house.fill, "
+    "work/company -> building.2.fill). "
     "Return an empty memories array when nothing durable was learned."
 )
 
@@ -81,6 +86,7 @@ class MemoryCandidate:
     body: str
     confidence: MemoryConfidence
     reason: str
+    symbol_name: str | None = None
 
 
 def build_memory_extraction_prompt(
@@ -189,6 +195,7 @@ def parse_memory_extraction(text: str) -> list[MemoryCandidate]:
         title = _clean_text(item.get("title"), max_len=120)
         body = _clean_text(item.get("body"), max_len=500)
         reason = _clean_text(item.get("reason"), max_len=240)
+        symbol_name = _clean_text(item.get("symbol_name"), max_len=80) or None
         if not title or not body:
             continue
         if _canonical(title) == _canonical(body):
@@ -204,6 +211,7 @@ def parse_memory_extraction(text: str) -> list[MemoryCandidate]:
                 body=body,
                 confidence=confidence,  # type: ignore[arg-type]
                 reason=reason,
+                symbol_name=symbol_name,
             )
         )
     return candidates

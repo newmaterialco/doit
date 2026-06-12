@@ -137,18 +137,25 @@ class AgentActivityService:
     # Public API
     # ------------------------------------------------------------------
 
-    def initial(self, *, phase: str = "starting", title: str = "Starting…") -> ActivitySnapshot:
+    def initial(
+        self,
+        *,
+        phase: str = "starting",
+        title: str = "Starting…",
+        detail: str | None = None,
+    ) -> ActivitySnapshot:
         """Snapshot to write when we first claim a todo, before any SSE.
 
         Keeps the UI from sitting on a stale "Ready to get started" line
         in the gap between status flipping to `running` and the first
         Hermes event landing.
         """
+        detail_text = detail if detail is not None else title
         return ActivitySnapshot(
             phase=phase,
             state="running",
             title=title,
-            detail=title,
+            detail=detail_text,
             tool_category="thinking",
             started_at=self._started_at,
             recent=list(self._recent),
@@ -469,6 +476,34 @@ def _clip(value: str | None, limit: int) -> str | None:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "\u2026"
+
+
+def execution_start_snapshot(todo: dict) -> ActivitySnapshot:
+    """User-visible activity while Hermes spins up for a claimed todo."""
+    service = AgentActivityService()
+    summary = _clip(str(todo.get("preparation_summary") or "").strip(), _TITLE_LIMIT)
+    title_text = _clip(str(todo.get("title") or "").strip(), _TITLE_LIMIT)
+    if summary:
+        return service.initial(phase="starting", title=summary, detail=title_text or summary)
+    if title_text:
+        return service.initial(
+            phase="starting",
+            title=f"Working on {title_text}",
+            detail=title_text,
+        )
+    return service.initial(phase="starting", title="Getting started…")
+
+
+def prep_queue_snapshot(*, summary: str | None = None) -> ActivitySnapshot:
+    """Activity row written when prep finishes and the todo is queued."""
+    service = AgentActivityService()
+    if summary:
+        return service.initial(
+            phase="starting",
+            title=summary,
+            detail="Queued to run",
+        )
+    return service.initial(phase="starting", title="Queued to run")
 
 
 _TOOL_VERB_OVERRIDES: dict[str, str] = {

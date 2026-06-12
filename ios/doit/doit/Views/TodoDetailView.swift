@@ -216,10 +216,8 @@ struct TodoDetailView: View {
             print("[detail] scenePhase \(oldPhase)→\(newPhase) todo=\(todoID)")
             guard newPhase == .active else { return }
             Task {
-                await store.refreshTodo(id: todoID)
-                await store.refreshArtifacts(for: todoID)
+                await store.refreshTodoSurface(id: todoID)
                 await store.refreshInteractions(for: todoID)
-                await store.refreshAgentActivity(for: todoID)
                 await loadSteps()
                 await loadMessages()
             }
@@ -228,10 +226,8 @@ struct TodoDetailView: View {
             guard TodoRemoteUpdate.todoID(from: note) == todoID else { return }
             print("[detail] push refresh todo=\(todoID)")
             Task {
-                await store.refreshTodo(id: todoID)
-                await store.refreshArtifacts(for: todoID)
+                await store.refreshTodoSurface(id: todoID)
                 await store.refreshInteractions(for: todoID)
-                await store.refreshAgentActivity(for: todoID)
                 await loadSteps()
                 await loadMessages()
             }

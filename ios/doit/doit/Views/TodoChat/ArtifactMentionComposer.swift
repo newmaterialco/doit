@@ -59,7 +59,7 @@ extension ArtifactReference {
             )
         case .email:
             let draft = artifact.emailDraft
-            let title = artifact.title ?? draft?.subject ?? "Sent email"
+            let title = artifact.title ?? draft?.subject ?? artifact.emailFallbackTitle
             self = ArtifactReference(
                 id: artifact.id,
                 title: title,

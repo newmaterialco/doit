@@ -88,10 +88,11 @@ struct AgentActivity: Codable, Identifiable, Hashable, Sendable {
     /// Only promote it when it reads like user-facing prose; otherwise
     /// synthesize a calmer activity label from the tool-call title.
     var humanActivityText: String {
-        if let detail = AgentActivityCopy.readableDetail(detail) {
-            return detail
-        }
-        return AgentActivityCopy.friendlyFallback(for: title, category: resolvedCategory)
+        AgentActivityCopy.displayText(
+            title: title,
+            detail: detail,
+            category: resolvedCategory
+        )
     }
 
     /// Canonical prominent status text for every in-app and ActivityKit
@@ -270,10 +271,11 @@ struct AgentActivityStep: Hashable, Sendable, Identifiable {
     /// Detail-first copy mirroring `AgentActivity.humanActivityText` so
     /// the previous-intent stack reads the same way as the current one.
     var humanActivityText: String {
-        if let detail = AgentActivityCopy.readableDetail(detail) {
-            return detail
-        }
-        return AgentActivityCopy.friendlyFallback(for: title, category: tool_category)
+        AgentActivityCopy.displayText(
+            title: title,
+            detail: detail,
+            category: tool_category
+        )
     }
 
     var primaryStatusText: String {
@@ -315,6 +317,23 @@ struct AgentActivityStep: Hashable, Sendable, Identifiable {
 }
 
 private enum AgentActivityCopy {
+    /// Prefer readable detail prose, then the runner title verbatim, then
+    /// category fallbacks only when both are empty.
+    static func displayText(
+        title: String,
+        detail: String?,
+        category: AgentToolCategory
+    ) -> String {
+        if let readable = readableDetail(detail) {
+            return readable
+        }
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleaned.isEmpty {
+            return cleaned
+        }
+        return friendlyFallback(for: title, category: category)
+    }
+
     static func readableDetail(_ raw: String?) -> String? {
         guard let text = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty,
@@ -381,10 +400,7 @@ private enum AgentActivityCopy {
         case .figma:
             return lower.hasPrefix("review") ? "Reviewing Figma results" : "Working in Figma"
         case .unknown:
-            if cleaned.isEmpty || lower.hasPrefix("using ") || lower.hasPrefix("reviewing ") {
-                return "Working on the task"
-            }
-            return cleaned
+            return cleaned.isEmpty ? "Working…" : cleaned
         }
     }
 

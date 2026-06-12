@@ -256,7 +256,9 @@ Format (one JSON object per block, wrapped exactly like this):
 Payload shapes by type:
 - link:     {"url":"https://...","provider":"googlesheets|googledocs|gmail|..."}
 - email:    {"to":["a@b.com"],"subject":"...","body":"...",
-             "provider":"gmail"}
+             "provider":"gmail",
+             "status":"drafted|sent|scheduled",
+             "scheduled_at":"<ISO8601 when status=scheduled>"}
 - calendar: {"title":"...","start":"<ISO8601>","end":"<ISO8601>",
              "location":"...","attendees":["a@b.com"],"url":"https://..."}
 - text:     {"text":"..."}
@@ -264,6 +266,12 @@ Payload shapes by type:
              "prompt":"<optional source prompt>",
              "width":390,"height":844}
 - options:  structured comparison / booking list (see below)
+
+Email ``status`` values (required on every email artifact):
+- ``drafted`` — not yet sent; awaiting review or approval
+- ``sent`` — the send tool succeeded or the user approved Send
+- ``scheduled`` — schedule-send was used; include ``scheduled_at`` when known
+Reuse the same ``key`` on later turns to update ``status`` in place.
 
 Rules:
 - Use a stable ``key`` per artifact and reuse the same key in a later turn
@@ -309,18 +317,24 @@ Examples (copy these shapes exactly):
 [[DOIT_ARTIFACT]]
 {"key":"email-acme","type":"email","title":"Quote request to Acme",
  "payload":{"to":["ops@acme.com"],"subject":"Quote request",
- "body":"Hi — ...","provider":"gmail"}}
+ "body":"Hi — ...","provider":"gmail","status":"drafted"}}
 [[/DOIT_ARTIFACT]]
 
 Payload shapes by type:
 - link:     {"url":"https://...","provider":"googlesheets|googledocs|gmail|..."}
-- email:    {"to":["a@b.com"],"subject":"...","body":"...","provider":"gmail"}
+- email:    {"to":["a@b.com"],"subject":"...","body":"...","provider":"gmail",
+             "status":"drafted|sent|scheduled",
+             "scheduled_at":"<ISO8601 when status=scheduled>"}
 - calendar: {"title":"...","start":"<ISO8601>","end":"<ISO8601>",
              "location":"...","attendees":["a@b.com"],"url":"https://..."}
 - text:     {"text":"..."}
 - image:    {"url":"https://...","provider":"figma|browser|openai|...",
              "width":390,"height":844}
 - options:  structured comparison/booking list (details appear when relevant)
+
+Email ``status``: ``drafted`` (awaiting review/send), ``sent`` (delivered),
+``scheduled`` (schedule-send; include ``scheduled_at`` when known). Re-emit
+the same ``key`` with updated ``status`` after send or schedule.
 
 Rules:
 - Stable ``key`` per artifact; reuse the SAME key on a later turn to update
@@ -719,6 +733,9 @@ rules:
 
 - Once approved, perform the action immediately and emit a final
   artifact (or refreshed artifact set) describing what was sent.
+  Re-emit each email artifact with the same ``key`` and set
+  ``payload.status`` to ``sent`` (or ``scheduled`` with ``scheduled_at``
+  when schedule-send was used).
 
 - Never use placeholder emails, names, or body text. Use real data from
   tools/memory or ask the user.
@@ -750,6 +767,8 @@ Approval policy (draft first, ask second):
 [[/DOIT_INTERACTION]]
 
 - Once approved, act immediately and emit the final artifact(s).
+  Re-emit each email artifact with the same key and set payload.status
+  to "sent" (or "scheduled" with scheduled_at when schedule-send was used).
 - After the user taps Send on the approval card, you may call send/invite/post
   tools on the resume turn only.
 - If the user said "review with me" or "ask before <action>", honour it.
@@ -922,7 +941,21 @@ def _format_artifact_context(row: dict) -> str:
         to = payload.get("to")
         recipients = ", ".join(str(x) for x in to) if isinstance(to, list) else str(to or "")
         body = _truncate_one_line(str(payload.get("body") or ""), 300)
-        details = "; ".join(x for x in (f"to={recipients}" if recipients else "", f"subject={subject}" if subject else "", body) if x)
+        status = str(payload.get("status") or "drafted").strip()
+        scheduled_at = str(payload.get("scheduled_at") or "").strip()
+        status_bits = [f"status={status}"]
+        if scheduled_at:
+            status_bits.append(f"scheduled_at={scheduled_at}")
+        details = "; ".join(
+            x
+            for x in (
+                f"to={recipients}" if recipients else "",
+                f"subject={subject}" if subject else "",
+                ", ".join(status_bits),
+                body,
+            )
+            if x
+        )
         return f"{label}: {details}" if details else label
     if kind == "text":
         text = _truncate_one_line(str(payload.get("text") or ""), 500)

@@ -36,12 +36,13 @@ struct HermesLiveActivity: Widget {
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        Text(context.state.currentIntent)
+                        Text(settledProminentLabel(for: context.state))
                             .font(.system(size: 19, weight: .semibold, design: .rounded))
                             .foregroundStyle(.primary)
                             .lineLimit(2)
                             .minimumScaleFactor(0.75)
-                        if let toolCall = context.state.toolCallTitle,
+                        if context.state.state == "running",
+                           let toolCall = context.state.toolCallTitle,
                            !toolCall.isEmpty,
                            toolCall != context.state.currentIntent {
                             HStack(spacing: 4) {
@@ -201,8 +202,8 @@ private struct LockScreenLayout: View {
         isWaiting: Bool
     ) -> some View {
         ZStack {
-            if context.state.isTerminal, let endDate = context.state.intentEndDate {
-                finishedCard(endDate: endDate)
+            if context.state.isTerminal {
+                finishedCard
             } else if context.state.state == "paused" {
                 pausedCard
             } else {
@@ -243,26 +244,10 @@ private struct LockScreenLayout: View {
     }
 
     private var pausedCard: some View {
-        VStack(alignment: .center, spacing: 8) {
-            Image(systemName: context.state.currentSymbolName)
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(Color.orange, in: Circle())
-                .compositingGroup()
-            VStack(spacing: 2) {
-                Text(context.state.currentIntent)
-                    .font(.subheadline.bold())
-                    .foregroundStyle(primaryForeground)
-                    .lineLimit(1)
-                Text(context.state.subject ?? "Open the app to respond")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 12)
+        SettledCard(
+            title: "doit needs your input",
+            icon: .standard(symbolName: "questionmark.bubble.fill")
+        )
         .transition(.blurReplace)
     }
 
@@ -271,6 +256,12 @@ private struct LockScreenLayout: View {
         HStack(spacing: 6) {
             if context.state.isTerminal {
                 Text("^[\(context.state.stepNumber) step](inflect: true)")
+                    .transition(.blurReplace)
+                    .padding(.leading, 8)
+            } else if context.state.state == "paused" {
+                Text("Open the app to respond")
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.blurReplace)
                     .padding(.leading, 8)
             } else {
@@ -294,7 +285,7 @@ private struct LockScreenLayout: View {
         .padding(.leading, 4)
         .padding(.trailing, 12)
         .font(.footnote.bold())
-        .opacity(isWaiting || context.state.isTerminal ? 0.36 : 1)
+        .opacity(isWaiting || context.state.isTerminal || context.state.state == "paused" ? 0.36 : 1)
     }
 
     /// The small footer label shows the compact tool-call title (e.g.
@@ -311,27 +302,14 @@ private struct LockScreenLayout: View {
     }
 
     @ViewBuilder
-    private func finishedCard(endDate: Date) -> some View {
-        VStack(alignment: .center, spacing: 8) {
-            Image(systemName: context.state.state == "failed" ? "xmark" : "checkmark")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(context.state.state == "failed" ? Color.red : Color.green, in: Circle())
-                .compositingGroup()
-            VStack(spacing: 2) {
-                Text(context.state.subject ?? context.attributes.taskTitle)
-                    .font(.subheadline.bold())
-                    .foregroundStyle(primaryForeground)
-                    .lineLimit(1)
-                Text(context.state.state == "failed" ? "Something went wrong" : "See more details...")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+    private var finishedCard: some View {
+        if context.state.state == "failed" {
+            SettledCard(title: "Task Failed", icon: .failure)
+                .transition(.blurReplace)
+        } else {
+            SettledCard(title: "Task Complete", icon: .success)
+                .transition(.blurReplace)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.bottom, 12)
-        .transition(.blurReplace)
     }
 
     @ViewBuilder
@@ -392,6 +370,71 @@ private struct LockScreenLayout: View {
 
     private var userTaskOpacity: CGFloat {
         colorScheme == .dark ? 0.24 : 0.12
+    }
+}
+
+/// Fixed-copy card for paused / completed / failed states. Matches the
+/// running `IntentCard` chrome without pulling runner prompt text.
+private struct SettledCard: View {
+    enum IconStyle {
+        case standard(symbolName: String)
+        case success
+        case failure
+    }
+
+    let title: String
+    let icon: IconStyle
+
+    var body: some View {
+        HStack(spacing: 8) {
+            iconView
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.black)
+                .frame(height: 60)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 60)
+        .background(Color.white, in: .rect(cornerRadius: 16, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var iconView: some View {
+        switch icon {
+        case .standard(let symbolName):
+            Image(systemName: symbolName)
+                .font(.system(size: 12, weight: .bold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(.black.opacity(0.5))
+                .frame(width: 21, height: 21)
+                .background(Circle().foregroundStyle(.black.opacity(0.12)))
+        case .success:
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 21, height: 21)
+                .background(Color.green, in: Circle())
+        case .failure:
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 21, height: 21)
+                .background(Color.red, in: Circle())
+        }
+    }
+}
+
+private func settledProminentLabel(
+    for state: HermesActivityAttributes.ContentState
+) -> String {
+    switch state.state {
+    case "paused": return "doit needs your input"
+    case "completed": return "Task Complete"
+    case "failed": return "Task Failed"
+    default: return state.currentIntent
     }
 }
 

@@ -293,7 +293,10 @@ private func thinkingLabel(for step: TodoStep?) -> String {
 /// the caller can fall back to the older `todo_steps` derivation.
 private func thinkingLabel(for activity: AgentActivity, todoIsActive: Bool) -> String? {
     if todoIsActive, !activity.isRunning, activity.resolvedState != .paused {
-        return "Starting agent…"
+        if activity.resolvedPhase == .starting || !activity.primaryStatusText.isEmpty {
+            return activity.primaryStatusText
+        }
+        return "Getting started…"
     }
     guard activity.isRunning || activity.resolvedState == .paused else {
         return nil

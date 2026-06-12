@@ -36,7 +36,8 @@ enum MemoriesAPI {
             title: title,
             body: body,
             category: category?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
-            target: target.rawValue
+            target: target.rawValue,
+            symbol_name: MemorySymbol.infer(title: title, body: body)
         )
         let result: [AgentMemory] = try await Supa.client
             .from("memories")
@@ -60,6 +61,7 @@ enum MemoriesAPI {
             let sync_status: String
             let hermes_fingerprint: String?
             let sync_error: String?
+            let symbol_name: String
         }
 
         _ = try await Supa.client
@@ -73,7 +75,8 @@ enum MemoriesAPI {
                     memory_status: MemoryLifecycleStatus.active.rawValue,
                     sync_status: MemorySyncStatus.pending.rawValue,
                     hermes_fingerprint: nil,
-                    sync_error: nil
+                    sync_error: nil,
+                    symbol_name: MemorySymbol.infer(title: memory.title, body: memory.body)
                 )
             )
             .eq("id", value: memory.id)
@@ -81,11 +84,14 @@ enum MemoriesAPI {
     }
 
     static func approve(_ id: UUID) async throws {
+        guard let memory = try await get(id) else { return }
+        let symbol = memory.symbol_name ?? MemorySymbol.infer(title: memory.title, body: memory.body)
         try await patchLifecycle(
             id,
             status: .active,
             syncStatus: .pending,
-            clearFingerprint: true
+            clearFingerprint: true,
+            symbolName: symbol
         )
     }
 
@@ -111,13 +117,15 @@ enum MemoriesAPI {
         _ id: UUID,
         status: MemoryLifecycleStatus,
         syncStatus: MemorySyncStatus,
-        clearFingerprint: Bool
+        clearFingerprint: Bool,
+        symbolName: String? = nil
     ) async throws {
         struct Patch: Encodable {
             let memory_status: String
             let sync_status: String
             let hermes_fingerprint: String?
             let reviewed_at: Date
+            let symbol_name: String?
         }
 
         _ = try await Supa.client
@@ -127,7 +135,8 @@ enum MemoriesAPI {
                     memory_status: status.rawValue,
                     sync_status: syncStatus.rawValue,
                     hermes_fingerprint: clearFingerprint ? nil : nil,
-                    reviewed_at: Date()
+                    reviewed_at: Date(),
+                    symbol_name: symbolName
                 )
             )
             .eq("id", value: id)

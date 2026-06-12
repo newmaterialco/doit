@@ -133,7 +133,8 @@ enum TodoRealtimeHub {
             table: "todo_steps",
             filter: "todo_id=eq.\(todoID.uuidString)",
             tasks: &todoTasks,
-            onAction: { _ in await todoHandlers.onSteps() }
+            onAction: { _ in await todoHandlers.onSteps() },
+            onReconnect: { await todoHandlers.onSteps() }
         )
         startChannel(
             key: "messages",
@@ -141,7 +142,8 @@ enum TodoRealtimeHub {
             table: "todo_messages",
             filter: "todo_id=eq.\(todoID.uuidString)",
             tasks: &todoTasks,
-            onAction: { _ in await todoHandlers.onMessages() }
+            onAction: { _ in await todoHandlers.onMessages() },
+            onReconnect: { await todoHandlers.onMessages() }
         )
     }
 
@@ -171,7 +173,8 @@ enum TodoRealtimeHub {
             table: "cron_job_messages",
             filter: "cron_job_id=eq.\(jobID.uuidString)",
             tasks: &cronTasks,
-            onAction: { _ in await cronHandlers.onMessages() }
+            onAction: { _ in await cronHandlers.onMessages() },
+            onReconnect: { await cronHandlers.onMessages() }
         )
         startChannel(
             key: "cron_interactions",
@@ -179,7 +182,8 @@ enum TodoRealtimeHub {
             table: "cron_job_interactions",
             filter: "cron_job_id=eq.\(jobID.uuidString)",
             tasks: &cronTasks,
-            onAction: { _ in await cronHandlers.onInteractions() }
+            onAction: { _ in await cronHandlers.onInteractions() },
+            onReconnect: { await cronHandlers.onInteractions() }
         )
     }
 
@@ -604,7 +608,8 @@ enum TodoRealtimeHub {
         table: String,
         filter: String?,
         tasks: inout [String: Task<Void, Never>],
-        onAction: @escaping (AnyAction) async -> Void
+        onAction: @escaping (AnyAction) async -> Void,
+        onReconnect: (() async -> Void)? = nil
     ) {
         tasks[key]?.cancel()
         tasks[key] = Task {
@@ -613,7 +618,8 @@ enum TodoRealtimeHub {
                 channelName: channelName,
                 table: table,
                 filter: filter,
-                onAction: onAction
+                onAction: onAction,
+                onReconnect: onReconnect
             )
         }
     }
@@ -626,7 +632,8 @@ enum TodoRealtimeHub {
         channelName: String,
         table: String,
         filter: String?,
-        onAction: @escaping (AnyAction) async -> Void
+        onAction: @escaping (AnyAction) async -> Void,
+        onReconnect: (() async -> Void)? = nil
     ) async {
         var attempt = 0
         while !Task.isCancelled {
@@ -650,6 +657,10 @@ enum TodoRealtimeHub {
             do {
                 try await channel.subscribeWithError()
                 print("[realtime][hub][\(label)] subscribe ok status=\(channel.status) attempt=\(attempt)")
+                if let onReconnect {
+                    print("[realtime][hub][\(label)] reconnect refetch")
+                    await onReconnect()
+                }
             } catch {
                 print("[realtime][hub][\(label)] subscribe FAILED status=\(channel.status) error=\(error) attempt=\(attempt)")
                 await Supa.client.removeChannel(channel)

@@ -301,7 +301,11 @@ struct TaskHeaderView: View {
                     emailBatchPill(emails: emails)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(isEmailBatchExpanded ? "Hide \(emails.count) sent emails" : "Show \(emails.count) sent emails")
+                .accessibilityLabel(
+                    isEmailBatchExpanded
+                        ? "Hide \(EmailArtifactStatus.batchSummary(for: emails))"
+                        : "Show \(EmailArtifactStatus.batchSummary(for: emails))"
+                )
 
                 if isEmailBatchExpanded {
                     Group {
@@ -332,7 +336,7 @@ struct TaskHeaderView: View {
                 ConnectionLogo(slug: emails.first?.emailProvider ?? "gmail")
             }
 
-            Text("\(emails.count) emails sent")
+            Text(EmailArtifactStatus.batchSummary(for: emails))
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.primary)
                 .lineLimit(2)
@@ -397,10 +401,31 @@ struct StatusIndicatorIcon: View {
     let status: TodoStatus
 
     var body: some View {
-        Image(systemName: status == .done ? "checkmark.circle.fill" : "circle")
-            .font(.system(size: 22, weight: .regular))
-            .foregroundStyle(status == .done ? Color.green : Color.secondary)
-            .symbolEffect(.pulse, isActive: status.isActive)
+        Group {
+            if status == .done {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(Color.green)
+            } else if status.isActive {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.secondary)
+            } else {
+                Image(systemName: "circle")
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(Color.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .accessibilityLabel(statusIndicatorAccessibilityLabel)
+    }
+
+    private var statusIndicatorAccessibilityLabel: String {
+        switch status {
+        case .done: return "Task completed"
+        case .preparing, .requested, .running: return "Task in progress"
+        default: return "Task not completed"
+        }
     }
 }
 
@@ -562,8 +587,8 @@ private struct LinkArtifactCard: View {
     }
 }
 
-/// Sent email preview styled like the chat's Gmail draft card: provider
-/// logo, bold subject, recipients, and a truncated body with expand.
+/// Email preview styled like the chat's Gmail draft card: provider logo,
+/// subject, status, recipients, and a truncated body with expand.
 private struct EmailArtifactCard: View {
     let artifact: TodoArtifact
 
@@ -575,11 +600,15 @@ private struct EmailArtifactCard: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(artifact.title ?? draft?.subject ?? "Sent email")
+                Text(artifact.title ?? draft?.subject ?? artifact.emailFallbackTitle)
                     .font(.system(size: 17, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+
+                Text(artifact.emailStatusLine)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
 
                 if let draft {
                     if !draft.to.isEmpty {

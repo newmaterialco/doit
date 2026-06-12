@@ -12,6 +12,7 @@ from supabase import Client, create_client
 from .config import Config
 from .hermes import HermesEndpoint
 from .memory_dedupe import best_duplicate_memory
+from .memory_symbol import infer_memory_symbol, resolve_memory_symbol
 
 log = logging.getLogger(__name__)
 
@@ -500,6 +501,7 @@ class DB:
         reason: str,
         source_todo_id: str,
         memory_status: str,
+        symbol_name: str | None = None,
     ) -> None:
         """Insert or refresh a memory candidate from the post-task extractor."""
         try:
@@ -515,9 +517,11 @@ class DB:
             rows = existing.data or []
             candidate = {"title": title, "body": body}
             duplicate = best_duplicate_memory(rows, candidate)
+            title = title[:_TITLE_MAX]
+            body = body[:2000]
             patch = {
-                "title": title[:_TITLE_MAX],
-                "body": body[:2000],
+                "title": title,
+                "body": body,
                 "target": target,
                 "source": "doit",
                 "memory_status": memory_status,
@@ -527,6 +531,11 @@ class DB:
                 "sync_status": "pending" if memory_status == "active" else "pending",
                 "hermes_fingerprint": None,
                 "sync_error": None,
+                "symbol_name": resolve_memory_symbol(
+                    symbol_name=symbol_name,
+                    title=title,
+                    body=body,
+                ),
             }
             if duplicate is not None:
                 if duplicate.get("source") == "user":
@@ -563,6 +572,7 @@ class DB:
         """
         title = _derive_title(text)
         body = text[:2000]
+        symbol_name = infer_memory_symbol(title, body)
         try:
             row = {
                 "user_id": user_id,
@@ -576,10 +586,11 @@ class DB:
                 "hermes_fingerprint": fingerprint,
                 "last_sync_at": when_iso,
                 "sync_error": None,
+                "symbol_name": symbol_name,
             }
             existing = (
                 self._client.table("memories")
-                .select("id, source")
+                .select("id, source, title, body")
                 .eq("user_id", user_id)
                 .eq("target", target)
                 .eq("hermes_fingerprint", fingerprint)
@@ -594,6 +605,7 @@ class DB:
                 # user-authored.
                 if rows[0].get("source") != "hermes":
                     return
+                row["symbol_name"] = infer_memory_symbol(title, body)
                 self._client.table("memories").update(row).eq(
                     "id", rows[0]["id"]
                 ).execute()
@@ -1134,13 +1146,15 @@ class DB:
         topic: str | None = None,
         collection_name: str | None = None,
         preparation_summary: str | None = None,
+        spawned_by_todo_id: str | None = None,
         status: str = "todo",
     ) -> dict | None:
         """Insert an already-prepared todo for multi-task splits.
 
-        ``status`` defaults to ``todo`` for backward compatibility, but the
-        prep pipeline now passes ``requested`` so split-out tasks auto-run
-        in lockstep with the original `+` sheet submission.
+        ``status`` defaults to ``todo`` so split-out rows wait for an
+        explicit Do it tap. The parent row from the same `+` sheet
+        submission auto-runs; extras inherit the parent's request context
+        via ``original_title`` / ``detail`` and ``spawned_by_todo_id``.
         """
         return self.insert_spawned_todo(
             user_id=user_id,
@@ -1152,7 +1166,7 @@ class DB:
             collection_name=collection_name,
             preparation_summary=preparation_summary,
             spawn_key=None,
-            spawned_by_todo_id=None,
+            spawned_by_todo_id=spawned_by_todo_id,
             spawned_by_cron_job_id=None,
             status=status,
         )

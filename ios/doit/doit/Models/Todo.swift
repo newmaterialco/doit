@@ -457,6 +457,7 @@ struct AgentMemory: Codable, Identifiable, Hashable, Sendable {
     var reviewed_at: Date?
     var sync_error: String?
     var last_sync_at: Date?
+    var symbol_name: String?
     let created_at: Date
     let updated_at: Date
 
@@ -476,6 +477,7 @@ struct NewAgentMemory: Encodable, Sendable {
     let body: String
     let category: String?
     let target: String?
+    let symbol_name: String?
 }
 
 struct MemorySettings: Codable, Sendable {

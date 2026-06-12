@@ -24,6 +24,81 @@ enum ArtifactKind: String, Codable, Sendable, CaseIterable {
     case options
 }
 
+/// Lifecycle state for email artifacts. The agent sets ``payload.status``;
+/// the runner normalizes it; iOS renders labels from this enum.
+enum EmailArtifactStatus: String, Codable, Sendable, CaseIterable {
+    case drafted
+    case sent
+    case scheduled
+
+    var displayLabel: String {
+        switch self {
+        case .drafted: return "Drafted"
+        case .sent: return "Sent"
+        case .scheduled: return "Scheduled"
+        }
+    }
+
+    /// Short adjective for mixed-status batch summaries ("1 sent, 2 drafted").
+    var batchAdjective: String {
+        switch self {
+        case .drafted: return "drafted"
+        case .sent: return "sent"
+        case .scheduled: return "scheduled"
+        }
+    }
+
+    /// Plural phrase when every email in a batch shares this status.
+    var pluralEmailsLabel: String {
+        switch self {
+        case .drafted: return "drafted emails"
+        case .sent: return "sent emails"
+        case .scheduled: return "scheduled emails"
+        }
+    }
+
+    /// Singular phrase when a batch of one shares this status.
+    var singularEmailLabel: String {
+        switch self {
+        case .drafted: return "drafted email"
+        case .sent: return "sent email"
+        case .scheduled: return "scheduled email"
+        }
+    }
+
+    static func fromPayload(_ raw: String?) -> EmailArtifactStatus {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "sent": return .sent
+        case "scheduled", "schedule": return .scheduled
+        case "drafted", "draft": return .drafted
+        default: return .drafted
+        }
+    }
+
+    /// Collapsed batch pill copy: "2 drafted emails" or "1 sent, 2 drafted".
+    static func batchSummary(for emails: [TodoArtifact]) -> String {
+        guard !emails.isEmpty else { return "0 emails" }
+        let counts = Dictionary(grouping: emails, by: \.emailStatus)
+            .mapValues(\.count)
+        let active = allCases.filter { counts[$0, default: 0] > 0 }
+
+        if active.count == 1, let status = active.first {
+            let count = counts[status] ?? 0
+            return count == 1
+                ? "1 \(status.singularEmailLabel)"
+                : "\(count) \(status.pluralEmailsLabel)"
+        }
+
+        let parts = active.map { status -> String in
+            let count = counts[status] ?? 0
+            return count == 1
+                ? "1 \(status.batchAdjective)"
+                : "\(count) \(status.batchAdjective)"
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// One user-visible deliverable produced by the agent — a created Google
 /// Sheet/Doc link, a sent email summary, a calendar invite, or a short
 /// text result. Multiple artifacts can sit on a single todo and the agent
@@ -100,6 +175,42 @@ struct TodoArtifact: Codable, Identifiable, Hashable, Sendable {
               let body = obj["body"]?.stringValue else { return nil }
         let to = obj["to"]?.arrayValue?.compactMap { $0.stringValue } ?? []
         return (subject: subject, body: body, to: to)
+    }
+
+    /// Sent / drafted / scheduled state from ``payload.status``.
+    var emailStatus: EmailArtifactStatus {
+        guard kind == .email else { return .drafted }
+        return EmailArtifactStatus.fromPayload(object?["status"]?.stringValue)
+    }
+
+    /// Schedule-send time when ``emailStatus`` is ``scheduled``.
+    var emailScheduledAt: Date? {
+        object?["scheduled_at"]?.stringValue.flatMap(Self.parseISO8601)
+    }
+
+    /// Secondary status line for email artifact cards.
+    var emailStatusLine: String {
+        switch emailStatus {
+        case .drafted:
+            return EmailArtifactStatus.drafted.displayLabel
+        case .sent:
+            return EmailArtifactStatus.sent.displayLabel
+        case .scheduled:
+            if let at = emailScheduledAt {
+                let timeStr = at.formatted(date: .abbreviated, time: .shortened)
+                return "Scheduled · \(timeStr)"
+            }
+            return EmailArtifactStatus.scheduled.displayLabel
+        }
+    }
+
+    /// Fallback title for @-mentions and cards when subject/title are absent.
+    var emailFallbackTitle: String {
+        switch emailStatus {
+        case .drafted: return "Drafted email"
+        case .sent: return "Sent email"
+        case .scheduled: return "Scheduled email"
+        }
     }
 
     // MARK: - calendar

@@ -33,10 +33,16 @@ struct AgentActivityCard: View {
     }
 
     private var currentCard: AgentIntentCardModel {
+        if activity.isTerminal {
+            return AgentIntentCardModel(activity: activity)
+        }
         if isTaskActive, !activity.isRunning, activity.resolvedState != .paused {
+            if activity.resolvedPhase == .starting || !activity.primaryStatusText.isEmpty {
+                return AgentIntentCardModel(activity: activity)
+            }
             return AgentIntentCardModel(
                 id: "rerun-\(activity.todo_id.uuidString)",
-                title: "Starting agent…",
+                title: "Getting started…",
                 symbolName: AgentToolCategory.thinking.symbolName,
                 isCompleted: false
             )
