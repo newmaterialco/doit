@@ -32,6 +32,7 @@ final class AgentLiveActivityManager {
     private var lastUpdate: [UUID: Date] = [:]
     private var lastStateSignature: [UUID: String] = [:]
     private var pendingUpdateTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingSnapshots: [UUID: (AgentActivity, String)] = [:]
     private var terminalDismissTasks: [UUID: Task<Void, Never>] = [:]
 
     /// How long a completed / failed Live Activity should remain visible
@@ -100,6 +101,7 @@ final class AgentLiveActivityManager {
             lastStateSignature.removeValue(forKey: todoID)
             pendingUpdateTasks[todoID]?.cancel()
             pendingUpdateTasks.removeValue(forKey: todoID)
+            pendingSnapshots.removeValue(forKey: todoID)
             terminalDismissTasks[todoID]?.cancel()
             terminalDismissTasks.removeValue(forKey: todoID)
         }
@@ -114,12 +116,14 @@ final class AgentLiveActivityManager {
             lastStateSignature.removeValue(forKey: todoID)
             pendingUpdateTasks[todoID]?.cancel()
             pendingUpdateTasks.removeValue(forKey: todoID)
+            pendingSnapshots.removeValue(forKey: todoID)
             terminalDismissTasks[todoID]?.cancel()
             terminalDismissTasks.removeValue(forKey: todoID)
         }
         lastUpdate.removeAll()
         lastStateSignature.removeAll()
         pendingUpdateTasks.removeAll()
+        pendingSnapshots.removeAll()
         terminalDismissTasks.removeAll()
     }
 
@@ -161,9 +165,11 @@ final class AgentLiveActivityManager {
         snapshot: AgentActivity,
         taskTitle: String
     ) {
+        let todoID = activity.attributes.todoID
+        pendingSnapshots[todoID] = (snapshot, taskTitle)
+
         let state = contentState(from: snapshot)
         let signature = signature(for: state)
-        let todoID = activity.attributes.todoID
         guard lastStateSignature[todoID] != signature else { return }
 
         let now = Date()
@@ -179,18 +185,25 @@ final class AgentLiveActivityManager {
                 let nanoseconds = UInt64(delay * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: nanoseconds)
                 guard !Task.isCancelled else { return }
-                await self?.applyUpdate(
-                    activity,
-                    state: state,
-                    signature: signature
-                )
+                await self?.applyPendingUpdate(activity)
             }
             return
         }
 
         pendingUpdateTasks[todoID]?.cancel()
         pendingUpdateTasks.removeValue(forKey: todoID)
-        Task { await applyUpdate(activity, state: state, signature: signature) }
+        Task { await applyPendingUpdate(activity) }
+    }
+
+    private func applyPendingUpdate(
+        _ activity: Activity<HermesActivityAttributes>
+    ) async {
+        let todoID = activity.attributes.todoID
+        guard let pending = pendingSnapshots[todoID] else { return }
+        let state = contentState(from: pending.0)
+        let signature = signature(for: state)
+        await applyUpdate(activity, state: state, signature: signature)
+        pendingSnapshots.removeValue(forKey: todoID)
     }
 
     private func applyUpdate(
@@ -299,6 +312,7 @@ final class AgentLiveActivityManager {
         lastStateSignature.removeValue(forKey: todoID)
         pendingUpdateTasks[todoID]?.cancel()
         pendingUpdateTasks.removeValue(forKey: todoID)
+        pendingSnapshots.removeValue(forKey: todoID)
         terminalDismissTasks[todoID]?.cancel()
         terminalDismissTasks.removeValue(forKey: todoID)
     }

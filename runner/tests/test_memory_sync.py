@@ -29,7 +29,12 @@ class MemorySourceOfTruthSyncTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.store = HermesMemoryStore(Path(self.tmp.name), "gabriel")
+        self.store = HermesMemoryStore(
+            Path(self.tmp.name),
+            "gabriel",
+            user_char_limit=1375,
+            memory_char_limit=2200,
+        )
 
     def test_rewrites_hermes_files_from_active_rows(self) -> None:
         self.store.write_entries("user", ["stale fact"])
@@ -84,6 +89,39 @@ class MemorySourceOfTruthSyncTests(unittest.TestCase):
 
         self.assertEqual(self.store.read_entries("user"), [])
         self.assertEqual(self.store.read_entries("memory"), [])
+
+    def test_user_rows_survive_when_agent_rows_evicted(self) -> None:
+        self.store.write_entries("user", ["stale agent filler " * 40])
+        db = _FakeDB(
+            [
+                {
+                    "id": "m-user",
+                    "user_id": "u1",
+                    "target": "user",
+                    "title": "Signoff",
+                    "body": "User signs emails as Gabe.",
+                    "source": "user",
+                    "memory_status": "active",
+                    "sync_status": "pending",
+                },
+                {
+                    "id": "m-agent",
+                    "user_id": "u1",
+                    "target": "user",
+                    "title": "Old note",
+                    "body": "Very long agent-only note " * 30,
+                    "source": "hermes",
+                    "memory_status": "active",
+                    "sync_status": "synced",
+                },
+            ]
+        )
+
+        sync_active_memories_to_hermes(db, self.store, "u1")
+
+        user_entries = [e.text for e in self.store.read_entries("user")]
+        self.assertIn("Signoff: User signs emails as Gabe.", user_entries)
+        self.assertEqual(db.failed, [])
 
 
 if __name__ == "__main__":

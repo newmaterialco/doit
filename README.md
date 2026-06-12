@@ -23,8 +23,12 @@ Composio Connect (MCP) ........... managed OAuth for Gmail, Calendar, Slack, ...
 ```
 
 - **One VM total**, not one per user. Each user gets a Hermes **profile** with
-  its own API server port, memory, and OAuth connections.
+  its own API server port, memory, and OAuth connections, running as a
+  `hermes@<profile>` systemd template instance.
 - The **runner** is the only custom backend; it's outbound-only (no public port).
+  It runs a bounded worker pool (multiple todos at once, across and within
+  users) and an automated provisioner: new users redeem an **invite code**
+  in the app and their agent is built end-to-end with no manual steps.
 - Real-world actions (sending email, etc.) go through **Composio Connect** so we
   never build OAuth or store tokens ourselves.
 

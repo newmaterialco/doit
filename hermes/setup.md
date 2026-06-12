@@ -10,7 +10,10 @@ End-to-end runbook for provisioning the single cloud box that runs Hermes
 Pick a provider — Hetzner (cheapest) or DigitalOcean (friendliest UI). Specs:
 
 - Ubuntu 22.04 or 24.04 LTS
-- ~4 GB RAM, 2 vCPU
+- ~4 GB RAM, 2 vCPU for 1-5 users; resize to **8-16 GB RAM / 4 vCPU**
+  before opening invite codes to 50-100 users (each user runs a Hermes
+  gateway process — measure per-gateway RSS with the first few real users
+  to validate headroom)
 - 40 GB disk
 - A non-root sudo user
 
@@ -180,8 +183,10 @@ URL for this app; it does not carry the per-user session context.
 > **Adding a new integration later:** regenerate the session with the updated
 > `TOOLKITS` list above, paste the new MCP URL/headers into the user's
 > `config.yaml`, and restart their Hermes gateway (`sudo systemctl restart
-> hermes-<profile>`). The iOS Connections sheet only handles OAuth; Hermes
+> hermes@<profile>`). The iOS Connections sheet only handles OAuth; Hermes
 > only sees toolkits that were enabled when the Composio session was created.
+> The provisioner's toolkit list lives in `runner/runner/provision.py` —
+> keep all three in sync.
 
 You won't connect any apps yet — that happens per user once the iOS app is
 running.
@@ -221,75 +226,50 @@ Until then, keep the Composio Figma integration enabled and have Hermes return
 durable Doit `image` artifacts for screenshots/exports instead of raw temporary
 Figma image URLs.
 
-## 5. Onboard a user (create their Hermes profile)
+## 5. Onboard a user (automated — mint an invite code)
 
-For each friend, do this once on the VM. Using `alice` as the example name.
+Per-user onboarding is automated. Mint an invite code in the Supabase SQL
+editor (see `../supabase/README.md`), give it to the user, and the
+provisioner loop inside the runner does everything the old manual runbook
+did: Hermes profile from `hermes/profiles/_template/`, model block, Composio
+v3 session, unique API port, generated `API_SERVER_KEY`, systemd unit,
+health check, and the `user_hermes` row.
+
+One-time prerequisites on the VM:
+
+1. **Install the `hermes@.service` template unit** (replaces hand-written
+   per-user units; also migrates any existing `hermes-<profile>` units):
+
+   ```bash
+   sudo /opt/doit/scripts/install-hermes-template-unit.sh
+   ```
+
+   The template lives at `hermes/systemd/hermes@.service`; instances are
+   `hermes@<profile>`. If the runner runs as a non-root user, pass
+   `RUNNER_USER=<user>` to also install the scoped sudoers entry from
+   `hermes/systemd/doit-hermes.sudoers` (allows only
+   `systemctl start|stop|restart|enable|disable|is-active hermes@*`).
+
+2. **Runner env** (`/opt/doit/runner/.env`): set `COMPOSIO_API_KEY`,
+   and check `PROVISIONER_ENABLED`, `MAX_PROVISIONED_USERS`,
+   `HERMES_PORT_RANGE_START`, and the `HERMES_MODEL_*` defaults
+   (see `runner/.env.example`).
+
+Manual repair path, if a user's provisioning fails and the in-app retry
+doesn't clear it:
 
 ```bash
-# 1. Create the profile
-hermes profile create alice
-
-# 2. Generate a random API server key for the runner -> Hermes auth
-API_KEY=$(openssl rand -hex 32)
-echo "API key for alice: $API_KEY"   # save this; you'll insert it into Supabase too
-
-# 3. Copy template config + env
-PROFILE_DIR=~/.hermes/profiles/alice
-cp /path/to/repo/hermes/profiles/_template/config.yaml "$PROFILE_DIR/config.yaml"
-cp /path/to/repo/hermes/profiles/_template/.env.example "$PROFILE_DIR/.env"
-cp /path/to/repo/hermes/profiles/_template/SOUL.md "$PROFILE_DIR/SOUL.md"
-
-# 3b. Edit config.yaml and replace the Composio MCP placeholders with
-#     session.mcp.url and session.mcp.headers from step 4 above.
-#
-# 3c. If this profile was created after `hermes setup --portal`, make sure it
-#     has the same Nous model routing as ~/.hermes/config.yaml. A minimal block:
-python3 - <<'PY'
-from pathlib import Path
-p = Path.home() / ".hermes/profiles/alice/config.yaml"
-s = p.read_text()
-if not s.lstrip().startswith("model:"):
-    p.write_text(
-        "model:\n"
-        "  default: anthropic/claude-opus-4.6\n"
-        "  provider: nous\n"
-        "  base_url: https://openrouter.ai/api/v1\n\n"
-        + s
-    )
-PY
-
-# 4. Edit ~/.hermes/profiles/alice/.env and fill in:
-#       API_SERVER_PORT=8643   (unique per user)
-#       API_SERVER_KEY=<the API_KEY you just generated>
-#       COMPOSIO_API_KEY=ck_...
-#       COMPOSIO_ENTITY_ID=<alice's Supabase user uuid>
-
-# 5. Start the gateway under systemd so it auto-restarts
-sudo tee /etc/systemd/system/hermes-alice.service >/dev/null <<EOF
-[Unit]
-Description=Hermes gateway for alice
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-ExecStart=/usr/local/bin/hermes -p alice gateway run
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now hermes-alice
+cd /opt/doit/runner
+.venv/bin/python -m runner.provision_cli --user-id <supabase-user-uuid>
 ```
 
-Verify the API server is up:
+Verify a provisioned gateway by hand:
 
 ```bash
-curl -s http://127.0.0.1:8643/health -H "Authorization: Bearer $API_KEY"
+# port + key are in the user's user_hermes row / profile .env
+curl -s http://127.0.0.1:<port>/health -H "Authorization: Bearer <API_SERVER_KEY>"
 # -> {"status":"ok"}
+systemctl is-active hermes@user_a1b2c3d4
 ```
 
 ### Profile memory notes
@@ -375,13 +355,31 @@ about me?" without having to run a todo end-to-end.
 
 ### Looking ahead: external memory providers (do not enable yet)
 
-The built-in `USER.md` / `MEMORY.md` files cap out at ~1,375 / ~2,200
-characters by design. That's plenty for the kind of facts we care about
-in Phase 1, but eventually you'll want richer semantic recall (older
-threads, larger preference graphs, "find me the doc I shared with X last
-month") — that's what Hermes' external providers are for. Add them only
-after the built-in path is boring and reliable. The expected upgrade is
-roughly:
+The built-in `USER.md` / `MEMORY.md` files default to **4,000 / 8,000
+characters** (raised from Hermes' stock ~1,375 / ~2,200). The runner and
+each profile's `config.yaml` must agree on `user_char_limit` /
+`memory_char_limit`. New profiles pick up the template values; existing
+profiles need a one-time patch::
+
+    ./scripts/patch-hermes-memory-limits.sh
+
+Runner env (also in `runner/.env.example`):
+
+    HERMES_USER_CHAR_LIMIT=4000
+    HERMES_MEMORY_CHAR_LIMIT=8000
+
+When a file nears capacity, the runner evicts oldest **agent-authored**
+entries before user-pinned facts and runs a deterministic near-duplicate
+merge pass after each todo mirror. Rows that failed with "memory is full"
+can be re-queued once::
+
+    python -m runner.requeue_failed_memories_cli --all
+
+That's plenty for the kind of facts we care about in Phase 1, but
+eventually you'll want richer semantic recall (older threads, larger
+preference graphs, "find me the doc I shared with X last month") — that's
+what Hermes' external providers are for. Add them only after the built-in
+path is boring and reliable. The expected upgrade is roughly:
 
 ```bash
 # pick ONE provider per profile; mem0 is the simplest to set up.
@@ -397,20 +395,22 @@ and let the external store handle the long tail. The runner's
 external recall per-user, so no code change is required to plug in a
 provider — only the profile-level `memory setup` step above.
 
-## 6. Insert the user_hermes mapping into Supabase
+## 6. user_hermes mapping (automated)
 
-From the Supabase SQL editor (uses service_role):
+The provisioner upserts the `user_hermes` row (profile name, port, API key,
+Composio entity) as the final step of onboarding — no SQL editor needed.
+The legacy manual insert still works for emergency repairs:
 
 ```sql
 insert into user_hermes (user_id, profile_name, api_port, api_key, composio_entity)
-values (
-  '<alice-supabase-user-uuid>',
-  'alice',
-  8643,
-  '<the API_KEY from step 5>',
-  '<alice-supabase-user-uuid>'
-);
+values ('<user-uuid>', '<profile>', <port>, '<API_SERVER_KEY>', '<user-uuid>')
+on conflict (user_id) do update
+  set profile_name = excluded.profile_name,
+      api_port = excluded.api_port,
+      api_key = excluded.api_key;
 ```
+
+Note `(api_host, api_port)` is unique — two gateways can never share a port.
 
 ## 7. Verify Gmail OAuth end-to-end (optional but recommended)
 
@@ -456,9 +456,11 @@ cp .env.example .env  # fill in SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, APNS_*
 # BROWSE_SKILL_AUTO_INSTALL=true
 # BROWSE_SKILL_INSTALL_TIMEOUT_SECS=30
 #
-# If the runner user needs sudo to restart per-user Hermes services, allow only
-# the hermes-* restart command in sudoers, then keep:
-# HERMES_RESTART_COMMAND_TEMPLATE=sudo systemctl restart hermes-{profile}
+# If the runner user needs sudo to manage per-user Hermes services, install
+# the scoped sudoers entry (RUNNER_USER=<user> install-hermes-template-unit.sh),
+# then keep:
+# HERMES_RESTART_COMMAND_TEMPLATE=sudo systemctl restart hermes@{profile}
+# HERMES_START_COMMAND_TEMPLATE=sudo systemctl enable --now hermes@{profile}
 sudo tee /etc/systemd/system/doit-runner.service >/dev/null <<EOF
 [Unit]
 Description=doit runner
@@ -507,14 +509,22 @@ systemctl restart doit-runner
 systemctl status doit-runner --no-pager
 ```
 
-## Onboarding a second user (Bob)
+## Onboarding more users
 
-Repeat step 5 with:
+Mint another invite code (`../supabase/README.md`) and send it over. The
+provisioner allocates the next free port, generates a fresh API key, and the
+runner picks up the new `user_hermes` mapping on its next poll. The only
+hard limit is `MAX_PROVISIONED_USERS` in the runner env — raise it
+deliberately as you validate VM capacity.
 
-- profile name `bob`
-- a new random API key
-- `API_SERVER_PORT=8644` (or any unused port)
-- Bob's Supabase user uuid for `COMPOSIO_ENTITY_ID`
+## Watchdog (run occasionally)
 
-Then insert his `user_hermes` row (step 6) and you're done. The runner picks
-up the new mapping on its next poll.
+```bash
+# gateways down?
+systemctl list-units 'hermes@*' --state=failed
+# runner alive?
+systemctl is-active doit-runner && journalctl -u doit-runner -n 20 --no-pager
+```
+
+Plus the SQL watchdog queries in `../supabase/README.md` (stuck
+provisioning rows, todos running past their lease).

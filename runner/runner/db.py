@@ -91,22 +91,30 @@ class DB:
             log.error("claim_next_preparing_todo failed: %s", e)
             return None
 
-    def claim_next_requested_todo(self) -> dict | None:
+    def claim_next_requested_todo(
+        self,
+        *,
+        exclude_user_ids: list[str] | None = None,
+    ) -> dict | None:
         """Atomically transition one 'requested' todo to 'running' and return it.
 
         We do this in two phases: select one row id, then update WHERE id=?
         AND status='requested'. PostgREST returns the updated row, which is
         empty if someone else won the race — in which case we retry.
+
+        ``exclude_user_ids`` skips users currently at their per-user
+        execution cap; their todos stay ``requested`` until a slot frees up.
+        The claim also stamps ``run_claimed_at`` so a crashed runner's work
+        can be recovered (see ``claim_stale_running_todo``).
         """
-        # Find one candidate.
-        resp = (
+        query = (
             self._client.table("todos")
             .select("*")
             .eq("status", "requested")
-            .order("created_at")
-            .limit(1)
-            .execute()
         )
+        if exclude_user_ids:
+            query = query.not_.in_("user_id", exclude_user_ids)
+        resp = query.order("created_at").limit(1).execute()
         rows = resp.data or []
         if not rows:
             return None
@@ -115,7 +123,12 @@ class DB:
         # Try to claim it.
         upd = (
             self._client.table("todos")
-            .update({"status": "running"})
+            .update(
+                {
+                    "status": "running",
+                    "run_claimed_at": _iso_z(datetime.now(UTC)),
+                }
+            )
             .eq("id", candidate["id"])
             .eq("status", "requested")
             .execute()
@@ -125,6 +138,163 @@ class DB:
             # Lost the race; caller can retry.
             return None
         return claimed[0]
+
+    def claim_stale_running_todo(
+        self,
+        *,
+        exclude_user_ids: list[str] | None = None,
+    ) -> dict | None:
+        """Recover one ``running`` todo whose execution lease went stale.
+
+        A healthy run heartbeats ``run_claimed_at`` (see
+        ``touch_todo_run_lease``); a stale lease means the runner that
+        claimed the todo died mid-run. Re-claiming restarts the work from
+        the same Hermes session instead of stranding the row in ``running``.
+        Rows with a NULL ``run_claimed_at`` are also recovered — they were
+        claimed by a pre-lease runner version that no longer exists.
+        """
+        now = datetime.now(UTC)
+        stale_before = _iso_z(now - _CLAIM_STALE_AFTER)
+        try:
+            query = (
+                self._client.table("todos")
+                .select("*")
+                .eq("status", "running")
+                .or_(f"run_claimed_at.is.null,run_claimed_at.lt.{stale_before}")
+            )
+            if exclude_user_ids:
+                query = query.not_.in_("user_id", exclude_user_ids)
+            resp = query.order("created_at").limit(1).execute()
+            rows = resp.data or []
+            if not rows:
+                return None
+            candidate = rows[0]
+            upd = (
+                self._client.table("todos")
+                .update({"run_claimed_at": _iso_z(now)})
+                .eq("id", candidate["id"])
+                .eq("status", "running")
+                .or_(f"run_claimed_at.is.null,run_claimed_at.lt.{stale_before}")
+                .execute()
+            )
+            claimed = upd.data or []
+            if claimed:
+                log.warning(
+                    "recovered stale running todo %s (lease expired)",
+                    candidate["id"],
+                )
+            return claimed[0] if claimed else None
+        except Exception as e:
+            log.error("claim_stale_running_todo failed: %s", e)
+            return None
+
+    def touch_todo_run_lease(self, todo_id: str) -> None:
+        """Heartbeat the execution lease for an in-flight todo."""
+        try:
+            self._client.table("todos").update(
+                {"run_claimed_at": _iso_z(datetime.now(UTC))}
+            ).eq("id", todo_id).execute()
+        except Exception as e:
+            log.error("touch_todo_run_lease(%s) failed: %s", todo_id, e)
+
+    # ------------------------------------------------------------------
+    # Provisioning (invite-gated agent creation; see runner/provision.py)
+    # ------------------------------------------------------------------
+
+    def claim_next_provisioning_user(self) -> dict | None:
+        """Claim one user awaiting provisioning (CAS pending -> provisioning).
+
+        Also recovers rows stuck in ``provisioning`` whose ``claimed_at``
+        lease went stale (crashed provisioner), mirroring the todo claim
+        pattern.
+        """
+        now = datetime.now(UTC)
+        now_iso = _iso_z(now)
+        stale_before = _iso_z(now - _CLAIM_STALE_AFTER)
+        try:
+            resp = (
+                self._client.table("user_provisioning")
+                .select("*")
+                .or_(
+                    "status.eq.pending,"
+                    f"and(status.eq.provisioning,claimed_at.lt.{stale_before})"
+                )
+                .order("created_at")
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            if not rows:
+                return None
+            candidate = rows[0]
+            upd = (
+                self._client.table("user_provisioning")
+                .update({"status": "provisioning", "claimed_at": now_iso})
+                .eq("user_id", candidate["user_id"])
+                .or_(
+                    "status.eq.pending,"
+                    f"and(status.eq.provisioning,claimed_at.lt.{stale_before})"
+                )
+                .execute()
+            )
+            claimed = upd.data or []
+            return claimed[0] if claimed else None
+        except Exception as e:
+            log.error("claim_next_provisioning_user failed: %s", e)
+            return None
+
+    def update_user_provisioning(self, user_id: str, fields: dict[str, Any]) -> None:
+        try:
+            self._client.table("user_provisioning").update(fields).eq(
+                "user_id", user_id
+            ).execute()
+        except Exception as e:
+            log.error("update_user_provisioning(%s) failed: %s", user_id, e)
+
+    def count_user_hermes(self) -> int:
+        resp = (
+            self._client.table("user_hermes")
+            .select("user_id", count="exact")
+            .limit(1)
+            .execute()
+        )
+        return int(resp.count or 0)
+
+    def max_user_hermes_port(self) -> int | None:
+        resp = (
+            self._client.table("user_hermes")
+            .select("api_port")
+            .order("api_port", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        return int(rows[0]["api_port"]) if rows else None
+
+    def upsert_user_hermes(
+        self,
+        *,
+        user_id: str,
+        profile_name: str,
+        api_host: str,
+        api_port: int,
+        api_key: str,
+        composio_entity: str,
+    ) -> None:
+        """Insert/refresh the user's gateway mapping. Raises on failure so the
+        provisioner marks the run failed instead of reporting a phantom
+        success (this row is what makes the agent usable)."""
+        self._client.table("user_hermes").upsert(
+            {
+                "user_id": user_id,
+                "profile_name": profile_name,
+                "api_host": api_host,
+                "api_port": api_port,
+                "api_key": api_key,
+                "composio_entity": composio_entity,
+            },
+            on_conflict="user_id",
+        ).execute()
 
     # ------------------------------------------------------------------
     # Lookups
@@ -475,6 +645,23 @@ class DB:
             ).eq("id", memory_id).execute()
         except Exception as e:
             log.error("mark_memory_sync_failed(%s) failed: %s", memory_id, e)
+
+    def requeue_failed_memory_full(self, *, user_id: str | None = None) -> int:
+        """Re-queue rows that failed only because Hermes memory was full."""
+        try:
+            q = (
+                self._client.table("memories")
+                .update({"sync_status": "pending", "sync_error": None})
+                .eq("sync_status", "failed")
+                .like("sync_error", "%memory is full%")
+            )
+            if user_id:
+                q = q.eq("user_id", user_id)
+            resp = q.execute()
+            return len(resp.data or [])
+        except Exception as e:
+            log.error("requeue_failed_memory_full failed: %s", e)
+            return 0
 
     def mark_memory_deleted(self, memory_id: str) -> None:
         """Soft-delete a memory so the next source-of-truth rewrite drops it."""
@@ -1268,20 +1455,26 @@ class DB:
             log.error("insert_spawned_todo failed: %s", e)
             return None
 
-    def claim_due_cron_jobs(self, *, limit: int = 3) -> list[dict]:
+    def claim_due_cron_jobs(
+        self,
+        *,
+        limit: int = 3,
+        exclude_user_ids: list[str] | None = None,
+    ) -> list[dict]:
         """Return due cron jobs and mark them running (best-effort claim)."""
-        now_iso = datetime.now(UTC).isoformat()
+        now = datetime.now(UTC)
+        now_iso = now.isoformat()
         try:
-            resp = (
+            query = (
                 self._client.table("cron_jobs")
                 .select("*")
                 .eq("enabled", True)
                 .eq("state", "scheduled")
                 .lte("next_run_at", now_iso)
-                .order("next_run_at")
-                .limit(limit)
-                .execute()
             )
+            if exclude_user_ids:
+                query = query.not_.in_("user_id", exclude_user_ids)
+            resp = query.order("next_run_at").limit(limit).execute()
         except Exception as e:
             log.error("claim_due_cron_jobs select failed: %s", e)
             return []
@@ -1290,7 +1483,7 @@ class DB:
             job_id = row["id"]
             upd = (
                 self._client.table("cron_jobs")
-                .update({"state": "running"})
+                .update({"state": "running", "run_claimed_at": _iso_z(now)})
                 .eq("id", job_id)
                 .eq("state", "scheduled")
                 .execute()
@@ -1298,6 +1491,47 @@ class DB:
             if upd.data:
                 claimed.append(upd.data[0])
         return claimed
+
+    def claim_stale_running_cron_job(
+        self,
+        *,
+        exclude_user_ids: list[str] | None = None,
+    ) -> dict | None:
+        """Recover one cron job stuck in ``running`` after a runner crash."""
+        now = datetime.now(UTC)
+        stale_before = _iso_z(now - _CLAIM_STALE_AFTER)
+        try:
+            query = (
+                self._client.table("cron_jobs")
+                .select("*")
+                .eq("state", "running")
+                .or_(f"run_claimed_at.is.null,run_claimed_at.lt.{stale_before}")
+            )
+            if exclude_user_ids:
+                query = query.not_.in_("user_id", exclude_user_ids)
+            resp = query.order("next_run_at").limit(1).execute()
+            rows = resp.data or []
+            if not rows:
+                return None
+            candidate = rows[0]
+            upd = (
+                self._client.table("cron_jobs")
+                .update({"run_claimed_at": _iso_z(now)})
+                .eq("id", candidate["id"])
+                .eq("state", "running")
+                .or_(f"run_claimed_at.is.null,run_claimed_at.lt.{stale_before}")
+                .execute()
+            )
+            claimed = upd.data or []
+            if claimed:
+                log.warning(
+                    "recovered stale running cron job %s (lease expired)",
+                    candidate["id"],
+                )
+            return claimed[0] if claimed else None
+        except Exception as e:
+            log.error("claim_stale_running_cron_job failed: %s", e)
+            return None
 
     def get_cron_job(self, job_id: str) -> dict | None:
         try:

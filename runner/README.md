@@ -53,7 +53,10 @@ choice woven into the prompt.
 runner/
 |-- runner/
 |   |-- __main__.py     entrypoint (python -m runner)
-|   |-- runner.py       main loop + per-todo orchestration
+|   |-- runner.py       main loop (bounded worker pool) + per-todo orchestration
+|   |-- scheduler.py    TaskPool + per-user gates (staging locks, run caps, deferred restarts)
+|   |-- provision.py    automated agent provisioning (invite-code onboarding)
+|   |-- provision_cli.py one-shot CLI to provision/repair a single user
 |   |-- hermes.py       /v1/runs client + SSE parser
 |   |-- hermes_memory.py read/write Hermes' MEMORY.md and USER.md files
 |   |-- mirror_memory_cli.py one-shot CLI to backfill Settings > Memory
@@ -97,6 +100,59 @@ Core values:
 | `BROWSE_SKILL_MIN_CONFIDENCE` | Reserved threshold for future browse.sh ranking metadata; keep `0` today |
 | `BROWSE_SKILL_SYNC_SCRIPT` | Optional override for the bridge script path, defaulting to `/opt/doit/hermes/scripts/sync_browse_skill.py` in the VM layout |
 | `APNS_*` | Push notification credentials |
+| `MAX_CONCURRENT_RUNS` | Worker pool size across all users (default 8; `1` reproduces the old strictly-sequential behavior) |
+| `MAX_RUNS_PER_USER` | Per-user cap so one user can't occupy the whole pool (default 2) |
+| `PROVISIONER_ENABLED` | Enables the in-process provisioner loop for invite-code onboarding (default true) |
+| `COMPOSIO_API_KEY` | Required by the provisioner to create per-user Composio tool-router sessions |
+| `MAX_PROVISIONED_USERS` | Capacity guard: provisioning refuses past this count so a leaked invite code can't melt the VM (default 100) |
+| `HERMES_PORT_RANGE_START` | First API port for newly provisioned gateways (default 8643) |
+| `HERMES_BIN` / `HERMES_PROFILE_TEMPLATE_DIR` | Hermes binary and profile template paths for the provisioner |
+| `HERMES_START_COMMAND_TEMPLATE` | Gateway start command (default `sudo systemctl enable --now hermes@{profile}`) |
+| `HERMES_MODEL_PROVIDER` / `HERMES_MODEL_DEFAULT` / `HERMES_MODEL_BASE_URL` | Model block written into new profiles |
+| `HERMES_USER_CHAR_LIMIT` / `HERMES_MEMORY_CHAR_LIMIT` | On-disk caps for `USER.md` / `MEMORY.md` (defaults 4000 / 8000) |
+| `MEMORY_CONSOLIDATE_WITH_MODEL` | Optional LLM merge when deterministic dedupe is not enough (default off) |
+
+## Memory capacity rollout
+
+After deploying runner changes that raise memory limits:
+
+1. Add `HERMES_USER_CHAR_LIMIT=4000` and `HERMES_MEMORY_CHAR_LIMIT=8000` to the VM `runner/.env` and restart `doit-runner`.
+2. Patch live Hermes profiles and restart gateways: `./scripts/patch-hermes-memory-limits.sh`
+3. Re-queue rows that failed with the old tiny caps: `python -m runner.requeue_failed_memories_cli --all`
+
+The runner evicts oldest agent-authored on-disk entries before user-pinned facts when a file is full, and runs a deterministic near-duplicate merge when a file is ≥85% full after each todo mirror.
+
+## Concurrency model
+
+The main loop is a bounded asyncio worker pool (`MAX_CONCURRENT_RUNS`
+slots). Claimed todos, prep passes, and cron runs each become a task in the
+pool; per-user state lives in a `UserGate`:
+
+- a **staging lock** held only during short critical sections (model apply,
+  memory staging, browse-skill prefetch, post-run memory mirror) — the long
+  SSE-consumption middle runs unlocked, which is what lets one user have
+  multiple tasks in flight;
+- an **active-run count** capped at `MAX_RUNS_PER_USER`;
+- **deferred gateway restarts**: a model change or browse-skill install
+  that needs a `hermes@<profile>` restart waits until the user's other runs
+  finish instead of killing them mid-run.
+
+Crash recovery: claimed work carries a lease (`todos.run_claimed_at`,
+heartbeated during the run). On startup or poll, `running` rows with a
+stale lease are reclaimed, so a runner crash can delay a task but never
+strand it.
+
+## Provisioning repair
+
+The provisioner is idempotent — re-running a `failed` user verifies and
+repairs each step (profile dir, Composio session, config, port, systemd
+unit, health check) rather than duplicating. The in-app retry button does
+this automatically; for manual surgery on the VM:
+
+```bash
+cd /opt/doit/runner
+.venv/bin/python -m runner.provision_cli --user-id <uuid>
+```
 
 Browserbase is read by Hermes from the global `~/.hermes/.env`, not directly
 from `runner/.env`. After adding or rotating `BROWSERBASE_API_KEY` and
@@ -107,7 +163,7 @@ cd /path/to/repo
 python3 hermes/scripts/sync_browserbase_env.py --restart
 ```
 
-This updates `~/.hermes/.env` with mode `600` and restarts the `hermes-*`
+This updates `~/.hermes/.env` with mode `600` and restarts the `hermes@*`
 gateway services so both Hermes `browser_*` tools and terminal-driven `browse`
 CLI commands can use Browserbase.
 
@@ -221,8 +277,9 @@ ssh "$DOIT_VM_HOST" '
   `agent-settings` Edge Function. The runner reads pending settings with
   `service_role`, copies Doit's global provider key from `OPENAI_API_KEY` or
   `ANTHROPIC_API_KEY` into that user's Hermes profile `.env`, updates
-  `~/.hermes/profiles/<profile>/config.yaml`, restarts `hermes-<profile>`, then
-  marks the setting applied.
+  `~/.hermes/profiles/<profile>/config.yaml`, restarts `hermes@<profile>`
+  (deferred until the user's other in-flight runs finish), then marks the
+  setting applied.
 - Memory: we lean on Hermes' built-in persistent memory instead of
   re-injecting facts into every prompt. Session strategy and sync details:
   - **Per-todo `session_id`** (`doit-todo-<uuid>` for execution,

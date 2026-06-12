@@ -68,7 +68,20 @@ def _sync_browse_skill_for_query(cfg: Any, query: str) -> dict[str, Any]:
     return json.loads(proc.stdout)
 
 
-async def maybe_prefetch_browse_skill(cfg: Any, todo: dict, profile_name: str) -> dict[str, Any] | None:
+async def maybe_prefetch_browse_skill(
+    cfg: Any,
+    todo: dict,
+    profile_name: str,
+    *,
+    allow_restart: bool = True,
+) -> dict[str, Any] | None:
+    """Install a matching browse.sh skill before the run starts.
+
+    ``allow_restart=False`` is passed when the user has other Hermes runs in
+    flight: a gateway restart would kill them, so a freshly-installed skill
+    stays on disk but is not loaded (and not advertised in the prompt) for
+    this run. The next restart picks it up.
+    """
     if not getattr(cfg, "browse_skill_auto_install", False):
         return None
     query = browse_skill_query_for_todo(todo)
@@ -88,6 +101,13 @@ async def maybe_prefetch_browse_skill(cfg: Any, todo: dict, profile_name: str) -
             result.get("slug"),
             profile_name,
         )
+        if not allow_restart:
+            log.info(
+                "browse skill restart deferred: other runs in flight for "
+                "profile=%s; skill loads on next restart",
+                profile_name,
+            )
+            return None
         try:
             await asyncio.to_thread(_restart_hermes_profile, cfg, profile_name)
         except Exception:

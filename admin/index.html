@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Doit Admin</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f6f8;
+      --card: #fff;
+      --text: #111;
+      --muted: #666;
+      --border: #ddd;
+      --accent: #2563eb;
+      --ok: #15803d;
+      --warn: #b45309;
+      --bad: #b91c1c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1115;
+        --card: #1a1d24;
+        --text: #f3f4f6;
+        --muted: #9ca3af;
+        --border: #333;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.25rem; }
+    main { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+    section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.75rem;
+    }
+    .stat {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+    }
+    .stat .label { font-size: 0.75rem; color: var(--muted); }
+    .stat .value { font-size: 1.35rem; font-weight: 600; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    tr.failed td { background: rgba(185, 28, 28, 0.08); }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge.unused { background: #dbeafe; color: #1d4ed8; }
+    .badge.partial { background: #fef3c7; color: #b45309; }
+    .badge.exhausted { background: #e5e7eb; color: #374151; }
+    .badge.expired { background: #fee2e2; color: #b91c1c; }
+    .badge.ready { background: #dcfce7; color: #15803d; }
+    .badge.failed { background: #fee2e2; color: #b91c1c; }
+    .badge.pending, .badge.provisioning { background: #fef3c7; color: #b45309; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: end;
+      margin-bottom: 0.75rem;
+    }
+    label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); }
+    input, select, button {
+      font: inherit;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+    }
+    button {
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .muted { color: var(--muted); font-size: 0.8rem; }
+    .error { color: var(--bad); margin: 0.5rem 0; }
+    .new-code {
+      margin: 0.75rem 0;
+      padding: 0.75rem;
+      border: 1px dashed var(--accent);
+      border-radius: 8px;
+      display: none;
+    }
+    .new-code.visible { display: block; }
+    .new-code code { font-size: 1.1rem; font-weight: 600; }
+    .redeemers { font-size: 0.8rem; }
+    .redeemers li { margin: 0.15rem 0; }
+    #login-panel { max-width: 420px; margin: 4rem auto; }
+    .hidden { display: none !important; }
+    .table-wrap { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div id="login-panel">
+    <section>
+      <h2>Doit Admin</h2>
+      <p class="muted">Enter your operator secret to load the dashboard.</p>
+      <div class="toolbar">
+        <label style="flex:1">Admin secret
+          <input id="secret-input" type="password" autocomplete="off" />
+        </label>
+      </div>
+      <div class="toolbar">
+        <label style="flex:1">Function URL
+          <input id="url-input" type="url" placeholder="https://….supabase.co/functions/v1/admin" />
+        </label>
+      </div>
+      <button id="login-btn">Open dashboard</button>
+      <p id="login-error" class="error hidden"></p>
+    </section>
+  </div>
+
+  <div id="app" class="hidden">
+    <header>
+      <h1>Doit Admin</h1>
+      <div class="toolbar">
+        <button id="refresh-btn" class="secondary">Refresh</button>
+        <button id="logout-btn" class="secondary">Lock</button>
+      </div>
+    </header>
+    <main>
+      <section>
+        <h2>Overview</h2>
+        <div id="stats" class="stats"></div>
+        <p id="load-error" class="error hidden"></p>
+      </section>
+
+      <section>
+        <h2>Invite codes</h2>
+        <form id="invite-form" class="toolbar">
+          <label>Note (optional)
+            <input name="note" placeholder="for alice" />
+          </label>
+          <label>Max uses
+            <input name="max_uses" type="number" min="1" max="1000" value="1" />
+          </label>
+          <label>Expires (optional)
+            <input name="expires_at" type="datetime-local" />
+          </label>
+          <button type="submit">Generate code</button>
+          <label>Filter
+            <select id="invite-filter">
+              <option value="all">All</option>
+              <option value="unused">Unused only</option>
+              <option value="used">Used only</option>
+            </select>
+          </label>
+        </form>
+        <div id="new-code" class="new-code">
+          New code: <code id="new-code-text"></code>
+          <button type="button" id="copy-code-btn" class="secondary">Copy</button>
+        </div>
+        <div class="table-wrap">
+          <table id="invites-table">
+            <thead>
+              <tr>
+                <th>Code</th>
+                <th>Status</th>
+                <th>Uses</th>
+                <th>Note</th>
+                <th>Expires</th>
+                <th>Created</th>
+                <th>Redeemers</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Users</h2>
+        <div class="table-wrap">
+          <table id="users-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Signed up</th>
+                <th>Provisioning</th>
+                <th>Invite used</th>
+                <th>Profile</th>
+                <th>Todos</th>
+                <th>Tokens</th>
+                <th>Last active</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const DEFAULT_URL = "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin";
+    const DEFAULT_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZXV0aXRxZ2RzYXNjY3hmeGR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwMTMzNjksImV4cCI6MjA5NTU4OTM2OX0.j2yU_6HTLh6WJaPUFsG3vdgd0cK6VHFXm6XYW_cb26U";
+    const SECRET_KEY = "doit_admin_secret";
+    const URL_KEY = "doit_admin_url";
+
+    let invitesCache = [];
+
+    function $(id) { return document.getElementById(id); }
+
+    function fmtDate(value) {
+      if (!value) return "—";
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+    }
+
+    function fmtShortDate(value) {
+      if (!value) return "—";
+      const d = new Date(value);
+      return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+    }
+
+    function badge(status) {
+      if (!status) return "—";
+      const cls = String(status).toLowerCase();
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    async function api(action, extra = {}) {
+      const secret = sessionStorage.getItem(SECRET_KEY);
+      const url = sessionStorage.getItem(URL_KEY) || DEFAULT_URL;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${DEFAULT_ANON}`,
+          "apikey": DEFAULT_ANON,
+          "X-Admin-Secret": secret,
+        },
+        body: JSON.stringify({ action, ...extra }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    function renderStats(summary) {
+      const items = [
+        ["Users", summary.user_count],
+        ["Provisioned", summary.provisioned_count],
+        ["Todos", summary.todo_count],
+        ["Total tokens", summary.total_tokens],
+        ["Pending provision", summary.pending_provisioning],
+        ["Unused invites", summary.unused_invites],
+        ["Exhausted codes", summary.codes_exhausted],
+      ];
+      $("stats").innerHTML = items.map(([label, value]) =>
+        `<div class="stat"><div class="label">${label}</div><div class="value">${value ?? 0}</div></div>`
+      ).join("");
+    }
+
+    function renderRedeemers(redeemers) {
+      if (!redeemers || redeemers.length === 0) return "—";
+      return `<ul class="redeemers">${redeemers.map(r =>
+        `<li>${r.email || r.user_id} · ${badge(r.provisioning_status)} · ${fmtDate(r.redeemed_at)}</li>`
+      ).join("")}</ul>`;
+    }
+
+    function renderInvites() {
+      const filter = $("invite-filter").value;
+      const rows = invitesCache.filter(inv => {
+        if (filter === "unused") return inv.use_count === 0;
+        if (filter === "used") return inv.use_count > 0;
+        return true;
+      });
+      const tbody = $("invites-table").querySelector("tbody");
+      tbody.innerHTML = rows.map(inv => `<tr>
+        <td><code>${inv.code}</code></td>
+        <td>${badge(inv.status)}</td>
+        <td>${inv.use_count}/${inv.max_uses}</td>
+        <td>${inv.note || "—"}</td>
+        <td>${inv.expires_at ? fmtShortDate(inv.expires_at) : "—"}</td>
+        <td>${fmtShortDate(inv.created_at)}</td>
+        <td>${renderRedeemers(inv.redeemers)}</td>
+      </tr>`).join("") || `<tr><td colspan="7" class="muted">No invite codes</td></tr>`;
+    }
+
+    function renderUsers(users) {
+      const tbody = $("users-table").querySelector("tbody");
+      tbody.innerHTML = (users || []).map(u => {
+        const failed = u.provisioning_status === "failed";
+        return `<tr class="${failed ? "failed" : ""}">
+          <td>${u.email || "—"}</td>
+          <td>${fmtShortDate(u.signed_up_at)}</td>
+          <td>${u.provisioning_status ? badge(u.provisioning_status) : "—"}</td>
+          <td>${u.invite_code ? `<code>${u.invite_code}</code>` : "—"}</td>
+          <td>${u.profile_name || "—"}</td>
+          <td>${u.todos_done}/${u.todos_total}${u.todos_failed ? ` <span class="muted">(${u.todos_failed} failed)</span>` : ""}</td>
+          <td>${u.total_tokens ?? 0}</td>
+          <td>${fmtDate(u.last_active_at)}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="8" class="muted">No users</td></tr>`;
+    }
+
+    async function loadDashboard() {
+      $("load-error").classList.add("hidden");
+      $("refresh-btn").disabled = true;
+      try {
+        const [summary, usersResp, invitesResp] = await Promise.all([
+          api("summary"),
+          api("users"),
+          api("invites"),
+        ]);
+        renderStats(summary);
+        renderUsers(usersResp.users);
+        invitesCache = invitesResp.invites || [];
+        renderInvites();
+      } catch (e) {
+        $("load-error").textContent = String(e.message || e);
+        $("load-error").classList.remove("hidden");
+      } finally {
+        $("refresh-btn").disabled = false;
+      }
+    }
+
+    function showApp() {
+      $("login-panel").classList.add("hidden");
+      $("app").classList.remove("hidden");
+      loadDashboard();
+    }
+
+    function showLogin() {
+      sessionStorage.removeItem(SECRET_KEY);
+      $("app").classList.add("hidden");
+      $("login-panel").classList.remove("hidden");
+      $("secret-input").value = "";
+    }
+
+    $("login-btn").addEventListener("click", () => {
+      const secret = $("secret-input").value.trim();
+      const url = ($("url-input").value.trim() || DEFAULT_URL);
+      if (!secret) {
+        $("login-error").textContent = "Secret is required";
+        $("login-error").classList.remove("hidden");
+        return;
+      }
+      sessionStorage.setItem(SECRET_KEY, secret);
+      sessionStorage.setItem(URL_KEY, url);
+      $("login-error").classList.add("hidden");
+      showApp();
+    });
+
+    $("logout-btn").addEventListener("click", showLogin);
+    $("refresh-btn").addEventListener("click", loadDashboard);
+    $("invite-filter").addEventListener("change", renderInvites);
+
+    $("invite-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const note = fd.get("note");
+      const max_uses = Number(fd.get("max_uses") || 1);
+      const expiresRaw = fd.get("expires_at");
+      const payload = { note: note || undefined, max_uses };
+      if (expiresRaw) {
+        payload.expires_at = new Date(String(expiresRaw)).toISOString();
+      }
+      try {
+        const resp = await api("create_invite", payload);
+        const code = resp.invite?.code;
+        if (code) {
+          $("new-code-text").textContent = code;
+          $("new-code").classList.add("visible");
+        }
+        e.target.reset();
+        e.target.elements.max_uses.value = "1";
+        await loadDashboard();
+      } catch (err) {
+        $("load-error").textContent = String(err.message || err);
+        $("load-error").classList.remove("hidden");
+      }
+    });
+
+    $("copy-code-btn").addEventListener("click", async () => {
+      const code = $("new-code-text").textContent;
+      try {
+        await navigator.clipboard.writeText(code);
+        $("copy-code-btn").textContent = "Copied!";
+        setTimeout(() => { $("copy-code-btn").textContent = "Copy"; }, 1500);
+      } catch {
+        $("copy-code-btn").textContent = "Copy failed";
+      }
+    });
+
+    $("url-input").value = sessionStorage.getItem(URL_KEY) || DEFAULT_URL;
+    if (sessionStorage.getItem(SECRET_KEY)) {
+      showApp();
+    }
+  </script>
+</body>
+</html>

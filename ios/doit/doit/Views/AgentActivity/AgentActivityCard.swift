@@ -37,7 +37,7 @@ struct AgentActivityCard: View {
             return AgentIntentCardModel(activity: activity)
         }
         if isTaskActive, !activity.isRunning, activity.resolvedState != .paused {
-            if activity.resolvedPhase == .starting || !activity.primaryStatusText.isEmpty {
+            if !activity.primaryStatusText.isEmpty {
                 return AgentIntentCardModel(activity: activity)
             }
             return AgentIntentCardModel(

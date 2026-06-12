@@ -145,12 +145,11 @@ private struct LockScreenLayout: View {
 
     var body: some View {
         let state = context.state
-        let intents = previousIntents
-        let isWaiting = intents.isEmpty && !state.isTerminal
+        let isWaiting = state.currentIntent.isEmpty && !state.isTerminal
 
         VStack(alignment: .leading, spacing: 4) {
             header
-            intentStack(intents: intents, isWaiting: isWaiting)
+            intentStack(isWaiting: isWaiting)
             footer(isWaiting: isWaiting)
         }
         .padding(.horizontal, 8)
@@ -197,10 +196,7 @@ private struct LockScreenLayout: View {
     }
 
     @ViewBuilder
-    private func intentStack(
-        intents: [HermesActivityAttributes.WidgetIntent],
-        isWaiting: Bool
-    ) -> some View {
+    private func intentStack(isWaiting: Bool) -> some View {
         ZStack {
             if context.state.isTerminal {
                 finishedCard
@@ -208,27 +204,11 @@ private struct LockScreenLayout: View {
                 pausedCard
             } else {
                 ZStack {
-                    if intents.isEmpty {
-                        Text(context.attributes.userTask)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                            .foregroundStyle(.blue)
-                            .padding(12)
-                            .frame(minWidth: 52)
-                            .background(
-                                Color.blue.opacity(userTaskOpacity),
-                                in: .rect(cornerRadius: 16, style: .continuous)
-                            )
-                            .padding(.leading, 48)
-                            .padding(.trailing, 8)
-                            .font(.callout)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .transition(.blurReplace)
+                    ForEach(previousIntents) { intent in
+                        IntentCard(intent: intent, isBehind: true)
                     }
-
-                    ForEach(intents) { intent in
-                        let isBehind = intent.id != context.state.previousIntent?.id
-                        IntentCard(intent: intent, isBehind: isBehind)
+                    if !isWaiting {
+                        IntentCard(intent: currentIntentWidget, isBehind: false)
                     }
                 }
                 .compositingGroup()
@@ -362,6 +342,16 @@ private struct LockScreenLayout: View {
         [context.state.secondPreviousIntent, context.state.previousIntent]
             .compactMap { $0 }
             .filter { !$0.title.isEmpty }
+    }
+
+    /// Front card on the lock screen — mirrors in-app activity cards.
+    private var currentIntentWidget: HermesActivityAttributes.WidgetIntent {
+        HermesActivityAttributes.WidgetIntent(
+            id: "\(context.state.stepNumber)-\(context.state.currentIntent)",
+            title: context.state.currentIntent,
+            symbolName: context.state.currentSymbolName,
+            isCompleted: false
+        )
     }
 
     private var primaryForeground: Color {

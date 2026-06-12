@@ -280,11 +280,15 @@ Rules:
   first (e.g. key ``sheet`` with type ``link`` and provider ``googlesheets``),
   then emit one ``email`` artifact per draft with distinct keys such as
   ``email-acme``, ``email-beta``, … each with provider ``gmail``. On later
-  turns, re-emit earlier artifacts plus any new ones so the header keeps
-  the sheet and accumulates draft cards underneath.
+  follow-up turns **for this same todo only**, re-emit earlier artifacts
+  from this todo plus any new ones so the header keeps the sheet and
+  accumulates draft cards underneath. Never re-emit artifacts discovered
+  via session_search or from other todos.
 - Do not collapse many drafts into one artifact or one long text block.
-- Only emit artifacts for things the user actually wants to revisit. Skip
-  intermediate search results, scratch notes, or tool diagnostics.
+- Only emit artifacts for deliverables you created or updated in THIS run
+  for this todo's title/detail. Skip intermediate search results, scratch
+  notes, tool diagnostics, and pre-existing account resources from unrelated
+  prior todos.
 - The block must be valid JSON on its own. Do not wrap it in a code fence.
 - Anything outside the markers stays in the chat reply as normal prose.
 - Use exactly one "Done —" lead-in per final reply. Summarize every
@@ -342,8 +346,11 @@ Rules:
 - One card per deliverable: primary link first (e.g. key ``sheet``), then
   one ``email`` artifact per draft with distinct keys (``email-acme``,
   ``email-beta``, …). Never collapse drafts into one long text block.
-- Only deliverables the user will revisit — no scratch notes, search
-  output, or tool diagnostics.
+- On follow-up turns for **this same todo only**, re-emit this todo's
+  earlier artifacts plus new ones. Never copy artifacts from session_search
+  or other todos.
+- Only deliverables you created/updated in THIS run for this todo — no
+  scratch notes, search output, tool diagnostics, or unrelated prior work.
 - Never emit artifacts in the same reply as a [[DOIT_INTERACTION]] block;
   re-emit them after the user answers.
 - Use exactly one "Done —" lead-in per final reply.
@@ -547,6 +554,15 @@ def _append_recall_nudge(base: str, *texts: str | None) -> str:
         "The user referenced earlier work. Call session_search with the "
         "relevant keywords to recall it before asking the user or redoing "
         "the work."
+    )
+
+
+def concurrent_isolation_nudge() -> str:
+    """Append when another task is in flight for the same user."""
+    return (
+        "\n\nAnother task is running concurrently for this user. Stay strictly "
+        "on THIS task's title and detail; do not reuse deliverables or drafts "
+        "from other tasks."
     )
 
 

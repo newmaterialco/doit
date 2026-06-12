@@ -1,0 +1,24 @@
+# Scoped sudoers entry letting the doit runner manage per-user Hermes
+# gateways (hermes@<profile> instances) without full root.
+#
+# Only needed when the runner runs as a non-root user. Install via
+# scripts/install-hermes-template-unit.sh with RUNNER_USER=<user>, or by hand:
+#
+#   sed 's/__RUNNER_USER__/doit/' doit-hermes.sudoers \
+#     | sudo tee /etc/sudoers.d/doit-hermes
+#   sudo chmod 440 /etc/sudoers.d/doit-hermes
+#   sudo visudo -c
+#
+# Caveat: sudoers wildcards also match whitespace, so technically
+# "systemctl restart hermes@x --some-flag" matches too. systemctl ignores
+# unknown trailing units only if they exist, and the runner is the only
+# principal here; acceptable for this single-box deployment.
+
+__RUNNER_USER__ ALL=(root) NOPASSWD: \
+    /usr/bin/systemctl start hermes@*, \
+    /usr/bin/systemctl stop hermes@*, \
+    /usr/bin/systemctl restart hermes@*, \
+    /usr/bin/systemctl enable hermes@*, \
+    /usr/bin/systemctl enable --now hermes@*, \
+    /usr/bin/systemctl disable hermes@*, \
+    /usr/bin/systemctl is-active hermes@*

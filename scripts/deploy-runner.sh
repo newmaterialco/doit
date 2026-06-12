@@ -33,10 +33,18 @@ HERMES_SCRIPTS_SRC="$REPO_ROOT/hermes/scripts/"
 HERMES_SCRIPTS_DEST="$VM_HOST:$(dirname "$VM_PATH")/hermes/scripts/"
 HERMES_SKILLS_SRC="$REPO_ROOT/hermes/skills/"
 HERMES_SKILLS_DEST="$VM_HOST:$(dirname "$VM_PATH")/hermes/skills/"
+HERMES_TEMPLATE_SRC="$REPO_ROOT/hermes/profiles/_template/"
+HERMES_TEMPLATE_DEST="$VM_HOST:$(dirname "$VM_PATH")/hermes/profiles/_template/"
+HERMES_SYSTEMD_SRC="$REPO_ROOT/hermes/systemd/"
+HERMES_SYSTEMD_DEST="$VM_HOST:$(dirname "$VM_PATH")/hermes/systemd/"
+SCRIPTS_SRC="$REPO_ROOT/scripts/"
+SCRIPTS_DEST="$VM_HOST:$(dirname "$VM_PATH")/scripts/"
 
 echo ">> ensure Hermes helper directories on $VM_HOST"
 ssh "$VM_HOST" "
-  mkdir -p '$(dirname "$VM_PATH")/hermes/scripts' '$(dirname "$VM_PATH")/hermes/skills'
+  mkdir -p '$(dirname "$VM_PATH")/hermes/scripts' '$(dirname "$VM_PATH")/hermes/skills' \
+           '$(dirname "$VM_PATH")/hermes/profiles/_template' \
+           '$(dirname "$VM_PATH")/hermes/systemd' '$(dirname "$VM_PATH")/scripts'
 "
 
 echo ">> rsync $RUNNER_SRC -> $RUNNER_DEST"
@@ -56,6 +64,15 @@ rsync -avc --delete \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   "$HERMES_SKILLS_SRC" "$HERMES_SKILLS_DEST"
+
+echo ">> rsync $HERMES_TEMPLATE_SRC -> $HERMES_TEMPLATE_DEST"
+rsync -avc --delete "$HERMES_TEMPLATE_SRC" "$HERMES_TEMPLATE_DEST"
+
+echo ">> rsync $HERMES_SYSTEMD_SRC -> $HERMES_SYSTEMD_DEST"
+rsync -avc --delete "$HERMES_SYSTEMD_SRC" "$HERMES_SYSTEMD_DEST"
+
+echo ">> rsync $SCRIPTS_SRC -> $SCRIPTS_DEST"
+rsync -avc "$SCRIPTS_SRC" "$SCRIPTS_DEST"
 
 echo ">> install bundled Hermes skills on $VM_HOST"
 ssh "$VM_HOST" "

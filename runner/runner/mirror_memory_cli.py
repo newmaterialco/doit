@@ -30,7 +30,7 @@ import sys
 
 from .config import load as load_config
 from .db import DB
-from .hermes_memory import HermesMemoryStore
+from .hermes_memory import memory_store_for_profile
 from .memory_sync import mirror_hermes_memory_to_supabase
 
 log = logging.getLogger(__name__)
@@ -47,7 +47,12 @@ def _mirror_one(
     cfg, db: DB, *, user_id: str, profile_name: str
 ) -> tuple[int, int]:
     """Mirror one user's Hermes memory files and return (user_rows, memory_rows)."""
-    store = HermesMemoryStore(cfg.hermes_profiles_dir, profile_name)
+    store = memory_store_for_profile(
+        cfg.hermes_profiles_dir,
+        profile_name,
+        user_char_limit=cfg.hermes_user_char_limit,
+        memory_char_limit=cfg.hermes_memory_char_limit,
+    )
     user_path = store.path_for("user")
     mem_path = store.path_for("memory")
     if not user_path.exists() and not mem_path.exists():

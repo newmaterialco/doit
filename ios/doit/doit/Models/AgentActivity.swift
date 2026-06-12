@@ -99,8 +99,32 @@ struct AgentActivity: Codable, Identifiable, Hashable, Sendable {
     /// surface. Kept separate from `humanActivityText` so call sites can
     /// read intent instead of re-deciding which field is primary.
     var primaryStatusText: String {
-        humanActivityText
+        if isBootstrapPhase {
+            return bootstrapDisplayText
+        }
+        return humanActivityText
     }
+
+    /// Spin-up before the first Hermes SSE step — never echo task title copy.
+    private var isBootstrapPhase: Bool {
+        resolvedPhase == .starting && recentSteps.isEmpty
+    }
+
+    private var bootstrapDisplayText: String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.bootstrapLabels.contains(trimmed) {
+            return trimmed
+        }
+        return "Getting ready…"
+    }
+
+    private static let bootstrapLabels: Set<String> = [
+        "Getting ready…",
+        "Reading your message…",
+        "Picking up your answer…",
+        "Connecting…",
+        "Queued to run…",
+    ]
 
     /// Compact tool-call indicator shown alongside the human-facing
     /// detail in the Live Activity / Dynamic Island. Always the runner

@@ -18,7 +18,7 @@ class PushPayload:
     title: str
     body: str
     todo_id: str
-    kind: str  # "oauth_needed" | "done" | "failed"
+    kind: str  # "oauth_needed" | "done" | "failed" | "activity_sync"
 
 
 class Pusher:
@@ -101,3 +101,37 @@ class Pusher:
                     )
             except Exception as e:
                 log.warning("APNs send failed for token %s: %s", token[:8], e)
+
+    async def send_activity_sync(self, tokens: list[str], todo_id: str) -> None:
+        """Silent push so the app can refresh agent activity and update Live Activities."""
+        if not self._enabled or not tokens:
+            return
+        client = self._ensure()
+        message = {
+            "aps": {"content-available": 1},
+            "todo_id": todo_id,
+            "kind": "activity_sync",
+        }
+        for token in tokens:
+            try:
+                resp = await client.post(
+                    f"/3/device/{token}",
+                    json=message,
+                    headers={
+                        "authorization": f"bearer {self._bearer_token()}",
+                        "apns-topic": self._cfg.apns_topic,
+                        "apns-push-type": "background",
+                        "apns-priority": "5",
+                    },
+                )
+                if resp.status_code == 200:
+                    log.info("APNs activity_sync succeeded for token %s", token[:8])
+                else:
+                    log.warning(
+                        "APNs activity_sync failed for token %s: %s %s",
+                        token[:8],
+                        resp.status_code,
+                        resp.text,
+                    )
+            except Exception as e:
+                log.warning("APNs activity_sync failed for token %s: %s", token[:8], e)

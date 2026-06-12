@@ -39,26 +39,83 @@ Auth, database, Realtime, and Edge Functions for doit.
    add it to the `supabase_realtime` publication in a new migration *and*
    extend the hub + store — don't try to poll from a view.
 
-## Per-user onboarding
+## Per-user onboarding (invite codes)
 
-For each friend you onboard:
+Onboarding is automated. A new user signs in with Apple, enters an invite
+code on the onboarding screen, and the VM-side provisioner builds their
+agent (Hermes profile + Composio session + `user_hermes` row) within a
+minute.
 
-1. Have them sign in once with Apple from the app so a row in `auth.users` is
-   created. Grab their `user_id` from Dashboard -> Authentication.
-2. Create a Hermes profile on the VM: `hermes profile create <name>` (see
-   `../hermes/setup.md`). Note its API port and `API_SERVER_KEY`.
-3. Insert their mapping (run from SQL editor, requires service_role):
+### Admin dashboard (recommended)
 
-   ```sql
-   insert into user_hermes (user_id, profile_name, api_port, api_key, composio_entity)
-   values (
-     '<user-uuid>',
-     '<profile-name>',
-     8643,
-     '<API_SERVER_KEY value>',
-     '<user-uuid>'  -- use the same uuid as the Composio entity id
-   );
-   ```
+See **[`docs/local-admin-dashboard.md`](../docs/local-admin-dashboard.md)** for
+setup, usage, API reference, and troubleshooting.
+
+Open [`admin/index.html`](../admin/index.html) in a browser. Paste your
+`ADMIN_SECRET` and the function URL on first load.
+
+```bash
+# from repo root
+supabase db push                                    # admin_* RPC migrations
+supabase functions deploy admin
+supabase secrets set ADMIN_SECRET=<long random string>
+```
+
+Keep `ADMIN_SECRET` out of git. Lock the dashboard when done (Lock button
+clears the secret from the browser session).
+
+### Manual SQL fallback
+
+You can still mint codes in the SQL editor (service_role):
+
+```sql
+-- single-use code
+insert into invite_codes (code, note) values ('FRIEND-ABC123', 'for alice');
+
+-- 10-use code that expires at the end of the month
+insert into invite_codes (code, max_uses, expires_at, note)
+values ('LAUNCH-PARTY', 10, '2026-07-01', 'launch batch');
+```
+
+The flow under the hood:
+
+1. The app calls the `onboarding` Edge Function (`redeem` action), which
+   atomically validates + consumes the code via the `redeem_invite_code`
+   RPC and inserts a `pending` row into `user_provisioning`.
+2. The runner's provisioner loop claims the row, creates the Hermes
+   profile / Composio session / systemd unit on the VM, upserts
+   `user_hermes`, and flips the row to `ready`.
+3. The app watches the row over Realtime and drops the user into the task
+   list when it goes `ready`. On failure the row goes `failed` with an
+   error; the in-app retry re-queues it without consuming another use.
+
+Users who were provisioned manually before invite codes existed are
+backfilled as `ready` by the migration (and by the `status` action as a
+fallback), so they never see the invite screen.
+
+**Watchdog queries** (run occasionally, or when something seems off):
+
+```sql
+-- users stuck in provisioning (> 10 min) or failed
+select user_id, status, error, claimed_at, updated_at
+from user_provisioning
+where status = 'failed'
+   or (status in ('pending', 'provisioning')
+       and created_at < now() - interval '10 minutes');
+
+-- todos running past their lease (runner crash / wedge)
+select id, user_id, title, run_claimed_at
+from todos
+where status = 'running'
+  and (run_claimed_at is null or run_claimed_at < now() - interval '10 minutes');
+
+-- current port allocation (gaps are fine; collisions are impossible)
+select profile_name, api_port from user_hermes order by api_port;
+```
+
+If a user is stuck `failed` and the in-app retry doesn't fix it, repair
+from the VM: `python -m runner.provision_cli --user-id <uuid>` (see
+`../runner/README.md`).
 
 ## Edge Function: `integrations`
 
@@ -70,10 +127,22 @@ Composio API key never reaches the iOS app.
    supabase functions deploy integrations
    supabase functions deploy agent-settings
    supabase functions deploy task-suggestions
+   supabase functions deploy onboarding
+   supabase functions deploy admin
    supabase secrets set COMPOSIO_API_KEY=ck_...
    supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service_role>
    supabase secrets set OPENAI_API_KEY=<openai_key>
+   supabase secrets set ADMIN_SECRET=<long random string>
 ```
+
+The `onboarding` function powers the invite-code flow above: `status`
+returns the caller's provisioning row + whether their agent exists, and
+`redeem` consumes an invite code. It needs the same
+`SUPABASE_SERVICE_ROLE_KEY` secret as the others.
+
+The `admin` function powers the operator dashboard (`admin/index.html`):
+`summary`, `users`, `invites`, and `create_invite` actions. Requires
+`ADMIN_SECRET` (never ship to iOS).
 
 The `task-suggestions` function powers the iOS homescreen "Suggested" tiles.
 It reads recent todo history server-side and calls OpenAI (`OPENAI_SUGGESTIONS_MODEL`,

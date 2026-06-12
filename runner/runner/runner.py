@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from .artifact_guard import RunUrlTracker, maybe_upsert_artifact
 from .browse_skill import maybe_prefetch_browse_skill
 from .config import Config, load
 from .db import AgentModelSetting, DB
@@ -44,7 +45,9 @@ from .hermes_memory import (
     HermesMemoryStore,
     MemoryTarget,
     fingerprint as memory_fingerprint,
+    memory_store_for_profile,
 )
+from .memory_consolidate import consolidate_if_near_cap
 from .memory_extraction import (
     MEMORY_EXTRACT_INSTRUCTIONS,
     build_memory_extraction_prompt,
@@ -70,14 +73,17 @@ from .prompt import (
     build_followup_prompt as _build_followup_prompt,
     build_prompt as _build_prompt,
     build_resume_prompt as _build_resume_prompt,
+    concurrent_isolation_nudge,
     prep_session_id_for_todo as _prep_session_id_for_todo,
     session_id_for_todo as _session_id_for_todo,
     session_key_for_user as _session_key_for_user,
     user_wants_spoken_audio,
 )
+from .provision import run_provisioning
 from .push import Pusher, PushPayload
+from .scheduler import TaskPool, UserGate, UserGates
 from .spawn import apply_spawned_tasks
-from .cron import configure_one_cron_job, run_due_cron_jobs
+from .cron import configure_one_cron_job, run_one_cron_job
 from .schedule import compute_next_run
 
 log = logging.getLogger(__name__)
@@ -117,6 +123,21 @@ def _parse_ts(value: str | None) -> datetime | None:
         return datetime.fromisoformat(text)
     except ValueError:
         return None
+
+
+def _memory_store(cfg: Config, profile_name: str) -> HermesMemoryStore:
+    return memory_store_for_profile(
+        cfg.hermes_profiles_dir,
+        profile_name,
+        user_char_limit=cfg.hermes_user_char_limit,
+        memory_char_limit=cfg.hermes_memory_char_limit,
+    )
+
+
+def _consolidate_memory_if_near_cap(store: HermesMemoryStore, user_id: str) -> None:
+    for target in ("user", "memory"):
+        with suppress(Exception):
+            consolidate_if_near_cap(store, target, user_id=user_id)
 
 
 def _resolve_attachment_urls_split(
@@ -164,6 +185,8 @@ async def run_one_todo(
     db: DB,
     pusher: Pusher,
     todo: dict,
+    *,
+    gate: UserGate | None = None,
 ) -> None:
     todo_id = todo["id"]
     user_id = todo["user_id"]
@@ -238,7 +261,11 @@ async def run_one_todo(
         db,
         todo_id=todo_id,
         user_id=user_id,
-        snapshot=execution_start_snapshot(todo),
+        snapshot=execution_start_snapshot(
+            todo,
+            pending_messages=pending_bodies or None,
+            resumed_from_interaction=resume is not None,
+        ),
         hermes_run_id=None,
     )
 
@@ -268,9 +295,28 @@ async def run_one_todo(
         )
         return
 
+    # Per-user critical sections: the runner rewrites this profile's memory
+    # files, config.yaml/.env, and skills dir around runs. Overlapping runs
+    # for the same user serialize those windows through the gate's staging
+    # lock; the long SSE-consumption middle stays unlocked.
+    staging_lock = gate.staging if gate is not None else asyncio.Lock()
+
     model_setting = db.get_agent_model_setting(user_id)
     try:
         setting = db.get_pending_agent_model_setting(user_id)
+        if setting is not None and gate is not None and not gate.restart_safe:
+            # Applying a model setting restarts the user's Hermes gateway,
+            # which would kill their other in-flight runs. Leave the setting
+            # pending — a later run with no concurrent siblings applies it.
+            log.info(
+                "deferring model apply user=%s profile=%s model=%s: "
+                "%d other run(s) in flight",
+                user_id,
+                endpoint.profile_name,
+                _model_setting_label(setting),
+                gate.active_total - 1,
+            )
+            setting = None
         if setting is not None:
             log.info(
                 "applying model setting user=%s profile=%s model=%s endpoint=%s:%s",
@@ -280,7 +326,8 @@ async def run_one_todo(
                 endpoint.host,
                 endpoint.port,
             )
-            AgentModelApplier(cfg).apply(endpoint.profile_name, setting)
+            async with staging_lock:
+                AgentModelApplier(cfg).apply(endpoint.profile_name, setting)
             db.update_agent_model_status(user_id, status="applied")
             model_setting = AgentModelSetting(
                 provider=setting.provider,
@@ -337,8 +384,9 @@ async def run_one_todo(
     #   2. We pass the staged rows into the prompt builder so the agent gets
     #      a nudge to curate them via its own ``memory`` tool (dedupe,
     #      replace older entries) rather than treating them as opaque text.
-    memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
-    staged_memories = sync_active_memories_to_hermes(db, memory_store, user_id)
+    memory_store = _memory_store(cfg, endpoint.profile_name)
+    async with staging_lock:
+        staged_memories = sync_active_memories_to_hermes(db, memory_store, user_id)
     # Image-only follow-up: the task already completed at least once
     # (processed attachments exist) and the user attached something new
     # without typing a message. Route it through the follow-up prompt so
@@ -409,7 +457,16 @@ async def run_one_todo(
             processed_attachment_urls=processed_attachment_urls,
         )
 
-    browse_skill = await maybe_prefetch_browse_skill(cfg, todo, endpoint.profile_name)
+    if gate is not None and gate.active_exec > 1:
+        prompt = f"{prompt}{concurrent_isolation_nudge()}"
+
+    async with staging_lock:
+        browse_skill = await maybe_prefetch_browse_skill(
+            cfg,
+            todo,
+            endpoint.profile_name,
+            allow_restart=(gate.restart_safe if gate is not None else True),
+        )
     if browse_skill:
         skill_name = browse_skill.get("name") or "the installed browse.sh skill"
         skill_slug = browse_skill.get("slug") or "unknown slug"
@@ -468,6 +525,7 @@ async def run_one_todo(
                 profile_name=endpoint.profile_name,
                 audio_requested=audio_requested,
                 outbound_send_approved=outbound_send_approved,
+                gate=gate,
             )
         )
 
@@ -595,8 +653,10 @@ async def run_one_todo(
         # agent-curated state. Runs the same way whether the run succeeded,
         # failed, or hit an interaction pause — Hermes may have persisted new
         # facts before any of those transitions.
-        with suppress(Exception):
-            mirror_hermes_memory_to_supabase(db, memory_store, user_id)
+        async with staging_lock:
+            with suppress(Exception):
+                mirror_hermes_memory_to_supabase(db, memory_store, user_id)
+                _consolidate_memory_if_near_cap(memory_store, user_id)
         if terminal_status == "done":
             with suppress(Exception):
                 await _extract_memories_after_todo(
@@ -604,6 +664,7 @@ async def run_one_todo(
                     todo,
                     endpoint=endpoint,
                     memory_store=memory_store,
+                    staging_lock=staging_lock,
                 )
 
     # Terminal push.
@@ -642,6 +703,7 @@ async def _convert_prep_todo_to_cron(
     schedule: str,
     schedule_display: str | None,
     connection_slug: str | None,
+    gate: UserGate | None = None,
 ) -> bool:
     """Convert a prep-classified recurring todo into a ``cron_jobs`` row.
 
@@ -686,7 +748,7 @@ async def _convert_prep_todo_to_cron(
         schedule,
     )
     db.delete_todo(todo_id)
-    await configure_one_cron_job(cfg, db, pusher, inserted)
+    await configure_one_cron_job(cfg, db, pusher, inserted, gate=gate)
     return True
 
 
@@ -713,6 +775,8 @@ async def prepare_one_todo(
     db: DB,
     pusher: Pusher,
     todo: dict,
+    *,
+    gate: UserGate | None = None,
 ) -> None:
     """Run the lightweight preparation pass for a newly-created todo.
 
@@ -819,6 +883,7 @@ async def prepare_one_todo(
                 schedule=decision.schedule,
                 schedule_display=decision.schedule_display,
                 connection_slug=None,
+                gate=gate,
             )
             if converted:
                 return
@@ -856,11 +921,11 @@ async def prepare_one_todo(
     # Memory sync is startup tax for most preps (prep classifies, it does
     # not recall) — only stage it when the user's words reference memory.
     if _PREP_MEMORY_HINT.search(combined_text):
-        memory_store = HermesMemoryStore(
-            cfg.hermes_profiles_dir, endpoint.profile_name
-        )
-        with suppress(Exception):
-            sync_active_memories_to_hermes(db, memory_store, user_id)
+        memory_store = _memory_store(cfg, endpoint.profile_name)
+        prep_staging_lock = gate.staging if gate is not None else asyncio.Lock()
+        async with prep_staging_lock:
+            with suppress(Exception):
+                sync_active_memories_to_hermes(db, memory_store, user_id)
 
     # Skip organization examples for very short inputs — there is not
     # enough signal to match against, and the examples dominate the prompt.
@@ -1041,6 +1106,7 @@ async def prepare_one_todo(
             schedule=result.schedule,
             schedule_display=result.schedule_display,
             connection_slug=result.connection_slug,
+            gate=gate,
         )
         if not converted:
             updates["status"] = "todo"
@@ -1103,6 +1169,10 @@ async def _collect_final_text(hermes: HermesClient, run_id: str) -> str:
     return final or ""
 
 
+_ACTIVITY_SYNC_LAST_PUSH: dict[str, float] = {}
+_ACTIVITY_SYNC_PUSH_INTERVAL = 12.0
+
+
 def _write_activity(
     db: DB,
     *,
@@ -1125,6 +1195,25 @@ def _write_activity(
         user_id=user_id,
         fields=snapshot.to_db_fields(hermes_run_id=hermes_run_id),
     )
+
+
+async def _notify_live_activity_sync(
+    pusher: Pusher,
+    db: DB,
+    *,
+    user_id: str,
+    todo_id: str,
+    snapshot: ActivitySnapshot,
+) -> None:
+    """Wake the iOS app briefly so it can refresh Live Activities while backgrounded."""
+    if snapshot.state not in ("running", "paused"):
+        return
+    now = time.time()
+    last = _ACTIVITY_SYNC_LAST_PUSH.get(todo_id, 0.0)
+    if now - last < _ACTIVITY_SYNC_PUSH_INTERVAL:
+        return
+    _ACTIVITY_SYNC_LAST_PUSH[todo_id] = now
+    await pusher.send_activity_sync(db.list_apns_tokens(user_id), todo_id=todo_id)
 
 
 def _placeholder_gate_enforced() -> bool:
@@ -1186,13 +1275,23 @@ def _expects_structured_output(todo: dict) -> bool:
     return bool(_STRUCTURED_OUTPUT_HINT.search(text))
 
 
-_REPAIR_PROMPT = (
+_REPAIR_PROMPT_TEMPLATE = (
     "Your previous reply finished the task but did not include the required "
     "structured output blocks. Re-emit ONLY the missing [[DOIT_INTERACTION]] "
-    "or [[DOIT_ARTIFACT]] blocks describing the work you already completed. "
-    "Do not redo any tool work, do not call tools, and do not add any other "
-    "text."
+    "or [[DOIT_ARTIFACT]] blocks for work you completed **for this specific "
+    "task** (quoted below). Do not reuse artifact blocks from session_search, "
+    "other todos, or unrelated prior work. Do not redo any tool work, do not "
+    "call tools, and do not add any other text.\n\n"
+    "Task title: {title}\n"
+    "Task detail: {detail}\n"
 )
+
+
+def _build_repair_prompt(todo: dict) -> str:
+    return _REPAIR_PROMPT_TEMPLATE.format(
+        title=(todo.get("title") or "").strip(),
+        detail=(todo.get("detail") or "").strip() or "(none)",
+    )
 
 
 async def _attempt_structured_repair(
@@ -1200,10 +1299,11 @@ async def _attempt_structured_repair(
     pusher: Pusher,
     hermes: HermesClient,
     *,
-    todo_id: str,
+    todo: dict,
     user_id: str,
     run_id: str,
     activity: AgentActivityService,
+    url_tracker: RunUrlTracker | None = None,
 ) -> str | None:
     """One short follow-up turn to recover missing structured blocks.
 
@@ -1214,6 +1314,7 @@ async def _attempt_structured_repair(
     back (caller keeps the original quiet `done`). Capped at one attempt per
     run by construction.
     """
+    todo_id = str(todo["id"])
     log.info("repair_attempted todo=%s run=%s", todo_id, run_id)
     db.insert_step(
         todo_id=todo_id,
@@ -1224,7 +1325,7 @@ async def _attempt_structured_repair(
     repair_run_id: str | None = None
     try:
         repair_run_id = await hermes.start_run(
-            _REPAIR_PROMPT,
+            _build_repair_prompt(todo),
             session_id=_session_id_for_todo(user_id, todo_id),
             session_key=_session_key_for_user(user_id),
         )
@@ -1251,16 +1352,15 @@ async def _attempt_structured_repair(
         # structured kinds.
         if artifact.kind in ("audio", "image"):
             continue
-        db.upsert_artifact(
-            todo_id=todo_id,
+        if maybe_upsert_artifact(
+            db,
+            todo=todo,
+            artifact=artifact,
             user_id=user_id,
-            key=artifact.key,
-            kind=artifact.kind,
-            title=artifact.title,
-            payload=artifact.payload,
-            hermes_run_id=run_id,
-        )
-        persisted = True
+            run_id=run_id,
+            url_tracker=url_tracker,
+        ):
+            persisted = True
     if interaction is not None:
         db.supersede_open_interactions(todo_id)
         db.insert_interaction(
@@ -1394,6 +1494,7 @@ async def _consume_run(
     profile_name: str | None = None,
     audio_requested: bool = True,
     outbound_send_approved: bool = False,
+    gate: UserGate | None = None,
 ) -> str:
     """Consume the SSE stream and return the terminal status.
 
@@ -1430,6 +1531,7 @@ async def _consume_run(
     # surface as a failure, not a silent "Done.".
     tools_called = False
     artifacts_persisted = False
+    url_tracker = RunUrlTracker()
 
     # Placeholder gate (Phase 4): snippets like "example.com" / "John Doe"
     # found in outbound email/calendar artifacts during this run. Checked
@@ -1485,13 +1587,32 @@ async def _consume_run(
                 snapshot=snapshot,
                 hermes_run_id=run_id,
             )
+            await _notify_live_activity_sync(
+                pusher,
+                db,
+                user_id=user_id,
+                todo_id=todo_id,
+                snapshot=snapshot,
+            )
 
+    start_snapshot = AgentActivityService().initial(
+        phase="starting",
+        title="Connecting…",
+        detail=None,
+    )
     _write_activity(
         db,
         todo_id=todo_id,
         user_id=user_id,
-        snapshot=execution_start_snapshot(todo),
+        snapshot=start_snapshot,
         hermes_run_id=run_id,
+    )
+    await _notify_live_activity_sync(
+        pusher,
+        db,
+        user_id=user_id,
+        todo_id=todo_id,
+        snapshot=start_snapshot,
     )
     heartbeat_task = asyncio.create_task(activity_heartbeat())
 
@@ -1551,6 +1672,16 @@ async def _consume_run(
                     snapshot=snap,
                     hermes_run_id=run_id,
                 )
+                await _notify_live_activity_sync(
+                    pusher,
+                    db,
+                    user_id=user_id,
+                    todo_id=todo_id,
+                    snapshot=snap,
+                )
+            if effect.step_kind == "tool_result":
+                url_tracker.observe_tool_result(ev.data)
+
             # Persist artifacts before any terminal `break` below so a `done`
             # event that also carries deliverables still lands them in the DB.
             artifact_text = _first_text_artifact_body(effect.artifacts) or effect.text
@@ -1589,17 +1720,15 @@ async def _consume_run(
                         placeholder_hits.extend(
                             h for h in hits if h not in placeholder_hits
                         )
-                db.upsert_artifact(
-                    todo_id=todo_id,
+                if maybe_upsert_artifact(
+                    db,
+                    todo=todo,
+                    artifact=artifact,
                     user_id=user_id,
-                    key=artifact.key,
-                    kind=artifact.kind,
-                    title=artifact.title,
-                    payload=artifact.payload,
-                    hermes_run_id=run_id,
-                )
-            if effect.artifacts:
-                artifacts_persisted = True
+                    run_id=run_id,
+                    url_tracker=url_tracker,
+                ):
+                    artifacts_persisted = True
             if effect.tts_call is not None:
                 pending_tts[effect.tts_call.call_id] = effect.tts_call
                 pending_tts_started_at[effect.tts_call.call_id] = time.time() - 10
@@ -1883,24 +2012,33 @@ async def _consume_run(
         and _structured_repair_enabled()
         and _expects_structured_output(todo)
     ):
-        # The task is the kind that should end in an email/calendar artifact
-        # or an approval card, but the run completed with neither — the model
-        # likely did the work and dropped the contract blocks. One cheap
-        # repair turn (no tools) on the same session re-requests them.
-        repaired = await _attempt_structured_repair(
-            db,
-            pusher,
-            hermes,
-            todo_id=todo_id,
-            user_id=user_id,
-            run_id=run_id,
-            activity=activity,
-        )
-        if repaired == "needs_input":
-            await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
-            return "needs_input"
-        if repaired == "done":
-            artifacts_persisted = True
+        if gate is not None and gate.active_exec > 1:
+            log.info(
+                "repair_skipped_concurrent todo=%s run=%s active_exec=%s",
+                todo_id,
+                run_id,
+                gate.active_exec,
+            )
+        else:
+            # The task is the kind that should end in an email/calendar artifact
+            # or an approval card, but the run completed with neither — the model
+            # likely did the work and dropped the contract blocks. One cheap
+            # repair turn (no tools) on the same session re-requests them.
+            repaired = await _attempt_structured_repair(
+                db,
+                pusher,
+                hermes,
+                todo=todo,
+                user_id=user_id,
+                run_id=run_id,
+                activity=activity,
+                url_tracker=url_tracker,
+            )
+            if repaired == "needs_input":
+                await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
+                return "needs_input"
+            if repaired == "done":
+                artifacts_persisted = True
 
     if pending_final is not None:
         db.insert_step(
@@ -2610,6 +2748,7 @@ async def _extract_memories_after_todo(
     *,
     endpoint,
     memory_store: HermesMemoryStore,
+    staging_lock: asyncio.Lock | None = None,
 ) -> None:
     """Run Doit's post-task memory extraction pass for a completed todo."""
     todo_id = str(todo["id"])
@@ -2669,7 +2808,13 @@ async def _extract_memories_after_todo(
             memory_status=storage_status_for_extracted_memory(candidate),
             symbol_name=candidate.symbol_name,
         )
-    sync_active_memories_to_hermes(db, memory_store, user_id)
+    # The extraction LLM call above runs unlocked; only the profile-file
+    # rewrite needs the per-user staging lock.
+    if staging_lock is not None:
+        async with staging_lock:
+            sync_active_memories_to_hermes(db, memory_store, user_id)
+    else:
+        sync_active_memories_to_hermes(db, memory_store, user_id)
 
 
 async def _collect_memory_extraction_text(hermes: HermesClient, run_id: str) -> str:
@@ -2716,8 +2861,17 @@ def _sync_pending_memories_to_hermes(
         if not rows:
             continue
         texts = [_memory_row_to_entry_text(row) for row in rows]
+        protected = frozenset(
+            row["hermes_fingerprint"]
+            for row in db.list_synced_memories(user_id)
+            if row.get("source") == "user"
+            and row.get("target") == target
+            and row.get("hermes_fingerprint")
+        )
         try:
-            _, skipped = store.stage_pinned_entries(target, texts)
+            _, skipped = store.stage_pinned_entries(
+                target, texts, protected_fingerprints=protected
+            )
         except Exception as e:
             log.exception("memory sync to %s failed for user %s", target, user_id)
             for row in rows:
@@ -2823,65 +2977,233 @@ def _task_context_for_prompt(db: DB, todo_id: str) -> dict[str, list[dict]]:
     }
 
 
+# How often a running todo's execution lease is refreshed. Must be well
+# under the claim-stale window (15 min) so healthy runs are never stolen.
+_RUN_LEASE_HEARTBEAT_SECS = 60.0
+
+# How often the loop scans for work stranded by a crashed runner (todos /
+# cron jobs stuck in `running` with an expired lease).
+_STALE_SCAN_INTERVAL_SECS = 30.0
+
+# How often the loop polls user_provisioning for pending signups. Kept low:
+# provisioning is rare, and the onboarding screen sets expectations of
+# "about a minute".
+_PROVISION_POLL_INTERVAL_SECS = 10.0
+
+
+async def _run_lease_heartbeat(db: DB, todo_id: str) -> None:
+    while True:
+        await asyncio.sleep(_RUN_LEASE_HEARTBEAT_SECS)
+        db.touch_todo_run_lease(todo_id)
+
+
+async def _execute_claimed_todo(
+    cfg: Config,
+    db: DB,
+    pusher: Pusher,
+    todo: dict,
+    gates: UserGates,
+) -> None:
+    """Pool wrapper: per-user accounting + lease heartbeat around one todo."""
+    user_id = str(todo["user_id"])
+    todo_id = str(todo["id"])
+    gate = gates.get(user_id)
+    gate.active_total += 1
+    gate.active_exec += 1
+    heartbeat = asyncio.create_task(_run_lease_heartbeat(db, todo_id))
+    try:
+        await run_one_todo(cfg, db, pusher, todo, gate=gate)
+    except Exception:
+        log.exception("run_one_todo crashed for %s", todo_id)
+    finally:
+        heartbeat.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await heartbeat
+        gate.active_total -= 1
+        gate.active_exec -= 1
+        gates.release_if_idle(user_id)
+
+
+async def _prepare_claimed_todo(
+    cfg: Config,
+    db: DB,
+    pusher: Pusher,
+    todo: dict,
+    gates: UserGates,
+) -> None:
+    user_id = str(todo["user_id"])
+    gate = gates.get(user_id)
+    gate.active_total += 1
+    try:
+        await prepare_one_todo(cfg, db, pusher, todo, gate=gate)
+    except Exception:
+        log.exception("prepare_one_todo crashed for %s", todo.get("id"))
+    finally:
+        gate.active_total -= 1
+        gates.release_if_idle(user_id)
+
+
+async def _configure_claimed_cron_job(
+    cfg: Config,
+    db: DB,
+    pusher: Pusher,
+    job: dict,
+    gates: UserGates,
+) -> None:
+    user_id = str(job["user_id"])
+    gate = gates.get(user_id)
+    gate.active_total += 1
+    try:
+        await configure_one_cron_job(cfg, db, pusher, job, gate=gate)
+    except Exception:
+        log.exception("configure_one_cron_job crashed for %s", job.get("id"))
+    finally:
+        gate.active_total -= 1
+        gates.release_if_idle(user_id)
+
+
+async def _execute_claimed_cron_job(
+    cfg: Config,
+    db: DB,
+    pusher: Pusher,
+    job: dict,
+    gates: UserGates,
+) -> None:
+    user_id = str(job["user_id"])
+    gate = gates.get(user_id)
+    gate.active_total += 1
+    gate.active_exec += 1
+    try:
+        await run_one_cron_job(cfg, db, pusher, job)
+    except Exception:
+        log.exception("cron job crashed for %s", job.get("id"))
+    finally:
+        gate.active_total -= 1
+        gate.active_exec -= 1
+        gates.release_if_idle(user_id)
+
+
+async def _provision_claimed_user(cfg: Config, db: DB, row: dict) -> None:
+    # Blocking work (subprocess + HTTP) runs in a thread so SSE consumption
+    # for in-flight runs never stalls behind a provisioning pass.
+    await asyncio.to_thread(run_provisioning, cfg, db, row)
+
+
 async def main_loop() -> None:
     setup_logging()
     cfg = load()
     db = DB(cfg)
     pusher = Pusher(cfg)
-    log.info("doit runner online; polling every %ss", cfg.poll_interval_secs)
+    gates = UserGates()
+    pool = TaskPool(cfg.max_concurrent_runs)
+    log.info(
+        "doit runner online; polling every %ss "
+        "(max %d concurrent work items, %d execution slots per user)",
+        cfg.poll_interval_secs,
+        cfg.max_concurrent_runs,
+        cfg.max_runs_per_user,
+    )
+    last_stale_scan = 0.0
+    last_provision_scan = 0.0
 
     while True:
+        if not pool.has_capacity:
+            # Pool is full: block until any work item finishes (or the poll
+            # interval elapses) instead of hammering the claim queries.
+            await pool.wait_for_capacity(cfg.poll_interval_secs)
+            continue
+
+        capped_users = gates.users_at_exec_cap(cfg.max_runs_per_user)
+
         # Preparation is short and user-facing (the card spinner sits there
-        # until we finish), so it gets first dibs each tick. Execution work
-        # only runs once the prep queue is drained.
+        # until we finish), so it gets first dibs each tick.
         try:
             prep_todo = db.claim_next_preparing_todo()
         except Exception:
             log.exception("prep claim failed; will retry")
             prep_todo = None
-
         if prep_todo is not None:
-            try:
-                await prepare_one_todo(cfg, db, pusher, prep_todo)
-            except Exception:
-                log.exception("prepare_one_todo crashed for %s", prep_todo.get("id"))
+            pool.spawn(
+                _prepare_claimed_todo(cfg, db, pusher, prep_todo, gates),
+                name=f"prep:{prep_todo['id']}",
+            )
             continue
+
+        # New-user provisioning (low-frequency poll; the onboarding screen
+        # is watching the user_provisioning row over Realtime).
+        if (
+            cfg.provisioner_enabled
+            and time.time() - last_provision_scan >= _PROVISION_POLL_INTERVAL_SECS
+        ):
+            last_provision_scan = time.time()
+            prov_row = db.claim_next_provisioning_user()
+            if prov_row is not None:
+                pool.spawn(
+                    _provision_claimed_user(cfg, db, prov_row),
+                    name=f"provision:{prov_row['user_id']}",
+                )
+                continue
 
         try:
             cfg_job = db.claim_next_configuring_cron_job()
         except Exception:
             log.exception("cron configure claim failed")
             cfg_job = None
-
         if cfg_job is not None:
-            try:
-                await configure_one_cron_job(cfg, db, pusher, cfg_job)
-            except Exception:
-                log.exception("configure_one_cron_job crashed for %s", cfg_job.get("id"))
+            pool.spawn(
+                _configure_claimed_cron_job(cfg, db, pusher, cfg_job, gates),
+                name=f"cron-config:{cfg_job['id']}",
+            )
             continue
 
         try:
-            cron_ran = await run_due_cron_jobs(cfg, db, pusher)
+            due_jobs = db.claim_due_cron_jobs(
+                limit=1, exclude_user_ids=capped_users
+            )
         except Exception:
-            log.exception("cron tick failed")
-            cron_ran = 0
-        if cron_ran:
+            log.exception("cron claim failed")
+            due_jobs = []
+        if due_jobs:
+            pool.spawn(
+                _execute_claimed_cron_job(cfg, db, pusher, due_jobs[0], gates),
+                name=f"cron:{due_jobs[0]['id']}",
+            )
             continue
 
         try:
-            todo = db.claim_next_requested_todo()
+            todo = db.claim_next_requested_todo(exclude_user_ids=capped_users)
         except Exception:
             log.exception("claim failed; will retry")
             todo = None
 
+        # Periodically recover work stranded in `running` by a crashed
+        # runner (stale execution lease).
         if todo is None:
-            await asyncio.sleep(cfg.poll_interval_secs)
+            now = time.time()
+            if now - last_stale_scan >= _STALE_SCAN_INTERVAL_SECS:
+                last_stale_scan = now
+                todo = db.claim_stale_running_todo(exclude_user_ids=capped_users)
+                if todo is None:
+                    stale_job = db.claim_stale_running_cron_job(
+                        exclude_user_ids=capped_users
+                    )
+                    if stale_job is not None:
+                        pool.spawn(
+                            _execute_claimed_cron_job(
+                                cfg, db, pusher, stale_job, gates
+                            ),
+                            name=f"cron-recovered:{stale_job['id']}",
+                        )
+                        continue
+
+        if todo is not None:
+            pool.spawn(
+                _execute_claimed_todo(cfg, db, pusher, todo, gates),
+                name=f"todo:{todo['id']}",
+            )
             continue
 
-        try:
-            await run_one_todo(cfg, db, pusher, todo)
-        except Exception:
-            log.exception("run_one_todo crashed for %s", todo.get("id"))
+        await asyncio.sleep(cfg.poll_interval_secs)
 
 
 def main() -> None:

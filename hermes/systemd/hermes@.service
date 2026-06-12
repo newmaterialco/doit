@@ -1,0 +1,28 @@
+# Systemd template unit for per-user Hermes gateways.
+#
+# One copy of this file replaces every hand-written hermes-<profile>.service.
+# Instances are addressed as hermes@<profile>, e.g.:
+#
+#   sudo systemctl enable --now hermes@user_a1b2c3d4
+#   sudo systemctl restart hermes@alice
+#
+# Install with scripts/install-hermes-template-unit.sh, which substitutes the
+# __HERMES_USER__ / __HERMES_BIN__ placeholders for the target VM and migrates
+# any existing hermes-<profile> units to instances of this template.
+
+[Unit]
+Description=Hermes gateway for profile %i
+After=network.target
+
+[Service]
+Type=simple
+User=__HERMES_USER__
+# Doit's shared secrets (model provider keys, Browserbase, Composio). The
+# leading "-" tolerates the file being absent on non-doit installs.
+EnvironmentFile=-__DOIT_ENV_FILE__
+ExecStart=__HERMES_BIN__ -p %i gateway run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

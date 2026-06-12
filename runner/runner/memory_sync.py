@@ -5,7 +5,11 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from .hermes_memory import HermesMemoryStore, MemoryTarget, fingerprint as memory_fingerprint
+from .hermes_memory import (
+    HermesMemoryStore,
+    MemoryTarget,
+    fingerprint as memory_fingerprint,
+)
 
 if TYPE_CHECKING:
     from .db import DB
@@ -38,8 +42,23 @@ def sync_active_memories_to_hermes(
     now = datetime.now(timezone.utc).isoformat()
     for target, rows in by_target.items():
         texts = [_memory_row_to_entry_text(row) for row in rows]
+        protected = frozenset(
+            memory_fingerprint(text)
+            for row, text in zip(rows, texts)
+            if row.get("source") == "user"
+        )
+        evict_first = frozenset(
+            memory_fingerprint(text)
+            for row, text in zip(rows, texts)
+            if row.get("source") == "hermes"
+        )
         try:
-            written = store.write_entries(target, texts)
+            written = store.write_entries(
+                target,
+                texts,
+                protected_fingerprints=protected,
+                evict_first_fingerprints=evict_first,
+            )
         except Exception as e:
             log.exception("memory rewrite to %s failed for user %s", target, user_id)
             for row in rows:

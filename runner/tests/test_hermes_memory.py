@@ -2,8 +2,7 @@
 
 These cover the on-disk format we share with Hermes' built-in memory
 (MEMORY.md / USER.md): parsing, serialization, character-limit handling,
-fingerprint stability, and the user-pin staging flow that the runner uses
-before every /v1/runs call.
+fingerprint stability, eviction priority, and the user-pin staging flow.
 
 Pure stdlib — no Supabase / Hermes / network. Run with:
 
@@ -18,6 +17,8 @@ from pathlib import Path
 from runner.hermes_memory import (
     ENTRY_DELIMITER,
     HermesMemoryStore,
+    LEGACY_MEMORY_CHAR_LIMIT,
+    LEGACY_USER_CHAR_LIMIT,
     MEMORY_CHAR_LIMIT,
     USER_CHAR_LIMIT,
     fingerprint,
@@ -29,7 +30,12 @@ class HermesMemoryStoreTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.profiles_dir = Path(self._tmp.name)
-        self.store = HermesMemoryStore(self.profiles_dir, "alice")
+        self.store = HermesMemoryStore(
+            self.profiles_dir,
+            "alice",
+            user_char_limit=LEGACY_USER_CHAR_LIMIT,
+            memory_char_limit=LEGACY_MEMORY_CHAR_LIMIT,
+        )
 
     # ------------------------------------------------------------------
     # Paths
@@ -45,9 +51,10 @@ class HermesMemoryStoreTests(unittest.TestCase):
             self.profiles_dir / "alice" / "memories" / "MEMORY.md",
         )
 
-    def test_limits_match_hermes_defaults(self) -> None:
-        self.assertEqual(self.store.limit_for("user"), USER_CHAR_LIMIT)
-        self.assertEqual(self.store.limit_for("memory"), MEMORY_CHAR_LIMIT)
+    def test_default_limits_match_raised_defaults(self) -> None:
+        default_store = HermesMemoryStore(self.profiles_dir, "bob")
+        self.assertEqual(default_store.limit_for("user"), USER_CHAR_LIMIT)
+        self.assertEqual(default_store.limit_for("memory"), MEMORY_CHAR_LIMIT)
 
     # ------------------------------------------------------------------
     # Read / write round trip
@@ -78,7 +85,6 @@ class HermesMemoryStoreTests(unittest.TestCase):
         self.store.write_entries("memory", ["a", "b"])
         raw = self.store.path_for("memory").read_text(encoding="utf-8")
         self.assertIn(ENTRY_DELIMITER, raw)
-        # No extraneous delimiter at the start or trailing.
         self.assertFalse(raw.startswith(ENTRY_DELIMITER))
         self.assertEqual(raw.count(ENTRY_DELIMITER), 1)
 
@@ -95,12 +101,52 @@ class HermesMemoryStoreTests(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_write_drops_from_tail_when_over_limit(self) -> None:
-        big = "x" * (USER_CHAR_LIMIT // 2)
-        # Three half-limit entries can't all fit in USER.md.
+        big = "x" * (LEGACY_USER_CHAR_LIMIT // 2)
         written = self.store.write_entries("user", [big, big, big])
         self.assertLess(len(written), 3)
         size = self.store.path_for("user").stat().st_size
-        self.assertLessEqual(size, USER_CHAR_LIMIT + 1)  # +newline
+        self.assertLessEqual(size, LEGACY_USER_CHAR_LIMIT + 1)
+
+    def test_write_evicts_hermes_before_user_rows(self) -> None:
+        tight = HermesMemoryStore(
+            self.profiles_dir,
+            "tight",
+            user_char_limit=500,
+            memory_char_limit=500,
+        )
+        agent = "agent note about workflow " * 30
+        user = "User signoff: Gabe"
+        agent_fp = fingerprint(agent)
+        user_fp = fingerprint(user)
+        written = tight.write_entries(
+            "user",
+            [agent, user],
+            protected_fingerprints=frozenset({user_fp}),
+            evict_first_fingerprints=frozenset({agent_fp}),
+        )
+        fps = {entry.fingerprint for entry in written}
+        self.assertIn(user_fp, fps)
+        self.assertNotIn(agent_fp, fps)
+
+    def test_stage_evicts_old_agent_entry_for_new_pin(self) -> None:
+        agent = "x" * (LEGACY_USER_CHAR_LIMIT - 10)
+        self.store.write_entries("user", [agent])
+        pin = "Pinned: wife is Alessandra"
+        written, skipped = self.store.stage_pinned_entries("user", [pin])
+        texts = [entry.text for entry in written]
+        self.assertIn(pin, texts)
+        self.assertEqual(skipped, [])
+
+    def test_stage_skips_pin_when_only_protected_entries_exceed_limit(self) -> None:
+        big = "x" * (LEGACY_USER_CHAR_LIMIT - 5)
+        self.store.write_entries("user", [big])
+        too_big = "y" * 200
+        _, skipped = self.store.stage_pinned_entries(
+            "user",
+            [too_big],
+            protected_fingerprints=frozenset({fingerprint(big)}),
+        )
+        self.assertIn(too_big, skipped)
 
     # ------------------------------------------------------------------
     # Pin staging (Supabase -> Hermes)
@@ -122,10 +168,14 @@ class HermesMemoryStoreTests(unittest.TestCase):
         self.assertEqual(skipped, [])
 
     def test_stage_returns_skipped_when_file_is_full(self) -> None:
-        big_existing = "x" * (USER_CHAR_LIMIT - 5)
+        big_existing = "x" * (LEGACY_USER_CHAR_LIMIT - 5)
         self.store.write_entries("user", [big_existing])
         too_big = "y" * 200
-        _, skipped = self.store.stage_pinned_entries("user", [too_big])
+        _, skipped = self.store.stage_pinned_entries(
+            "user",
+            [too_big],
+            protected_fingerprints=frozenset({fingerprint(big_existing)}),
+        )
         self.assertIn(too_big, skipped)
 
     # ------------------------------------------------------------------

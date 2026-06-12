@@ -32,10 +32,10 @@ mcp_servers:
 # run. Doit's runner mirrors these files into Supabase so the app's Settings >
 # Memory screen can show what the agent has learned and let the user pin facts.
 memory:
-  memory_enabled: true        # MEMORY.md (~2,200 chars, agent notes)
-  user_profile_enabled: true  # USER.md (~1,375 chars, user profile)
-  memory_char_limit: 2200
-  user_char_limit: 1375
+  memory_enabled: true        # MEMORY.md (~8,000 chars, agent notes)
+  user_profile_enabled: true  # USER.md (~4,000 chars, user profile)
+  memory_char_limit: 8000
+  user_char_limit: 4000
 
 # Browserbase-backed browsing is enabled for public web tasks. Hermes still
 # routes private/loopback URLs to a local sidecar so cloud browsers never try to

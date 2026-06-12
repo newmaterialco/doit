@@ -19,6 +19,8 @@ from runner.activity import (
     AgentActivityService,
     _categorize_tool,
     _humanize_tool_name,
+    execution_start_snapshot,
+    prep_queue_snapshot,
 )
 from runner.events import Translated
 
@@ -367,6 +369,67 @@ class StalledSnapshotTests(unittest.TestCase):
         heartbeat = svc.heartbeat(None)
         stalled = svc.stalled(None)
         self.assertNotEqual(heartbeat.phase, stalled.phase)
+
+
+class ExecutionStartSnapshotTests(unittest.TestCase):
+    def test_first_run_uses_getting_ready(self) -> None:
+        snap = execution_start_snapshot({"title": "Book a flight to NYC"})
+        self.assertEqual(snap.phase, "starting")
+        self.assertEqual(snap.title, "Getting ready…")
+        self.assertEqual(snap.detail, "Getting ready…")
+        self.assertNotIn("Book a flight", snap.title)
+        self.assertNotIn("Book a flight", snap.detail or "")
+
+    def test_pending_message_uses_reading_copy(self) -> None:
+        snap = execution_start_snapshot(
+            {"title": "Book a flight to NYC"},
+            pending_messages=["Can you also add a hotel?"],
+        )
+        self.assertEqual(snap.title, "Reading your message…")
+        self.assertNotIn("Book a flight", snap.detail or "")
+
+    def test_resume_uses_picking_up_copy(self) -> None:
+        snap = execution_start_snapshot(
+            {"title": "Book a flight to NYC"},
+            resumed_from_interaction=True,
+        )
+        self.assertEqual(snap.title, "Picking up your answer…")
+        self.assertNotIn("Book a flight", snap.detail or "")
+
+    def test_prep_summary_does_not_echo_task_title(self) -> None:
+        snap = execution_start_snapshot(
+            {
+                "title": "Book a flight to NYC",
+                "preparation_summary": "Search SFO to JFK flights",
+            }
+        )
+        self.assertEqual(snap.title, "Getting ready…")
+        self.assertNotIn("Book a flight", snap.detail or "")
+        self.assertNotIn("SFO", snap.title)
+
+
+class PrepQueueSnapshotTests(unittest.TestCase):
+    def test_queued_to_run_without_summary_echo(self) -> None:
+        snap = prep_queue_snapshot(summary="Search SFO to JFK flights")
+        self.assertEqual(snap.title, "Queued to run…")
+        self.assertEqual(snap.detail, "Queued to run…")
+        self.assertNotIn("SFO", snap.title)
+
+
+class HeartbeatStartingEscalationTests(unittest.TestCase):
+    def test_heartbeat_escalates_starting_without_steps(self) -> None:
+        svc = AgentActivityService()
+        starting = svc.initial(phase="starting", title="Getting ready…", detail=None)
+        snap = svc.heartbeat(starting)
+        self.assertEqual(snap.phase, "starting")
+        self.assertEqual(snap.title, "Connecting…")
+
+    def test_heartbeat_keeps_real_work_snapshot(self) -> None:
+        svc = AgentActivityService()
+        latest = svc.observe(_started("gmail_search", text="Using gmail_search. q=foo"))
+        assert latest is not None
+        snap = svc.heartbeat(latest)
+        self.assertEqual(snap.title, "Searching Gmail")
 
 
 if __name__ == "__main__":

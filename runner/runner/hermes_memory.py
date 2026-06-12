@@ -2,8 +2,8 @@
 
 Hermes stores curated, bounded memory on disk per profile:
 
-    ~/.hermes/profiles/<profile>/memories/USER.md     (~1,375 chars)
-    ~/.hermes/profiles/<profile>/memories/MEMORY.md   (~2,200 chars)
+    ~/.hermes/profiles/<profile>/memories/USER.md
+    ~/.hermes/profiles/<profile>/memories/MEMORY.md
 
 Both files are entry lists separated by the section sign delimiter (``§``).
 At session start Hermes loads them into the system prompt as a frozen
@@ -18,7 +18,8 @@ This module gives the runner a small, focused API to:
 
 It does NOT try to be a memory provider; the agent still owns curation.
 We only sync the small set of things the user explicitly pinned in the iOS
-app, and we never delete agent-managed entries.
+app, and we never delete agent-managed entries unless the file is over
+capacity — then oldest unpinned / agent-authored entries go first.
 """
 from __future__ import annotations
 
@@ -34,22 +35,21 @@ log = logging.getLogger(__name__)
 
 MemoryTarget = Literal["user", "memory"]
 
+# Hermes' legacy built-in limits (pre-capacity fix). Tests that need a tiny
+# cap pass these explicitly to ``HermesMemoryStore``.
+LEGACY_USER_CHAR_LIMIT = 1375
+LEGACY_MEMORY_CHAR_LIMIT = 2200
+
+# Raised defaults — override via env / Config (see runner.config).
+USER_CHAR_LIMIT = 4000
+MEMORY_CHAR_LIMIT = 8000
+
 # Hermes' on-disk format uses the section sign as the entry delimiter.
 ENTRY_DELIMITER = "§"
-
-# Hermes' default character limits per docs. We mirror them here so we never
-# write a file Hermes would refuse to load.
-USER_CHAR_LIMIT = 1375
-MEMORY_CHAR_LIMIT = 2200
 
 _FILE_BY_TARGET: dict[MemoryTarget, str] = {
     "user": "USER.md",
     "memory": "MEMORY.md",
-}
-
-_LIMIT_BY_TARGET: dict[MemoryTarget, int] = {
-    "user": USER_CHAR_LIMIT,
-    "memory": MEMORY_CHAR_LIMIT,
 }
 
 
@@ -69,8 +69,19 @@ class MemoryEntry:
 class HermesMemoryStore:
     """File-backed accessor for one Hermes profile's MEMORY/USER stores."""
 
-    def __init__(self, profiles_dir: str | os.PathLike[str], profile_name: str) -> None:
+    def __init__(
+        self,
+        profiles_dir: str | os.PathLike[str],
+        profile_name: str,
+        *,
+        user_char_limit: int = USER_CHAR_LIMIT,
+        memory_char_limit: int = MEMORY_CHAR_LIMIT,
+    ) -> None:
         self._memories_dir = Path(profiles_dir).expanduser() / profile_name / "memories"
+        self._limits: dict[MemoryTarget, int] = {
+            "user": user_char_limit,
+            "memory": memory_char_limit,
+        }
 
     @property
     def memories_dir(self) -> Path:
@@ -80,7 +91,7 @@ class HermesMemoryStore:
         return self._memories_dir / _FILE_BY_TARGET[target]
 
     def limit_for(self, target: MemoryTarget) -> int:
-        return _LIMIT_BY_TARGET[target]
+        return self._limits[target]
 
     # ------------------------------------------------------------------
     # Read
@@ -103,31 +114,32 @@ class HermesMemoryStore:
     # Write
     # ------------------------------------------------------------------
 
-    def write_entries(self, target: MemoryTarget, entries: Iterable[str]) -> list[MemoryEntry]:
+    def write_entries(
+        self,
+        target: MemoryTarget,
+        entries: Iterable[str],
+        *,
+        protected_fingerprints: frozenset[str] | None = None,
+        evict_first_fingerprints: frozenset[str] | None = None,
+    ) -> list[MemoryEntry]:
         """Replace the on-disk file with ``entries``.
 
         Whitespace-only entries are dropped. Duplicates (by fingerprint) are
-        merged keeping the first occurrence. If the combined character count
-        exceeds Hermes' limit, oldest entries are dropped from the tail until
-        it fits — never silently truncated mid-entry, because Hermes parses
-        entries as whole blocks.
+        merged keeping the first occurrence. When the combined size exceeds
+        the limit, oldest **evict-first** entries (typically agent-authored)
+        are removed before any **protected** user-visible rows. Only when
+        protected entries alone exceed the limit do we drop from the tail.
 
         Returns the entries actually written, in order.
         """
-        normalized: list[MemoryEntry] = []
-        seen: set[str] = set()
-        for raw in entries:
-            text = _normalize_entry(raw)
-            if not text:
-                continue
-            fp = fingerprint(text)
-            if fp in seen:
-                continue
-            seen.add(fp)
-            normalized.append(MemoryEntry(target=target, text=text, fingerprint=fp))
-
+        normalized = _normalize_entry_list(target, entries)
         limit = self.limit_for(target)
-        capped = _cap_to_limit(normalized, limit)
+        capped = _cap_with_eviction(
+            normalized,
+            limit,
+            protected=protected_fingerprints or frozenset(),
+            evict_first=evict_first_fingerprints or frozenset(),
+        )
         _atomic_write(self.path_for(target), _serialize_entries(capped))
         return capped
 
@@ -135,13 +147,14 @@ class HermesMemoryStore:
         self,
         target: MemoryTarget,
         pinned_texts: Iterable[str],
+        *,
+        protected_fingerprints: frozenset[str] | None = None,
     ) -> tuple[list[MemoryEntry], list[str]]:
         """Append user-pinned entries to ``target`` if they aren't already there.
 
-        Existing on-disk entries (whether agent-curated or previously pinned)
-        are preserved. Pinned texts that would push the file past Hermes'
-        char limit are dropped from the end and returned in ``skipped`` so
-        the caller can surface a sync error for them.
+        Existing on-disk entries are preserved unless the file is over
+        capacity — then oldest entries that are **not** protected (new pins
+        plus any caller-supplied pinned fingerprints) are evicted first.
 
         Returns ``(written_entries, skipped_pinned_texts)``.
         """
@@ -161,13 +174,42 @@ class HermesMemoryStore:
         if not new_entries:
             return existing, []
 
+        protected = frozenset(
+            {entry.fingerprint for entry in new_entries}
+            | set(protected_fingerprints or ())
+        )
         limit = self.limit_for(target)
         combined = existing + new_entries
-        capped = _cap_to_limit(combined, limit)
+        capped = _cap_with_eviction(
+            combined,
+            limit,
+            protected=protected,
+            evict_first=frozenset(
+                entry.fingerprint
+                for entry in existing
+                if entry.fingerprint not in protected
+            ),
+        )
         kept_fps = {entry.fingerprint for entry in capped}
         skipped = [entry.text for entry in new_entries if entry.fingerprint not in kept_fps]
         _atomic_write(self.path_for(target), _serialize_entries(capped))
         return capped, skipped
+
+
+def memory_store_for_profile(
+    profiles_dir: str | os.PathLike[str],
+    profile_name: str,
+    *,
+    user_char_limit: int = USER_CHAR_LIMIT,
+    memory_char_limit: int = MEMORY_CHAR_LIMIT,
+) -> HermesMemoryStore:
+    """Construct a store with explicit char limits (typically from Config)."""
+    return HermesMemoryStore(
+        profiles_dir,
+        profile_name,
+        user_char_limit=user_char_limit,
+        memory_char_limit=memory_char_limit,
+    )
 
 
 # ----------------------------------------------------------------------
@@ -181,6 +223,11 @@ def fingerprint(text: str) -> str:
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
 
 
+def serialized_size(entries: list[MemoryEntry]) -> int:
+    """Character count of the on-disk serialization for ``entries``."""
+    return len(_serialize_entries(entries))
+
+
 def _canonicalize(text: str) -> str:
     """Reduce trivial whitespace differences so the same fact hashes alike."""
     collapsed = re.sub(r"\s+", " ", text).strip()
@@ -192,6 +239,23 @@ def _normalize_entry(text: str) -> str:
     if text is None:
         return ""
     return text.strip()
+
+
+def _normalize_entry_list(
+    target: MemoryTarget, entries: Iterable[str]
+) -> list[MemoryEntry]:
+    normalized: list[MemoryEntry] = []
+    seen: set[str] = set()
+    for raw in entries:
+        text = _normalize_entry(raw)
+        if not text:
+            continue
+        fp = fingerprint(text)
+        if fp in seen:
+            continue
+        seen.add(fp)
+        normalized.append(MemoryEntry(target=target, text=text, fingerprint=fp))
+    return normalized
 
 
 def _parse_entries(raw: str, target: MemoryTarget) -> list[MemoryEntry]:
@@ -222,7 +286,44 @@ def _serialize_entries(entries: list[MemoryEntry]) -> str:
 def _cap_to_limit(entries: list[MemoryEntry], limit: int) -> list[MemoryEntry]:
     """Drop entries from the tail until the serialized size fits ``limit``."""
     kept = list(entries)
-    while kept and len(_serialize_entries(kept)) > limit:
+    while kept and serialized_size(kept) > limit:
+        kept.pop()
+    return kept
+
+
+def _cap_with_eviction(
+    entries: list[MemoryEntry],
+    limit: int,
+    *,
+    protected: frozenset[str],
+    evict_first: frozenset[str],
+) -> list[MemoryEntry]:
+    """Fit ``entries`` under ``limit``, evicting unpinned/agent rows first."""
+    kept = list(entries)
+    if not kept or serialized_size(kept) <= limit:
+        return kept
+
+    def _remove_at(index: int) -> None:
+        kept.pop(index)
+
+    def _first_removable(predicate) -> int | None:
+        for idx, entry in enumerate(kept):
+            if predicate(entry):
+                return idx
+        return None
+
+    while kept and serialized_size(kept) > limit:
+        idx = _first_removable(
+            lambda e: e.fingerprint in evict_first and e.fingerprint not in protected
+        )
+        if idx is not None:
+            _remove_at(idx)
+            continue
+        idx = _first_removable(lambda e: e.fingerprint not in protected)
+        if idx is not None:
+            _remove_at(idx)
+            continue
+        # Protected entries alone exceed the limit — drop from tail.
         kept.pop()
     return kept
 

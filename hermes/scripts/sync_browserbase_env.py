@@ -78,13 +78,19 @@ def _restart_hermes_units() -> None:
         text=True,
         capture_output=True,
     )
+    # Both hermes@<profile> template instances and any leftover legacy
+    # hermes-<profile> units.
     names = [
         line.split()[0]
         for line in units.stdout.splitlines()
-        if line.split() and line.split()[0].startswith("hermes-")
+        if line.split()
+        and (
+            line.split()[0].startswith("hermes@")
+            or line.split()[0].startswith("hermes-")
+        )
     ]
     if not names:
-        print("No hermes-* systemd units found to restart.")
+        print("No hermes gateway systemd units found to restart.")
         return
     subprocess.run(["sudo", "systemctl", "restart", *names], check=True)
     print("Restarted:", ", ".join(names))
@@ -108,7 +114,7 @@ def main() -> None:
     parser.add_argument(
         "--restart",
         action="store_true",
-        help="Restart all hermes-* systemd units after updating the env file.",
+        help="Restart all hermes gateway systemd units after updating the env file.",
     )
     args = parser.parse_args()
 
@@ -126,7 +132,7 @@ def main() -> None:
     if args.restart:
         _restart_hermes_units()
     else:
-        print("Restart Hermes gateways to pick up the new env: sudo systemctl restart hermes-<profile>")
+        print("Restart Hermes gateways to pick up the new env: sudo systemctl restart hermes@<profile>")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,8 @@ from .cron_configure import (
 from .db import DB
 from .events import TASKS_CLOSE, TASKS_OPEN, extract_terminal_text, parse_spawned_tasks
 from .hermes import HermesClient
-from .hermes_memory import HermesMemoryStore
+from .hermes_memory import memory_store_for_profile
+from .memory_consolidate import consolidate_if_near_cap
 from .memory_sync import mirror_hermes_memory_to_supabase, sync_active_memories_to_hermes
 from .spawn import apply_spawned_tasks
 from .prepare import CONNECTION_SLUGS
@@ -66,8 +67,15 @@ async def configure_one_cron_job(
     db: DB,
     pusher: Pusher,
     job: dict,
+    *,
+    gate: Any | None = None,
 ) -> None:
-    """Refine a cron job's prompt/schedule; ask clarifying questions if needed."""
+    """Refine a cron job's prompt/schedule; ask clarifying questions if needed.
+
+    ``gate`` is the per-user ``UserGate`` (see ``scheduler.py``); its staging
+    lock serializes profile-file writes against the user's other in-flight
+    work items.
+    """
     job_id = job["id"]
     user_id = job["user_id"]
     name = job.get("name") or "Scheduled task"
@@ -116,9 +124,16 @@ async def configure_one_cron_job(
         pending_messages=pending_bodies or None,
     )
 
-    memory_store = HermesMemoryStore(cfg.hermes_profiles_dir, endpoint.profile_name)
-    with suppress(Exception):
-        sync_active_memories_to_hermes(db, memory_store, user_id)
+    memory_store = memory_store_for_profile(
+        cfg.hermes_profiles_dir,
+        endpoint.profile_name,
+        user_char_limit=cfg.hermes_user_char_limit,
+        memory_char_limit=cfg.hermes_memory_char_limit,
+    )
+    staging_lock = gate.staging if gate is not None else asyncio.Lock()
+    async with staging_lock:
+        with suppress(Exception):
+            sync_active_memories_to_hermes(db, memory_store, user_id)
 
     hermes = HermesClient(endpoint)
     run_id: str | None = None
@@ -141,8 +156,14 @@ async def configure_one_cron_job(
             if run_id is not None:
                 await hermes.stop_run(run_id)
         await hermes.aclose()
-        with suppress(Exception):
-            mirror_hermes_memory_to_supabase(db, memory_store, user_id)
+        async with staging_lock:
+            with suppress(Exception):
+                mirror_hermes_memory_to_supabase(db, memory_store, user_id)
+                for target in ("user", "memory"):
+                    with suppress(Exception):
+                        consolidate_if_near_cap(
+                            memory_store, target, user_id=user_id
+                        )
 
     if pending_ids:
         db.mark_cron_messages_consumed(pending_ids)
@@ -223,31 +244,14 @@ async def configure_one_cron_job(
     log.info("cron job %s configured and scheduled", job_id)
 
 
-async def run_due_cron_jobs(
-    cfg: Any,
-    db: DB,
-    pusher: Pusher,
-) -> int:
-    """Claim and execute all due cron jobs. Returns count executed."""
-    due = db.claim_due_cron_jobs(limit=3)
-    if not due:
-        return 0
-    ran = 0
-    for job in due:
-        try:
-            await _run_one_cron_job(cfg, db, pusher, job)
-            ran += 1
-        except Exception:
-            log.exception("cron job crashed for %s", job.get("id"))
-    return ran
-
-
-async def _run_one_cron_job(
+async def run_one_cron_job(
     cfg: Any,
     db: DB,
     pusher: Pusher,
     job: dict,
 ) -> None:
+    """Execute one claimed cron job. The main loop claims via
+    ``db.claim_due_cron_jobs`` and spawns this through its worker pool."""
     job_id = job["id"]
     user_id = job["user_id"]
     prompt = job.get("prompt") or job.get("name") or ""

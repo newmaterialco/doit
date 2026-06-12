@@ -418,6 +418,8 @@ class AgentActivityService:
         neutral "still working" state without claiming a specific action.
         """
         if latest is not None:
+            if latest.phase == "starting" and not self._recent:
+                return self.initial(phase="starting", title="Connecting…", detail=None)
             return ActivitySnapshot(
                 phase=latest.phase,
                 state=latest.state,
@@ -478,32 +480,33 @@ def _clip(value: str | None, limit: int) -> str | None:
     return text[: limit - 1] + "\u2026"
 
 
-def execution_start_snapshot(todo: dict) -> ActivitySnapshot:
-    """User-visible activity while Hermes spins up for a claimed todo."""
+def execution_start_snapshot(
+    todo: dict,
+    *,
+    pending_messages: list[str] | None = None,
+    resumed_from_interaction: bool = False,
+) -> ActivitySnapshot:
+    """User-visible activity while Hermes spins up for a claimed todo.
+
+    Never echoes ``todo.title`` — the iOS header already shows the task;
+    activity surfaces should show process labels only.
+    """
+    del todo  # reserved for future context; bootstrap copy is generic today.
     service = AgentActivityService()
-    summary = _clip(str(todo.get("preparation_summary") or "").strip(), _TITLE_LIMIT)
-    title_text = _clip(str(todo.get("title") or "").strip(), _TITLE_LIMIT)
-    if summary:
-        return service.initial(phase="starting", title=summary, detail=title_text or summary)
-    if title_text:
-        return service.initial(
-            phase="starting",
-            title=f"Working on {title_text}",
-            detail=title_text,
-        )
-    return service.initial(phase="starting", title="Getting started…")
+    if pending_messages:
+        label = "Reading your message…"
+    elif resumed_from_interaction:
+        label = "Picking up your answer…"
+    else:
+        label = "Getting ready…"
+    return service.initial(phase="starting", title=label, detail=None)
 
 
 def prep_queue_snapshot(*, summary: str | None = None) -> ActivitySnapshot:
     """Activity row written when prep finishes and the todo is queued."""
+    del summary  # prep summary stays on the list card during preparing status.
     service = AgentActivityService()
-    if summary:
-        return service.initial(
-            phase="starting",
-            title=summary,
-            detail="Queued to run",
-        )
-    return service.initial(phase="starting", title="Queued to run")
+    return service.initial(phase="starting", title="Queued to run…", detail=None)
 
 
 _TOOL_VERB_OVERRIDES: dict[str, str] = {
