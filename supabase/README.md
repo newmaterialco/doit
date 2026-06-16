@@ -144,8 +144,8 @@ returns the caller's provisioning row + whether their agent exists, and
 `SUPABASE_SERVICE_ROLE_KEY` secret as the others.
 
 The `admin` function powers the operator dashboard (`admin/index.html`):
-`summary`, `users`, `invites`, and `create_invite` actions. Requires
-`ADMIN_SECRET` (never ship to iOS).
+`summary`, `users`, `invites`, `feedback`, `tasks`, and `create_invite`
+actions. Requires `ADMIN_SECRET` (never ship to iOS).
 
 The `task-suggestions` function powers the iOS homescreen "Suggested" tiles.
 It reads recent todo history server-side and calls OpenAI (`OPENAI_SUGGESTIONS_MODEL`,

@@ -53,6 +53,7 @@ struct SettingsView: View {
                 }
                 .animation(settingsNavigationAnimation, value: showModelPicker)
             }
+            .ignoresSafeArea(.container, edges: .bottom)
             .background(Color.white)
             .toolbar(.hidden, for: .navigationBar)
             .task { await loadModelSettings() }
@@ -99,7 +100,8 @@ struct SettingsView: View {
                             PersonRow(
                                 avatar: .agent,
                                 title: "doit",
-                                subtitle: agentLastRunSubtitle
+                                subtitle: agentLastRunSubtitle,
+                                trailingBadge: AppBuildInfo.betaLabel
                             )
                         }
                         .buttonStyle(.plain)
@@ -548,6 +550,7 @@ private struct PersonRow: View {
     let avatar: ProfileAvatar.Kind
     let title: String
     let subtitle: String
+    var trailingBadge: String? = nil
 
     var body: some View {
         HStack(spacing: 16) {
@@ -565,12 +568,36 @@ private struct PersonRow: View {
 
             Spacer()
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color(white: 0.72))
+            HStack(spacing: 8) {
+                if let trailingBadge {
+                    Text(trailingBadge)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Color.gray.opacity(0.12),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.72))
+            }
         }
         .frame(minHeight: 78)
         .padding(.horizontal, 20)
+    }
+}
+
+private enum AppBuildInfo {
+    static var betaLabel: String {
+        guard let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String,
+              !build.isEmpty else {
+            return "Beta"
+        }
+        return "Beta \(build)"
     }
 }
 

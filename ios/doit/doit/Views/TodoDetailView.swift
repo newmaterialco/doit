@@ -22,6 +22,7 @@ struct TodoDetailView: View {
     @State private var submittingOptionID: String?
     @State private var error: String?
     @State private var oauthSession: ASWebAuthenticationSession?
+    @State private var connectingToolkitSlug: String?
     @State private var attachments: [TodoAttachment] = []
     @State private var attachmentURLs: [UUID: URL] = [:]
     @State private var messages: [TodoMessage] = []
@@ -49,6 +50,9 @@ struct TodoDetailView: View {
     /// collapsed (`.topFull`); when the agent has an open follow-up we start at
     /// `chatExpandedDetent` so the question and composer are visible.
     @State private var splitDetent: SplitDetent = .topFull
+    /// Set while the user confirms delete so we don't call `dismiss()`
+    /// twice when the store removes the row before the pop finishes.
+    @State private var isDeletingTask = false
 
     /// Detent the user was sitting on when they tapped the composer. We
     /// auto-snap to `.bottomFull` while the chat field is focused so the
@@ -97,68 +101,10 @@ struct TodoDetailView: View {
     var body: some View {
         VerticalSplit(
             detent: $splitDetent,
-            topTitle: (current?.title.isEmpty == false) ? (current?.title ?? "Task") : "Task",
+            topTitle: topTitle,
             bottomTitle: "Chat",
-            topView: {
-                Group {
-                    if let current {
-                        TaskHeaderView(
-                            todo: current,
-                            artifacts: artifacts,
-                            agentStatus: openInteractionStatus,
-                            agentActivity: store.agentActivity(for: todoID),
-                            onBack: {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                dismiss()
-                            },
-                            onDelete: deleteTask,
-                            onTapActivity: openChat
-                        )
-                    } else {
-                        // Row was deleted (or RLS removed it) while we
-                        // were here — pop back to the list rather than
-                        // render a confusing empty header.
-                        Color.clear
-                            .onAppear { dismiss() }
-                    }
-                }
-            },
-            bottomView: {
-                TodoChatThread(
-                    items: conversationItems,
-                    attachmentsByID: attachmentsByID,
-                    attachmentURLs: attachmentURLs,
-                    submittingOptionID: submittingOptionID,
-                    photoSelections: $photoSelections,
-                    canAddMoreAttachments: canAddMoreAttachments,
-                    maxNewAttachments: max(1, TodoDetailView.maxAttachments - attachments.count),
-                    onTakePhoto: takePhoto,
-                    onPreviewAttachment: { attachment in
-                        if let url = attachmentURLs[attachment.id] {
-                            preview = AttachmentPreview(url: url)
-                        }
-                    },
-                    onOpenOAuth: { url in startOAuth(url: url) },
-                    onRespondInteraction: { envelope, optionID, text in
-                        guard case .todo(let interaction) = envelope else { return }
-                        Task {
-                            await respond(
-                                interaction: interaction,
-                                optionID: optionID,
-                                text: text
-                            )
-                        }
-                    },
-                    onSend: { text in
-                        Task { await send(text) }
-                    },
-                    onFocusChange: handleComposerFocusChange,
-                    onConfirmRun: confirmRun,
-                    composerReplyHint: openInteractionReplyHint,
-                    availableReferences: artifactReferences,
-                    pendingArtifactInsertion: $pendingArtifactInsertion
-                )
-            }
+            topView: { topContent },
+            bottomView: { chatContent }
         )
         .collapsedTapDetent(Self.chatExpandedDetent)
         .collapsedTopTapDetent(Self.chatTappedDetent)
@@ -249,6 +195,90 @@ struct TodoDetailView: View {
             guard !selections.isEmpty else { return }
             Task { await uploadPickedImages(selections) }
         }
+    }
+
+    private var topTitle: String {
+        guard let title = current?.title, !title.isEmpty else { return "Task" }
+        return title
+    }
+
+    @ViewBuilder
+    private var topContent: some View {
+        if let current {
+            TaskHeaderView(
+                todo: current,
+                artifacts: artifacts,
+                agentStatus: openInteractionStatus,
+                agentActivity: store.agentActivity(for: todoID),
+                onBack: {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    dismiss()
+                },
+                onDelete: deleteTask,
+                onTapActivity: openChat
+            )
+        } else if !isDeletingTask {
+            Color.clear
+                .onAppear { dismiss() }
+        } else {
+            Color.clear
+        }
+    }
+
+    private var chatAuthToolkitName: String? {
+        authToolkitSlug.map { toolkitName(for: $0) }
+    }
+
+    private var maxNewAttachmentCount: Int {
+        max(1, TodoDetailView.maxAttachments - attachments.count)
+    }
+
+    @ViewBuilder
+    private var chatContent: some View {
+        TodoChatThread(
+            items: conversationItems,
+            attachmentsByID: attachmentsByID,
+            attachmentURLs: attachmentURLs,
+            submittingOptionID: submittingOptionID,
+            photoSelections: $photoSelections,
+            canAddMoreAttachments: canAddMoreAttachments,
+            maxNewAttachments: maxNewAttachmentCount,
+            onTakePhoto: takePhoto,
+            onPreviewAttachment: previewAttachment,
+            onOpenOAuth: startOAuth,
+            authToolkitSlug: authToolkitSlug,
+            authToolkitName: chatAuthToolkitName,
+            connectingToolkitSlug: connectingToolkitSlug,
+            onConnectToolkit: connectToolkit,
+            onRespondInteraction: handleInteractionResponse,
+            onSend: handleChatSend,
+            onFocusChange: handleComposerFocusChange,
+            onConfirmRun: confirmRun,
+            composerReplyHint: openInteractionReplyHint,
+            availableReferences: artifactReferences,
+            pendingArtifactInsertion: $pendingArtifactInsertion
+        )
+    }
+
+    private func previewAttachment(_ attachment: TodoAttachment) {
+        if let url = attachmentURLs[attachment.id] {
+            preview = AttachmentPreview(url: url)
+        }
+    }
+
+    private func handleInteractionResponse(
+        _ envelope: ChatInteractionEnvelope,
+        optionID: String?,
+        text: String?
+    ) {
+        guard case .todo(let interaction) = envelope else { return }
+        Task {
+            await respond(interaction: interaction, optionID: optionID, text: text)
+        }
+    }
+
+    private func handleChatSend(_ text: String) {
+        Task { await send(text) }
     }
 
     // MARK: - Derived chat data
@@ -372,6 +402,8 @@ struct TodoDetailView: View {
     /// with the network round-trip — the row is already gone client-side
     /// via the store by the time the list view re-renders.
     private func deleteTask() {
+        guard !isDeletingTask else { return }
+        isDeletingTask = true
         let id = todoID
         dismiss()
         Task { await store.deleteTodo(id) }
@@ -487,18 +519,105 @@ struct TodoDetailView: View {
         Task { await store.setStatus(todoID, .requested) }
     }
 
+    private var authToolkitSlug: String? {
+        guard current?.status == .needs_auth else { return nil }
+        let slug = current?.connection_slug?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (slug?.isEmpty == false) ? slug : nil
+    }
+
     private func startOAuth(url: URL) {
-        let session = ASWebAuthenticationSession(
-            url: url,
-            callbackURLScheme: nil
-        ) { _, _ in
-            // The user finishes in the browser; Composio holds the tokens.
-            // They can re-tap "Do it" to resume.
+        Task {
+            await runOAuthAndMaybeResume(url: url, toolkitSlug: authToolkitSlug)
         }
-        session.prefersEphemeralWebBrowserSession = false
-        session.presentationContextProvider = PresentationContextProvider.shared
-        oauthSession = session
-        session.start()
+    }
+
+    private func connectToolkit(_ slug: String) {
+        Task { await connectToolkitAndResume(slug) }
+    }
+
+    private func connectToolkitAndResume(_ slug: String) async {
+        let normalizedSlug = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSlug.isEmpty else { return }
+        connectingToolkitSlug = normalizedSlug
+        error = nil
+        defer { connectingToolkitSlug = nil }
+
+        do {
+            let result = try await IntegrationsAPI.connect(toolkit: normalizedSlug)
+            guard let urlString = result.redirect_url,
+                  let url = URL(string: urlString) else {
+                error = "Couldn't start the \(toolkitName(for: normalizedSlug)) connection."
+                return
+            }
+            await runOAuthAndMaybeResume(
+                url: url,
+                toolkitSlug: normalizedSlug,
+                showConnectionError: true
+            )
+        } catch {
+            self.error = "Couldn't start the \(toolkitName(for: normalizedSlug)) connection: \(error.localizedDescription)"
+        }
+    }
+
+    private func runOAuthAndMaybeResume(
+        url: URL,
+        toolkitSlug: String?,
+        showConnectionError: Bool = false
+    ) async {
+        await runOAuthSession(url: url)
+        guard let toolkitSlug else { return }
+
+        do {
+            let toolkits = try await IntegrationsAPI.list()
+            if toolkits.contains(where: { $0.slug == toolkitSlug && $0.connected }) {
+                await store.setStatus(todoID, .requested)
+                error = nil
+            } else if showConnectionError {
+                error = "Finish connecting \(toolkitName(for: toolkitSlug)) to continue this task."
+            }
+        } catch {
+            self.error = "Couldn't verify the \(toolkitName(for: toolkitSlug)) connection: \(error.localizedDescription)"
+        }
+    }
+
+    private func runOAuthSession(url: URL) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let session = ASWebAuthenticationSession(
+                url: url,
+                callbackURLScheme: nil
+            ) { _, _ in
+                cont.resume()
+            }
+            session.prefersEphemeralWebBrowserSession = false
+            session.presentationContextProvider = PresentationContextProvider.shared
+            oauthSession = session
+            if !session.start() {
+                cont.resume()
+            }
+        }
+    }
+
+    private func toolkitName(for slug: String) -> String {
+        if let cached = IntegrationsAPI.cachedToolkits?
+            .first(where: { $0.slug == slug })?
+            .name {
+            return cached
+        }
+        switch slug {
+        case "gmail": return "Gmail"
+        case "googlecalendar": return "Google Calendar"
+        case "googledrive": return "Google Drive"
+        case "googledocs": return "Google Docs"
+        case "googlesheets": return "Google Sheets"
+        case "github": return "GitHub"
+        case "linkedin": return "LinkedIn"
+        default:
+            return slug
+                .replacingOccurrences(of: "_", with: " ")
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        }
     }
 
     // MARK: - Loading + realtime

@@ -486,6 +486,15 @@ def _final_or_interaction(text: str) -> Translated:
             final_text=text,
             interaction=interaction,
         )
+    oauth_url = _looks_like_oauth_url(text, None)
+    if oauth_url:
+        return Translated(
+            step_kind="oauth_needed",
+            text="Connect an account to continue.",
+            url=oauth_url,
+            new_status="needs_auth",
+            final_text=text,
+        )
     # Real final: parse artifacts and spawn-task blocks out of the reply.
     artifacts = parse_artifacts(text)
     spawned_tasks = parse_spawned_tasks(text)

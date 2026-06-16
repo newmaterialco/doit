@@ -39,6 +39,10 @@ struct TodoChatThread: View {
     let onTakePhoto: () -> Void
     let onPreviewAttachment: (TodoAttachment) -> Void
     let onOpenOAuth: (URL) -> Void
+    let authToolkitSlug: String?
+    let authToolkitName: String?
+    let connectingToolkitSlug: String?
+    let onConnectToolkit: (String) -> Void
     let onRespondInteraction: (_ interaction: ChatInteractionEnvelope, _ optionID: String?, _ text: String?) -> Void
     let onSend: (String) -> Void
     let onFocusChange: (Bool) -> Void
@@ -74,6 +78,10 @@ struct TodoChatThread: View {
         onTakePhoto: @escaping () -> Void,
         onPreviewAttachment: @escaping (TodoAttachment) -> Void,
         onOpenOAuth: @escaping (URL) -> Void,
+        authToolkitSlug: String? = nil,
+        authToolkitName: String? = nil,
+        connectingToolkitSlug: String? = nil,
+        onConnectToolkit: @escaping (String) -> Void = { _ in },
         onRespondInteraction: @escaping (_ interaction: ChatInteractionEnvelope, _ optionID: String?, _ text: String?) -> Void,
         onSend: @escaping (String) -> Void,
         onFocusChange: @escaping (Bool) -> Void,
@@ -92,6 +100,10 @@ struct TodoChatThread: View {
         self.onTakePhoto = onTakePhoto
         self.onPreviewAttachment = onPreviewAttachment
         self.onOpenOAuth = onOpenOAuth
+        self.authToolkitSlug = authToolkitSlug
+        self.authToolkitName = authToolkitName
+        self.connectingToolkitSlug = connectingToolkitSlug
+        self.onConnectToolkit = onConnectToolkit
         self.onRespondInteraction = onRespondInteraction
         self.onSend = onSend
         self.onFocusChange = onFocusChange
@@ -217,7 +229,15 @@ struct TodoChatThread: View {
         case .userMessage(_, let text, _):
             UserTextBubble(text: text)
         case .agentStep(let step):
-            AgentStepMessage(step: step, onOpenOAuth: onOpenOAuth)
+            AgentStepMessage(
+                step: step,
+                authToolkitSlug: authToolkitSlug,
+                authToolkitName: authToolkitName,
+                isConnectingToolkit: authToolkitSlug != nil
+                    && authToolkitSlug == connectingToolkitSlug,
+                onOpenOAuth: onOpenOAuth,
+                onConnectToolkit: onConnectToolkit
+            )
         case .agentThinking(let label):
             AgentThinkingMessage(label: label)
         case .agentInteraction(let interaction):
@@ -385,18 +405,33 @@ private struct AgentStepMessage: View {
     let timestamp: Date
     let toolName: String?
     let oauthURL: URL?
+    let authToolkitSlug: String?
+    let authToolkitName: String?
+    let isConnectingToolkit: Bool
     let onOpenOAuth: (URL) -> Void
+    let onConnectToolkit: (String) -> Void
 
-    init(step: TodoStep, onOpenOAuth: @escaping (URL) -> Void) {
+    init(
+        step: TodoStep,
+        authToolkitSlug: String?,
+        authToolkitName: String?,
+        isConnectingToolkit: Bool,
+        onOpenOAuth: @escaping (URL) -> Void,
+        onConnectToolkit: @escaping (String) -> Void
+    ) {
         self.bodyText = AgentReplyText.normalize(step.text ?? "")
         self.timestamp = step.ts
         self.toolName = step.tool_name
+        self.authToolkitSlug = authToolkitSlug
+        self.authToolkitName = authToolkitName
+        self.isConnectingToolkit = isConnectingToolkit
         if step.kind == .oauth_needed, let urlStr = step.url {
             self.oauthURL = URL(string: urlStr)
         } else {
             self.oauthURL = nil
         }
         self.onOpenOAuth = onOpenOAuth
+        self.onConnectToolkit = onConnectToolkit
     }
 
     var body: some View {
@@ -410,27 +445,58 @@ private struct AgentStepMessage: View {
                 MarkdownMessageText(text: bodyText)
             }
             if let url = oauthURL {
-                Button {
-                    onOpenOAuth(url)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "key.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Open authorization link")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                    }
-                    .foregroundStyle(Color.orange)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 12)
-                    .background(Color.orange.opacity(0.12), in: Capsule())
-                }
-                .buttonStyle(.plain)
+                oauthButton(url: url)
             }
             Text(timestamp.formatted(date: .omitted, time: .shortened))
                 .font(.system(size: 11, weight: .regular, design: .rounded))
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func oauthButton(url: URL) -> some View {
+        if let slug = authToolkitSlug, !slug.isEmpty {
+            Button {
+                onConnectToolkit(slug)
+            } label: {
+                HStack(spacing: 8) {
+                    if isConnectingToolkit {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(slug)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 16, height: 16)
+                    }
+                    Text("Connect \(authToolkitName ?? prettify(slug))")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(Color.orange)
+                .padding(.vertical, 9)
+                .padding(.horizontal, 13)
+                .background(Color.orange.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isConnectingToolkit)
+        } else {
+            Button {
+                onOpenOAuth(url)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Open authorization link")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(Color.orange)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(Color.orange.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private func prettify(_ name: String) -> String {

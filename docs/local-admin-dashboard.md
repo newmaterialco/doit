@@ -9,8 +9,9 @@ HTML file talks to a Supabase Edge Function.
 | Path | Role |
 | --- | --- |
 | [`admin/index.html`](../admin/index.html) | Dashboard UI (open in any browser) |
-| [`supabase/functions/admin/index.ts`](../supabase/functions/admin/index.ts) | JSON API (`summary`, `users`, `invites`, `feedback`, `create_invite`) |
+| [`supabase/functions/admin/index.ts`](../supabase/functions/admin/index.ts) | JSON API (`summary`, `users`, `invites`, `feedback`, `tasks`, `create_invite`) |
 | [`supabase/migrations/20240601000027_admin_user_stats.sql`](../supabase/migrations/20240601000027_admin_user_stats.sql) | Postgres RPCs for aggregates |
+| [`supabase/migrations/20240601000030_admin_todos_list.sql`](../supabase/migrations/20240601000030_admin_todos_list.sql) | Paginated task list RPC |
 
 ## Quick start
 
@@ -54,6 +55,27 @@ Beta users submit feedback from **Settings → Feedback** in the iOS app.
 | **User** | Supabase user id prefix |
 | **Email** | Contact email if the user opted in; otherwise "Not shared" |
 | **Device** | App version and iOS version |
+
+### Tasks
+
+Browse every todo users have created — what they asked Doit to do, when, and
+by whom. Loads independently from the rest of the dashboard (50 per page).
+
+| Column | Meaning |
+| --- | --- |
+| **Created** | `todos.created_at` |
+| **User** | Sign-in email from `auth.users` |
+| **Request** | Raw prompt (`original_title`, falling back to `title`); hover for full text and preparation summary |
+| **Status** | Current todo status |
+| **Integration** | Composio toolkit slug if the prep phase picked one (e.g. `gmail`) |
+| **Tokens** | `todos.total_tokens` for that task |
+
+**Filters:** text search (prompt or preparation summary), user, status,
+integration slug. **Clear** resets all filters. **Previous** / **Next**
+paginate through the full result set.
+
+Operator-only: same privacy model as Feedback — you see verbatim user
+prompts to understand product usage during beta.
 
 ### Invite codes
 
@@ -118,6 +140,18 @@ Then re-enter the new value in the dashboard login screen.
 The admin function also needs `SUPABASE_SERVICE_ROLE_KEY` (same as other
 Edge Functions). That is usually already set if `onboarding` works.
 
+### Updating the dashboard
+
+After pulling admin dashboard changes (new RPC or Edge Function action):
+
+```bash
+supabase db push                                    # applies pending migrations
+supabase functions deploy admin
+```
+
+No runner deploy, iOS rebuild, or secret rotation needed unless this is a
+fresh project.
+
 ## API reference (for debugging)
 
 All actions are `POST` to the function URL with JSON body `{ "action": "…" }`.
@@ -139,6 +173,7 @@ All actions are `POST` to the function URL with JSON body `{ "action": "…" }`.
 | `users` | — | `{ users: [...] }` |
 | `invites` | — | `{ invites: [...] }` with `status` and `redeemers` |
 | `feedback` | — | `{ feedback: [...] }` (latest 200, newest first) |
+| `tasks` | `limit?`, `offset?`, `search?`, `status?`, `user_id?`, `connection_slug?` | `{ tasks: [...] }` (paginated, newest first; each row includes `total_count`) |
 | `create_invite` | `note?`, `max_uses?`, `expires_at?`, `code?` | `{ invite: {...} }` |
 
 Example (replace secret and use your project anon key):
@@ -150,6 +185,17 @@ curl -s -X POST "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin" \
   -H "apikey: <anon>" \
   -H "X-Admin-Secret: <ADMIN_SECRET>" \
   -d '{"action":"summary"}'
+```
+
+List tasks (paginated, optional filters):
+
+```bash
+curl -s -X POST "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <anon>" \
+  -H "apikey: <anon>" \
+  -H "X-Admin-Secret: <ADMIN_SECRET>" \
+  -d '{"action":"tasks","limit":50,"offset":0,"search":"email","status":"done"}'
 ```
 
 ## Security notes
@@ -176,6 +222,9 @@ curl -s -X POST "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin" \
 | Invite list empty | Normal if all users were provisioned before invite codes; generate a new code to verify |
 | User has no invite code | Manual provisioning or backfilled `ready` row without redemption |
 | Redeemers show relay email | Sign in with Apple private relay — expected |
+| Tasks show "Deploy the updated admin function…" | Run `supabase functions deploy admin` |
+| Tasks table empty with filters set | Click **Clear** or loosen search/status/user/integration filters |
+| `unknown_action` on tasks | Redeploy admin Edge Function; hard-refresh the HTML file |
 
 ## Manual SQL fallback
 

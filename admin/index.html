@@ -138,6 +138,18 @@
     #login-panel { max-width: 420px; margin: 4rem auto; }
     .hidden { display: none !important; }
     .table-wrap { overflow-x: auto; }
+    .pagination {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }
+    .tasks-toolbar label { min-width: 0; }
+    .tasks-toolbar input[type="search"],
+    .tasks-toolbar select { min-width: 8rem; }
+    #tasks-search { min-width: 12rem; flex: 1; }
+    #tasks-connection { width: 7rem; }
   </style>
 </head>
 <body>
@@ -190,6 +202,61 @@
             </thead>
             <tbody></tbody>
           </table>
+        </div>
+      </section>
+
+      <section id="tasks-section">
+        <h2>Tasks</h2>
+        <form id="tasks-toolbar" class="toolbar tasks-toolbar">
+          <label style="flex:1">Search
+            <input id="tasks-search" type="search" placeholder="prompt or summary" autocomplete="off" />
+          </label>
+          <label>User
+            <select id="tasks-user">
+              <option value="">All users</option>
+            </select>
+          </label>
+          <label>Status
+            <select id="tasks-status">
+              <option value="">All</option>
+              <option value="preparing">preparing</option>
+              <option value="todo">todo</option>
+              <option value="requested">requested</option>
+              <option value="running">running</option>
+              <option value="needs_input">needs_input</option>
+              <option value="needs_auth">needs_auth</option>
+              <option value="done">done</option>
+              <option value="failed">failed</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+          </label>
+          <label>Integration
+            <input id="tasks-connection" type="text" placeholder="gmail" autocomplete="off" />
+          </label>
+          <button type="submit">Search</button>
+          <button type="button" id="tasks-clear-btn" class="secondary">Clear</button>
+        </form>
+        <p id="tasks-loading" class="muted hidden">Loading tasks…</p>
+        <p id="tasks-error" class="error hidden"></p>
+        <div class="table-wrap">
+          <table id="tasks-table">
+            <thead>
+              <tr>
+                <th>Created</th>
+                <th>User</th>
+                <th>Request</th>
+                <th>Status</th>
+                <th>Integration</th>
+                <th>Tokens</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button type="button" id="tasks-prev-btn" class="secondary" disabled>Previous</button>
+          <button type="button" id="tasks-next-btn" class="secondary" disabled>Next</button>
+          <span id="tasks-page-label" class="muted">—</span>
         </div>
       </section>
 
@@ -266,8 +333,24 @@
     const URL_KEY = "doit_admin_url";
 
     let invitesCache = [];
+    let usersCache = [];
+    const TASKS_PAGE_SIZE = 50;
+    let tasksOffset = 0;
+    let tasksTotalCount = 0;
 
     function $(id) { return document.getElementById(id); }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function escapeAttr(text) {
+      return escapeHtml(text).replace(/'/g, "&#39;");
+    }
 
     function fmtDate(value) {
       if (!value) return "—";
@@ -341,6 +424,100 @@
     function renderFeedbackUnavailable() {
       const tbody = $("feedback-table").querySelector("tbody");
       tbody.innerHTML = `<tr><td colspan="5" class="muted">Deploy the updated admin function to load feedback.</td></tr>`;
+    }
+
+    function populateTasksUserFilter(users) {
+      const select = $("tasks-user");
+      const current = select.value;
+      select.innerHTML = `<option value="">All users</option>` +
+        (users || []).map(u => {
+          const label = u.email || u.user_id;
+          return `<option value="${escapeAttr(u.user_id)}">${escapeHtml(label)}</option>`;
+        }).join("");
+      if (current && [...select.options].some(o => o.value === current)) {
+        select.value = current;
+      }
+    }
+
+    function tasksFilterPayload() {
+      const search = $("tasks-search").value.trim();
+      const userId = $("tasks-user").value.trim();
+      const status = $("tasks-status").value.trim();
+      const connection = $("tasks-connection").value.trim();
+      const payload = { limit: TASKS_PAGE_SIZE, offset: tasksOffset };
+      if (search) payload.search = search;
+      if (userId) payload.user_id = userId;
+      if (status) payload.status = status;
+      if (connection) payload.connection_slug = connection;
+      return payload;
+    }
+
+    function renderTasksUnavailable() {
+      $("tasks-loading").classList.add("hidden");
+      const tbody = $("tasks-table").querySelector("tbody");
+      tbody.innerHTML = `<tr><td colspan="6" class="muted">Deploy the updated admin function to load tasks.</td></tr>`;
+      $("tasks-page-label").textContent = "—";
+      $("tasks-prev-btn").disabled = true;
+      $("tasks-next-btn").disabled = true;
+    }
+
+    function renderTasks(tasks) {
+      $("tasks-loading").classList.add("hidden");
+      const tbody = $("tasks-table").querySelector("tbody");
+      tasksTotalCount = tasks.length > 0 ? Number(tasks[0].total_count ?? 0) : 0;
+
+      tbody.innerHTML = (tasks || []).map(task => {
+        const request = task.original_title || task.title || "";
+        const preview = request.length > 120 ? `${request.slice(0, 120)}…` : request;
+        const tooltipParts = [request];
+        if (task.preparation_summary) {
+          tooltipParts.push("", `Summary: ${task.preparation_summary}`);
+        }
+        const tooltip = tooltipParts.join("\n");
+        return `<tr>
+          <td>${fmtDate(task.created_at)}</td>
+          <td>${escapeHtml(task.user_email || shortUserID(task.user_id))}</td>
+          <td title="${escapeAttr(tooltip)}">${escapeHtml(preview) || "—"}</td>
+          <td>${task.status ? badge(task.status) : "—"}</td>
+          <td>${task.connection_slug ? `<code>${escapeHtml(task.connection_slug)}</code>` : "—"}</td>
+          <td>${task.total_tokens ?? 0}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="6" class="muted">No tasks match these filters</td></tr>`;
+
+      const start = tasksTotalCount === 0 ? 0 : tasksOffset + 1;
+      const end = tasksOffset + (tasks?.length ?? 0);
+      $("tasks-page-label").textContent = tasksTotalCount === 0
+        ? "No tasks"
+        : `Showing ${start}–${end} of ${tasksTotalCount}`;
+      $("tasks-prev-btn").disabled = tasksOffset <= 0;
+      $("tasks-next-btn").disabled = end >= tasksTotalCount;
+    }
+
+    async function loadTasks() {
+      $("tasks-error").classList.add("hidden");
+      $("tasks-loading").classList.remove("hidden");
+      $("tasks-prev-btn").disabled = true;
+      $("tasks-next-btn").disabled = true;
+      try {
+        const resp = await api("tasks", tasksFilterPayload());
+        renderTasks(resp.tasks || []);
+      } catch (err) {
+        $("tasks-loading").classList.add("hidden");
+        if (isUnknownAction(err)) {
+          renderTasksUnavailable();
+        } else {
+          $("tasks-error").textContent = String(err.message || err);
+          $("tasks-error").classList.remove("hidden");
+        }
+      }
+    }
+
+    function resetTasksFilters() {
+      $("tasks-search").value = "";
+      $("tasks-user").value = "";
+      $("tasks-status").value = "";
+      $("tasks-connection").value = "";
+      tasksOffset = 0;
     }
 
     function renderStats(summary) {
@@ -417,9 +594,13 @@
           api("invites"),
         ]);
         renderStats(summary);
-        renderUsers(usersResp.users);
+        usersCache = usersResp.users || [];
+        renderUsers(usersCache);
+        populateTasksUserFilter(usersCache);
         invitesCache = invitesResp.invites || [];
         renderInvites();
+
+        loadTasks();
 
         try {
           const feedbackResp = await api("feedback");
@@ -469,6 +650,29 @@
     $("logout-btn").addEventListener("click", showLogin);
     $("refresh-btn").addEventListener("click", loadDashboard);
     $("invite-filter").addEventListener("change", renderInvites);
+
+    $("tasks-toolbar").addEventListener("submit", (e) => {
+      e.preventDefault();
+      tasksOffset = 0;
+      loadTasks();
+    });
+
+    $("tasks-clear-btn").addEventListener("click", () => {
+      resetTasksFilters();
+      loadTasks();
+    });
+
+    $("tasks-prev-btn").addEventListener("click", () => {
+      tasksOffset = Math.max(0, tasksOffset - TASKS_PAGE_SIZE);
+      loadTasks();
+    });
+
+    $("tasks-next-btn").addEventListener("click", () => {
+      if (tasksOffset + TASKS_PAGE_SIZE < tasksTotalCount) {
+        tasksOffset += TASKS_PAGE_SIZE;
+        loadTasks();
+      }
+    });
 
     $("invite-form").addEventListener("submit", async (e) => {
       e.preventDefault();

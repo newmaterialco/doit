@@ -4,6 +4,8 @@ import SwiftUI
 /// done (RootView swaps to the task list when `OnboardingModel.isReady`
 /// flips). Failure shows a friendly retry.
 struct OnboardingView: View {
+    private static let waitlistURL = URL(string: "https://www.getdoit.co")!
+
     @Environment(OnboardingModel.self) private var onboarding
     @Environment(AuthModel.self) private var auth
 
@@ -72,6 +74,13 @@ struct OnboardingView: View {
                     RoundedRectangle(cornerRadius: 14)
                         .fill(Color(.secondarySystemBackground))
                 )
+
+            HStack(spacing: 0) {
+                Text("No code? Join the waitlist ")
+                    .foregroundStyle(.secondary)
+                Link("here", destination: Self.waitlistURL)
+            }
+            .font(.footnote)
 
             if let error = onboarding.inviteError {
                 Text(error)

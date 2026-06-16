@@ -333,6 +333,23 @@ class PublicActivityTests(unittest.TestCase):
         self.assertEqual(result.step_kind, "final")
         self.assertEqual(result.text, "Done — I updated the rules.")
 
+    def test_final_reply_with_connection_link_pauses_for_oauth(self) -> None:
+        result = translate(
+            "run.completed",
+            {
+                "event": "run.completed",
+                "output": (
+                    "Please connect your Gmail account: "
+                    "https://connect.composio.dev/link/abc123"
+                ),
+            },
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.step_kind, "oauth_needed")
+        self.assertEqual(result.new_status, "needs_auth")
+        self.assertEqual(result.url, "https://connect.composio.dev/link/abc123")
+
 
 class ExtractUsageTotalTests(unittest.TestCase):
     """Hermes Runs API uses input/output/total_tokens; chat.completions

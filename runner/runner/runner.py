@@ -89,6 +89,49 @@ from .schedule import compute_next_run
 log = logging.getLogger(__name__)
 
 
+def _hermes_http_failure_message(error: httpx.HTTPError) -> tuple[str, str]:
+    """Return (user-facing todo error, step/activity detail) for Hermes failures."""
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status == 401:
+            message = (
+                "Agent gateway authentication failed. Ask an admin to repair your "
+                "Hermes profile and retry this task."
+            )
+            detail = (
+                "The agent gateway rejected the runner credentials. Re-run "
+                "provisioning for this user or restart the profile after syncing "
+                "API_SERVER_KEY."
+            )
+            return message, detail
+        if status == 403:
+            message = (
+                "Agent gateway authorization failed. Ask an admin to check this "
+                "Hermes profile and retry this task."
+            )
+            detail = "The agent gateway rejected the runner request with HTTP 403."
+            return message, detail
+        if 500 <= status:
+            message = "Agent gateway is unavailable. Please retry this task in a moment."
+            detail = f"The agent gateway returned HTTP {status}."
+            return message, detail
+        message = "Agent gateway rejected the task request. Please retry this task."
+        detail = f"The agent gateway returned HTTP {status}."
+        return message, detail
+
+    if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)):
+        message = "Agent gateway is not reachable. Please retry this task in a moment."
+        detail = "The runner could not connect to the local Hermes gateway."
+        return message, detail
+
+    if isinstance(error, httpx.TimeoutException):
+        message = "Agent gateway timed out. Please retry this task in a moment."
+        detail = "The runner timed out while talking to the Hermes gateway."
+        return message, detail
+
+    return "Agent gateway failed to start this task.", str(error)
+
+
 def setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -592,24 +635,26 @@ async def run_one_todo(
             )
 
     except httpx.HTTPError as e:
+        failure_message, failure_detail = _hermes_http_failure_message(e)
         log.exception(
-            "hermes call failed for todo %s profile=%s endpoint=%s:%s model=%s",
+            "hermes call failed for todo %s profile=%s endpoint=%s:%s model=%s user_message=%r",
             todo_id,
             endpoint.profile_name,
             endpoint.host,
             endpoint.port,
             _model_setting_label(model_setting),
+            failure_message,
         )
         terminal_status = "failed"
         db.update_todo(
             todo_id,
-            {"status": "failed", "error_message": f"Hermes error: {e}"},
+            {"status": "failed", "error_message": failure_message},
         )
         db.insert_step(
             todo_id=todo_id,
             user_id=user_id,
             kind="error",
-            text=f"Couldn't reach the agent: {e}",
+            text=f"Couldn't reach the agent: {failure_detail}",
         )
         _write_activity(
             db,
@@ -619,7 +664,7 @@ async def run_one_todo(
                 state="failed",
                 phase="failed",
                 title="Couldn't reach the agent",
-                detail=str(e),
+                detail=failure_detail,
             ),
             hermes_run_id=run_id,
         )

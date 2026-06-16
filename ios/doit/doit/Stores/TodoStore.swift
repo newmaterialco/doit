@@ -797,10 +797,18 @@ final class TodoStore {
         artifactsByTodoID.removeValue(forKey: id)
         interactionsByTodoID.removeValue(forKey: id)
         agentActivityByTodoID.removeValue(forKey: id)
-        notifyCronHandoffIfNeeded()
-        // Don't clear pendingNewTodoID here; the list observer treats
-        // "pending row vanished" + "new cron arrived" as a signal to flip
-        // sections.
+        if id == pendingNewTodoID {
+            // A manual delete of the pending prep card is not a cron handoff.
+            // Clear the marker so the list doesn't keep reconciling a row that
+            // will never come back.
+            if pendingNewTodoCronCandidateID() != nil {
+                notifyCronHandoffIfNeeded()
+            } else {
+                clearPendingNewTodo()
+            }
+        } else {
+            notifyCronHandoffIfNeeded()
+        }
     }
 
     private func upsertCronJob(_ job: CronJob) {

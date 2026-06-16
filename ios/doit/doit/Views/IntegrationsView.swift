@@ -2,7 +2,6 @@ import AuthenticationServices
 import SwiftUI
 
 struct IntegrationsView: View {
-    @Environment(\.safeAreaInsets) private var safeAreaInsets
     @State private var toolkits: [Toolkit] = []
     @State private var loading = true
     @State private var error: String?
@@ -49,13 +48,13 @@ struct IntegrationsView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 20)
                         .padding(.top, 14)
-                        .padding(.bottom, max(24, safeAreaInsets.bottom + 8))
+                        .padding(.bottom, 24)
                 }
             }
         }
-        .scrollContentBackground(.hidden)
-        .safeAreaPadding(.bottom, 0)
         .background(Color.white.ignoresSafeArea())
+        .ignoresSafeArea(.container, edges: .bottom)
+        .scrollContentBackground(.hidden)
         .navigationTitle("Connections")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load(showSpinner: toolkits.isEmpty) }

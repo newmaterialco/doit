@@ -8,6 +8,8 @@
 //   { action: "users" }    -> auth.admin.listUsers + admin_user_stats()
 //   { action: "invites" }  -> admin_invite_codes()
 //   { action: "feedback" } -> { feedback: [...] }
+//   { action: "tasks", limit?, offset?, search?, status?, user_id?, connection_slug? }
+//                          -> { tasks: [...] }
 //   { action: "create_invite", note?, max_uses?, expires_at? }
 //                          -> inserts invite_codes (auto-generates code if omitted)
 
@@ -49,6 +51,12 @@ function generateInviteCode(): string {
     return `DOIT-${suffix}`;
 }
 
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
 function normalizeExpiresAt(value: unknown): string | null {
     if (value === null || value === undefined || value === "") {
         return null;
@@ -87,6 +95,12 @@ serve(async (req) => {
         note?: string;
         max_uses?: number;
         expires_at?: string | null;
+        limit?: number;
+        offset?: number;
+        search?: string;
+        status?: string;
+        user_id?: string;
+        connection_slug?: string;
     };
     try {
         body = await req.json();
@@ -165,6 +179,24 @@ serve(async (req) => {
                     .limit(200);
                 if (error) throw error;
                 return json({ feedback: data ?? [] });
+            }
+            case "tasks": {
+                const limit = clampInt(body.limit, 1, 100, 50);
+                const offset = clampInt(body.offset, 0, 1_000_000, 0);
+                const search = (body.search ?? "").trim() || null;
+                const status = (body.status ?? "").trim() || null;
+                const userId = (body.user_id ?? "").trim() || null;
+                const connectionSlug = (body.connection_slug ?? "").trim() || null;
+                const { data, error } = await serviceClient.rpc("admin_todos_list", {
+                    p_limit: limit,
+                    p_offset: offset,
+                    p_search: search,
+                    p_status: status,
+                    p_user_id: userId,
+                    p_connection_slug: connectionSlug,
+                });
+                if (error) throw error;
+                return json({ tasks: data ?? [] });
             }
             case "create_invite": {
                 const note = (body.note ?? "").trim() || null;

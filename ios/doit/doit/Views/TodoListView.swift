@@ -54,6 +54,7 @@ struct TodoListView: View {
     @State private var passbookMemoryIsEditing = false
     @State private var passbookMemoryDraftTitle = ""
     @State private var passbookMemoryDraftBody = ""
+    @AppStorage("onboarding.connectionsPromoDismissed") private var connectionsPromoDismissed = false
     @State private var exploreToolkits: [Toolkit] = []
     @State private var exploreToolkitsLoading = true
     @State private var exploreToolkitsHasLoaded = false
@@ -161,7 +162,14 @@ struct TodoListView: View {
                 .onChange(of: scenePhase) { oldPhase, newPhase in
                     print("[list] scenePhase \(oldPhase)→\(newPhase)")
                     guard newPhase == .active else { return }
-                    Task { await store.loadAll() }
+                    Task {
+                        await store.loadAll()
+                        await refreshConnectionsPromoState()
+                    }
+                }
+                .onChange(of: hasAnyConnection) { _, connected in
+                    guard connected else { return }
+                    dismissConnectionsPromo()
                 }
                 .onChange(of: cronHandoffSignature) { _, _ in
                     reconcilePendingCronHandoff()
@@ -265,25 +273,40 @@ struct TodoListView: View {
 
                 Spacer()
 
-                Button {
-                    playFirmHaptic()
-                    presentSettings()
-                } label: {
-                    ProfileAvatar(
-                        kind: .user(
-                            initials: auth.initials,
-                            imageData: auth.avatarImageData,
-                            url: auth.avatarURL
-                        ),
-                        size: 32
-                    )
-                    .overlay {
-                        Circle()
-                            .stroke(Color.gray.opacity(0.16), lineWidth: 2.5)
+                HStack(spacing: 8) {
+                    Button {
+                        playFirmHaptic()
+                        presentSettings(route: .feedback)
+                    } label: {
+                        Image(systemName: "ladybug.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Color.gray.opacity(0.55))
+                            .frame(width: 32, height: 32)
+                            .background(Color.gray.opacity(0.12), in: Circle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Beta feedback")
+
+                    Button {
+                        playFirmHaptic()
+                        presentSettings()
+                    } label: {
+                        ProfileAvatar(
+                            kind: .user(
+                                initials: auth.initials,
+                                imageData: auth.avatarImageData,
+                                url: auth.avatarURL
+                            ),
+                            size: 32
+                        )
+                        .overlay {
+                            Circle()
+                                .stroke(Color.gray.opacity(0.16), lineWidth: 2.5)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Profile")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Profile")
             }
             .padding(.horizontal, 16)
             .padding(.top, 10)
@@ -350,11 +373,16 @@ struct TodoListView: View {
                         .padding(.bottom, 2)
                     }
 
-                    if !hasAnyConnection {
-                        ExploreConnectionsPromoCard {
-                            presentSettings(route: .connections)
-                        }
+                    if shouldShowConnectionsPromo {
+                        ExploreConnectionsPromoCard(
+                            onSetup: {
+                                dismissConnectionsPromo()
+                                presentSettings(route: .connections)
+                            },
+                            onDismiss: dismissConnectionsPromo
+                        )
                         .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 10)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
                     completedTasksSection(completedItems)
@@ -364,9 +392,17 @@ struct TodoListView: View {
                 .padding(.top, 116)
                 .padding(.bottom, 96)
                 .animation(.smooth(duration: 0.34), value: taskLayoutSignature)
+                .animation(.smooth(duration: 0.34), value: shouldShowConnectionsPromo)
             }
             .refreshable {
                 await store.loadAll()
+            }
+            .onChange(of: store.todos.isEmpty) { wasEmpty, isEmpty in
+                guard isEmpty, !wasEmpty else { return }
+                centeredSuggestedTaskID = nil
+                completedActivityPageHeights.removeAll()
+                selectedCompletedActivityFilter = .allActivity
+                selectedCompletedActivityPageID = .allActivity
             }
             .task {
                 await loadInitialSuggestionsIfNeeded()
@@ -386,6 +422,15 @@ struct TodoListView: View {
 
     private var hasAnyConnection: Bool {
         exploreToolkits.contains { $0.isConnectable && $0.connected }
+    }
+
+    private var shouldShowConnectionsPromo: Bool {
+        guard exploreToolkitsHasLoaded, !connectionsPromoDismissed else { return false }
+        return !hasAnyConnection
+    }
+
+    private func dismissConnectionsPromo() {
+        connectionsPromoDismissed = true
     }
 
     @ViewBuilder
@@ -858,8 +903,16 @@ struct TodoListView: View {
             if !settingsSheetIsVisible {
                 showSettings = false
                 settingsInitialRoute = nil
+                Task { await refreshConnectionsPromoState() }
             }
         }
+    }
+
+    private func refreshConnectionsPromoState() async {
+        if let cached = IntegrationsAPI.cachedToolkits {
+            exploreToolkits = cached
+        }
+        await loadExploreToolkits(showSpinner: false, force: true)
     }
 
     private var suggestedInfoBackdrop: some View {
@@ -1176,8 +1229,11 @@ struct TodoListView: View {
         if suggestedTasks.isEmpty && !suggestionsLoading && suggestionsHasLoaded {
             return fallbackSuggestedTasks()
         }
-        if suggestionsLoading || suggestionsHasLoaded {
-            return suggestedTasks + [.loader]
+        if suggestionsLoading {
+            return suggestedTasks.isEmpty ? [.loader] : suggestedTasks + [.loader]
+        }
+        if suggestionsHasLoaded {
+            return suggestedTasks.isEmpty ? [] : suggestedTasks + [.loader]
         }
         return [.loader]
     }
@@ -1960,9 +2016,11 @@ private struct SuggestedTasksStrip: View {
         .onChange(of: centeredSuggestionID) { oldValue, newValue in
             guard oldValue != nil, newValue != nil, oldValue != newValue else { return }
             UISelectionFeedbackGenerator().selectionChanged()
-            if newValue == SuggestedTask.loaderID {
-                onLoadMore()
+            guard newValue == SuggestedTask.loaderID,
+                  suggestions.contains(where: { $0.id == SuggestedTask.loaderID }) else {
+                return
             }
+            onLoadMore()
         }
     }
 }
@@ -2282,6 +2340,7 @@ private struct ConnectionsPromoLogoHeader: View {
 
 private struct ExploreConnectionsPromoCard: View {
     let onSetup: () -> Void
+    let onDismiss: () -> Void
 
     private let cornerRadius: CGFloat = 28
 
@@ -2316,7 +2375,17 @@ private struct ExploreConnectionsPromoCard: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 18)
             .padding(.top, 16)
-            .padding(.bottom, 18)
+
+            Button(action: onDismiss) {
+                Text("Not now")
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 40)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
