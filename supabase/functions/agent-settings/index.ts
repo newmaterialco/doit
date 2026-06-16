@@ -22,6 +22,7 @@ interface ModelOption {
     name: string;
     label: string;
     description: string;
+    locked?: boolean;
 }
 
 interface ProviderOption {
@@ -71,63 +72,54 @@ const CATALOG: ProviderOption[] = [
                 label: "Strong Reasoning",
                 description: "Stronger Kimi reasoning model for harder multi-step agent tasks.",
             },
-        ],
-    },
-    {
-        id: "openai",
-        name: "OpenAI",
-        models: [
             {
-                id: "gpt-5.5",
-                name: "GPT-5.5",
-                label: "Premium",
-                description: "Most capable OpenAI option for professional agent work.",
-            },
-            {
-                id: "gpt-5.4",
-                name: "GPT-5.4",
-                label: "Strong",
-                description: "Strong OpenAI option for agents and professional work.",
-            },
-            {
-                id: "gpt-5.4-mini",
-                name: "GPT-5.4 Mini",
-                label: "Efficient",
-                description: "Faster, more cost-efficient OpenAI option.",
-            },
-            {
-                id: "gpt-4.1-mini",
-                name: "GPT-4.1 Mini",
-                label: "Budget",
-                description: "Lower cost; good default for everyday tasks.",
-            },
-            {
-                id: "gpt-4.1",
-                name: "GPT-4.1",
-                label: "Legacy Strong",
-                description: "Higher quality for harder tasks.",
-            },
-        ],
-    },
-    {
-        id: "anthropic",
-        name: "Anthropic",
-        models: [
-            {
-                id: "claude-sonnet-4-6",
-                name: "Claude Sonnet 4.6",
+                id: "anthropic/claude-sonnet-4",
+                name: "Claude Sonnet 4",
                 label: "Balanced",
                 description: "Strong quality/cost balance for agent work.",
             },
             {
-                id: "claude-opus-4",
+                id: "openai/gpt-4.1",
+                name: "GPT-4.1",
+                label: "Strong",
+                description: "Higher quality OpenAI option for harder agent tasks.",
+            },
+            {
+                id: "anthropic/claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+                label: "Balanced+",
+                description: "Latest Sonnet with stronger reasoning for complex agent work.",
+                locked: true,
+            },
+            {
+                id: "anthropic/claude-opus-4",
                 name: "Claude Opus 4",
                 label: "Premium",
-                description: "Most capable option; use when quality matters more than cost.",
+                description: "Most capable Claude option; use when quality matters more than cost.",
+                locked: true,
+            },
+            {
+                id: "openai/gpt-5.4",
+                name: "GPT-5.4",
+                label: "Strong+",
+                description: "Strong OpenAI option for agents and professional work.",
+                locked: true,
+            },
+            {
+                id: "openai/gpt-5.5",
+                name: "GPT-5.5",
+                label: "Premium",
+                description: "Most capable OpenAI option for professional agent work.",
+                locked: true,
             },
         ],
     },
 ];
+
+const DEFAULT_SELECTION = {
+    provider: "openrouter" as ProviderId,
+    model: "google/gemini-2.5-flash",
+};
 
 interface AgentModelSetting {
     user_id: string;
@@ -159,8 +151,21 @@ function providerFor(id: string | undefined): ProviderOption | undefined {
     return CATALOG.find((p) => p.id === id);
 }
 
+function modelEntry(
+    provider: ProviderOption,
+    model: string | undefined,
+): ModelOption | undefined {
+    if (!model) return undefined;
+    return provider.models.find((m) => m.id === model);
+}
+
 function modelIsSupported(provider: ProviderOption, model: string | undefined): boolean {
-    return Boolean(model && provider.models.some((m) => m.id === model));
+    return Boolean(modelEntry(provider, model));
+}
+
+function modelIsSelectable(provider: ProviderOption, model: string | undefined): boolean {
+    const entry = modelEntry(provider, model);
+    return Boolean(entry && !entry.locked);
 }
 
 function sanitizeSetting(row: AgentModelSetting | null): AgentModelSetting | null {
@@ -223,7 +228,11 @@ serve(async (req) => {
                     .eq("user_id", userId)
                     .maybeSingle();
                 if (error) throw error;
-                return json({ catalog: CATALOG, setting: sanitizeSetting(data) });
+                return json({
+                    catalog: CATALOG,
+                    setting: sanitizeSetting(data),
+                    default_selection: DEFAULT_SELECTION,
+                });
             }
             case "update": {
                 const provider = providerFor(body.provider);
@@ -232,6 +241,9 @@ serve(async (req) => {
                 }
                 if (!modelIsSupported(provider, body.model)) {
                     return json({ error: "unsupported_model" }, 400);
+                }
+                if (!modelIsSelectable(provider, body.model)) {
+                    return json({ error: "model_locked" }, 403);
                 }
 
                 const { data, error } = await serviceClient

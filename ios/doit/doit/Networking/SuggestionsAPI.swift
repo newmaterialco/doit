@@ -19,6 +19,21 @@ enum SuggestionsAPI {
         count: Int = 5,
         excludeTitles: [String] = []
     ) async throws -> SuggestionsResponse {
+        try await invoke(functionName: "task-suggestions", count: count, excludeTitles: excludeTitles)
+    }
+
+    static func fetchCron(
+        count: Int = 5,
+        excludeTitles: [String] = []
+    ) async throws -> SuggestionsResponse {
+        try await invoke(functionName: "cron-suggestions", count: count, excludeTitles: excludeTitles)
+    }
+
+    private static func invoke(
+        functionName: String,
+        count: Int,
+        excludeTitles: [String]
+    ) async throws -> SuggestionsResponse {
         struct Body: Codable {
             let count: Int
             let exclude_titles: [String]
@@ -26,7 +41,7 @@ enum SuggestionsAPI {
 
         return try await Supa.client.functions
             .invoke(
-                "task-suggestions",
+                functionName,
                 options: .init(
                     body: Body(
                         count: count,

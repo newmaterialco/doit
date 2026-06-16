@@ -48,7 +48,7 @@ TOOLKITS: list[str] = sorted(CONNECTION_SLUGS)
 
 # Toolkits that authenticate with an API key instead of OAuth; their auth
 # config ids must be pinned on the session.
-API_KEY_TOOLKITS = {"hunter"}
+API_KEY_TOOLKITS: set[str] = set()
 
 _CONFIG_PLACEHOLDER = "replace-with-session-mcp-url"
 
@@ -198,12 +198,14 @@ def render_config_yaml(
             count=1,
             flags=re.MULTILINE,
         )
-    model_block = (
-        "model:\n"
-        f"  default: {cfg.hermes_model_default}\n"
-        f"  provider: {cfg.hermes_model_provider}\n"
-        f"  base_url: {cfg.hermes_model_base_url}\n\n"
-    )
+    model_lines = [
+        "model:",
+        f"  default: {cfg.hermes_model_default}",
+        f"  provider: {cfg.hermes_model_provider}",
+    ]
+    if cfg.hermes_model_provider == "nous" and cfg.hermes_model_base_url:
+        model_lines.append(f"  base_url: {cfg.hermes_model_base_url}")
+    model_block = "\n".join(model_lines) + "\n\n"
     if not text.lstrip().startswith("model:"):
         text = model_block + text
     return text

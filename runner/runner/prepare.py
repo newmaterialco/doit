@@ -54,7 +54,6 @@ CONNECTION_SLUGS: frozenset[str] = frozenset(
         "linear",
         "github",
         "reddit",
-        "hunter",
         "linkedin",
         "figma",
     }

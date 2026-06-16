@@ -22,9 +22,11 @@ struct TodoListView: View {
     @Environment(PushManager.self) private var push
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var showAddSheet = false
+    @State private var addTodoSheetPresentation: AddTodoSheetPresentation?
     @State private var showSettings = false
     @State private var settingsSheetIsVisible = false
+    @State private var settingsInitialRoute: SettingsRoute?
+    @State private var settingsPresentationToken = 0
     @State private var selectedCompletedActivityFilter: CompletedActivityFilter = .allActivity
     @State private var selectedCompletedActivityPageID: CompletedActivityFilter? = .allActivity
     @State private var completedActivityPageHeights: [CompletedActivityFilter: CGFloat] = [:]
@@ -35,14 +37,18 @@ struct TodoListView: View {
     @State private var scrubbedSectionID: Int?
     @State private var navigationPath = NavigationPath()
     @State private var deletingTodoIDs: Set<UUID> = []
-    @State private var addSheetInitialTitle = ""
-    @State private var addSheetLaunchAction: AddTodoLaunchAction = .note
     @State private var centeredSuggestedTaskID: String?
     @State private var suggestedTasks: [SuggestedTask] = []
     @State private var suggestionsLoading = false
     @State private var suggestionsError: String?
     @State private var suggestionsHasLoaded = false
     @State private var showSuggestedInfo = false
+    @State private var centeredSuggestedCronID: String?
+    @State private var suggestedCronTasks: [SuggestedTask] = []
+    @State private var cronSuggestionsLoading = false
+    @State private var cronSuggestionsError: String?
+    @State private var cronSuggestionsHasLoaded = false
+    @State private var showSuggestedCronInfo = false
     @State private var showPassbookMemoryDetail = false
     @State private var selectedPassbookMemory: AgentMemory?
     @State private var passbookMemoryIsEditing = false
@@ -117,17 +123,11 @@ struct TodoListView: View {
                         Task { await prepareExploreIfNeeded() }
                     }
                 }
-                .sheet(
-                    isPresented: $showAddSheet,
-                    onDismiss: {
-                        addSheetInitialTitle = ""
-                        addSheetLaunchAction = .note
-                    }
-                ) {
+                .sheet(item: $addTodoSheetPresentation) { presentation in
                     AddTodoView(
                         userID: userID,
-                        initialTitle: addSheetInitialTitle,
-                        initialAction: addSheetLaunchAction
+                        initialTitle: presentation.title,
+                        initialAction: presentation.action
                     ) { newTodo in
                         // The store owns the list; insert there so realtime
                         // reconciliation can update the same row in place when
@@ -201,6 +201,16 @@ struct TodoListView: View {
                     .zIndex(7)
             }
 
+            if showSuggestedCronInfo {
+                suggestedCronInfoBackdrop
+                    .transition(.opacity)
+                    .zIndex(6)
+
+                suggestedCronInfoPanel
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(7)
+            }
+
             if showPassbookMemoryDetail, let selectedPassbookMemory {
                 memoryDetailBackdrop
                     .transition(.opacity)
@@ -221,7 +231,11 @@ struct TodoListView: View {
                     .animation(settingsPresentationAnimation, value: settingsSheetIsVisible)
                     .zIndex(9)
 
-                SettingsTopOverlay(onDismiss: dismissSettings)
+                SettingsTopOverlay(
+                    initialRoute: settingsInitialRoute,
+                    onDismiss: dismissSettings
+                )
+                    .id(settingsPresentationToken)
                     .offset(y: settingsSheetOffset)
                     .zIndex(10)
             }
@@ -336,10 +350,15 @@ struct TodoListView: View {
                         .padding(.bottom, 2)
                     }
 
-                    if !completedItems.isEmpty {
-                        completedActivitySection(completedItems)
-                            .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 2)
+                    if !hasAnyConnection {
+                        ExploreConnectionsPromoCard {
+                            presentSettings(route: .connections)
+                        }
+                        .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 10)
                     }
+
+                    completedTasksSection(completedItems)
+                        .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 2)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 116)
@@ -351,8 +370,22 @@ struct TodoListView: View {
             }
             .task {
                 await loadInitialSuggestionsIfNeeded()
+                await loadExploreToolkits(showSpinner: false)
             }
         }
+    }
+
+    @ViewBuilder
+    private func completedTasksSection(_ completedItems: [Todo]) -> some View {
+        if completedItems.isEmpty {
+            EmptyState(section: .todo)
+        } else {
+            completedActivitySection(completedItems)
+        }
+    }
+
+    private var hasAnyConnection: Bool {
+        exploreToolkits.contains { $0.isConnectable && $0.connected }
     }
 
     @ViewBuilder
@@ -517,7 +550,8 @@ struct TodoListView: View {
                     avatarImageData: auth.avatarImageData,
                     avatarURL: auth.avatarURL,
                     joinedAt: auth.joinedAt,
-                    locationText: locationProvider.displayLocationText
+                    locationText: locationProvider.displayLocationText,
+                    onLocationTap: handlePassbookLocationTap
                 )
 
                 PassbookMemorySection(
@@ -547,61 +581,87 @@ struct TodoListView: View {
     }
 
     private var scheduledSectionPage: some View {
-        Group {
-            if store.cronJobs.isEmpty && store.loadError == nil {
-                EmptyState(section: .scheduled)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.flexible(), spacing: 10),
-                            GridItem(.flexible(), spacing: 10)
-                        ],
-                        spacing: 10
-                    ) {
-                        if let loadError = store.loadError {
-                            Text(loadError)
-                                .foregroundStyle(.red)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .gridCellColumns(2)
-                        }
-                        ForEach(store.cronJobs) { job in
-                            CronJobCard(
-                                job: job,
-                                onOpen: {
-                                    playLightHaptic()
-                                    navigationPath.append(TodoListDestination.cronJob(job.id))
-                                },
-                                onTogglePause: {
-                                    playLightHaptic()
-                                    Task { await store.toggleCronPause(job) }
-                                },
-                                onDelete: { Task { await store.deleteCronJob(job.id) } }
-                            )
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .modifier(
-                                OptionalMatchedGeometryEffect(
-                                    id: cronHandoffGeometryID(forCronJob: job.id),
-                                    namespace: taskCardNamespace,
-                                    isSource: false
+        let suggestions = displayedSuggestedCronTasks
+        return GeometryReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if let loadError = store.loadError {
+                        Text(loadError)
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if !suggestions.isEmpty {
+                        TaskSectionHeader(
+                            title: "Suggested",
+                            trailingIconName: "info.circle.fill",
+                            trailingAction: presentSuggestedCronInfo,
+                            verticalPadding: 0
+                        )
+                        .padding(.top, 6)
+
+                        SuggestedTasksStrip(
+                            suggestions: suggestions,
+                            screenWidth: proxy.size.width,
+                            centeredSuggestionID: $centeredSuggestedCronID,
+                            onLoadMore: triggerLoadMoreCronSuggestions,
+                            onSelect: selectCronSuggestion
+                        )
+                        .padding(.bottom, 2)
+                    }
+
+                    if store.cronJobs.isEmpty && store.loadError == nil {
+                        EmptyState(section: .scheduled)
+                            .padding(.top, suggestions.isEmpty ? 0 : 8)
+                    } else if !store.cronJobs.isEmpty {
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10)
+                            ],
+                            spacing: 10
+                        ) {
+                            ForEach(store.cronJobs) { job in
+                                CronJobCard(
+                                    job: job,
+                                    onOpen: {
+                                        playLightHaptic()
+                                        navigationPath.append(TodoListDestination.cronJob(job.id))
+                                    },
+                                    onTogglePause: {
+                                        playLightHaptic()
+                                        Task { await store.toggleCronPause(job) }
+                                    },
+                                    onDelete: { Task { await store.deleteCronJob(job.id) } }
                                 )
-                            )
-                            .id(cronJobRefreshID(for: job))
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    Task { await store.deleteCronJob(job.id) }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .modifier(
+                                    OptionalMatchedGeometryEffect(
+                                        id: cronHandoffGeometryID(forCronJob: job.id),
+                                        namespace: taskCardNamespace,
+                                        isSource: false
+                                    )
+                                )
+                                .id(cronJobRefreshID(for: job))
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        Task { await store.deleteCronJob(job.id) }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
                                 }
                             }
                         }
+                        .padding(.top, suggestions.isEmpty ? 0 : 8)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 130)
-                    .padding(.bottom, 96)
                 }
-                .refreshable { await store.loadAll() }
+                .padding(.horizontal, 16)
+                .padding(.top, 116)
+                .padding(.bottom, 96)
+            }
+            .refreshable { await store.loadAll() }
+            .task {
+                await loadInitialCronSuggestionsIfNeeded()
             }
         }
     }
@@ -738,12 +798,26 @@ struct TodoListView: View {
         (settingsSheetIsVisible || activityGroupDetailIsVisible) ? UIScreen.main.bounds.height : 0
     }
 
-    private func presentSettings() {
+    private func presentSettings(route: SettingsRoute? = nil) {
+        settingsInitialRoute = route
+        settingsPresentationToken += 1
         showSettings = true
         DispatchQueue.main.async {
             withAnimation(settingsPresentationAnimation) {
                 settingsSheetIsVisible = true
             }
+        }
+    }
+
+    private func handlePassbookLocationTap() {
+        playLightHaptic()
+        switch locationProvider.authorizationStatus {
+        case .denied, .restricted:
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+        default:
+            locationProvider.requestAuthorizationOrLocation()
         }
     }
 
@@ -783,6 +857,7 @@ struct TodoListView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
             if !settingsSheetIsVisible {
                 showSettings = false
+                settingsInitialRoute = nil
             }
         }
     }
@@ -801,9 +876,38 @@ struct TodoListView: View {
         VStack {
             Spacer()
             SuggestedInfoCard(
+                title: "Smart suggestions",
+                message: "doit learns from the tasks you create, complete, and schedule, then suggests useful next actions that fit your patterns.",
                 onClose: {
                     playLightHaptic()
                     dismissSuggestedInfo()
+                }
+            )
+            .padding(.horizontal, 18)
+            .padding(.bottom, 20)
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+
+    private var suggestedCronInfoBackdrop: some View {
+        Color.black.opacity(0.16)
+            .ignoresSafeArea(.all)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                playLightHaptic()
+                dismissSuggestedCronInfo()
+            }
+    }
+
+    private var suggestedCronInfoPanel: some View {
+        VStack {
+            Spacer()
+            SuggestedInfoCard(
+                title: "Scheduled suggestions",
+                message: "doit learns from your tasks, memories, and existing schedules, then suggests recurring automations like weekly digests and daily check-ins.",
+                onClose: {
+                    playLightHaptic()
+                    dismissSuggestedCronInfo()
                 }
             )
             .padding(.horizontal, 18)
@@ -894,6 +998,19 @@ struct TodoListView: View {
     private func dismissSuggestedInfo() {
         withAnimation(settingsPresentationAnimation) {
             showSuggestedInfo = false
+        }
+    }
+
+    private func presentSuggestedCronInfo() {
+        playLightHaptic()
+        withAnimation(settingsPresentationAnimation) {
+            showSuggestedCronInfo = true
+        }
+    }
+
+    private func dismissSuggestedCronInfo() {
+        withAnimation(settingsPresentationAnimation) {
+            showSuggestedCronInfo = false
         }
     }
 
@@ -1100,6 +1217,49 @@ struct TodoListView: View {
         return results
     }
 
+    private var displayedSuggestedCronTasks: [SuggestedTask] {
+        if suggestedCronTasks.isEmpty && !cronSuggestionsLoading && cronSuggestionsHasLoaded {
+            return fallbackSuggestedCronTasks()
+        }
+        if cronSuggestionsLoading || cronSuggestionsHasLoaded {
+            return suggestedCronTasks + [.loader]
+        }
+        return [.loader]
+    }
+
+    private func fallbackSuggestedCronTasks() -> [SuggestedTask] {
+        guard store.cronJobs.isEmpty else { return [] }
+
+        let genericStarters: [(title: String, theme: String, connectionSlug: String?)] = [
+            ("Every weekday morning, make me a short plan for the day", "Plan", "googlecalendar"),
+            ("Monitor my inbox every day for important follow-ups", "Monitor", "gmail"),
+            ("Every Friday, summarize what I got done this week", "Recap", nil),
+            ("Check every day whether ", "Check", nil),
+            ("Every Monday, review my calendar and flag conflicts", "Plan", "googlecalendar"),
+            ("Weekly digest of unread emails that need a reply", "Digest", "gmail"),
+        ]
+
+        var seenTitles: Set<String> = []
+        var results: [SuggestedTask] = []
+
+        for starter in genericStarters {
+            guard results.count < 5 else { break }
+            let key = starter.title.lowercased()
+            guard seenTitles.insert(key).inserted else { continue }
+            results.append(
+                SuggestedTask(
+                    id: "cron-fallback-\(key)",
+                    title: starter.title,
+                    theme: starter.theme,
+                    connectionSlug: starter.connectionSlug,
+                    kind: .suggestion
+                )
+            )
+        }
+
+        return results
+    }
+
     private func selectSuggestion(_ suggestion: SuggestedTask) {
         guard suggestion.kind == .suggestion else { return }
         openSuggestedTask(suggestion)
@@ -1107,12 +1267,19 @@ struct TodoListView: View {
 
     private func openAddSheet(title: String = "", action: AddTodoLaunchAction = .note) {
         playLightHaptic()
-        addSheetInitialTitle = title
-        addSheetLaunchAction = action
-        showAddSheet = true
+        addTodoSheetPresentation = AddTodoSheetPresentation(title: title, action: action)
     }
 
     private func openSuggestedTask(_ suggestion: SuggestedTask) {
+        openAddSheet(title: suggestion.title)
+    }
+
+    private func selectCronSuggestion(_ suggestion: SuggestedTask) {
+        guard suggestion.kind == .suggestion else { return }
+        openSuggestedCronTask(suggestion)
+    }
+
+    private func openSuggestedCronTask(_ suggestion: SuggestedTask) {
         openAddSheet(title: suggestion.title)
     }
 
@@ -1319,8 +1486,17 @@ struct TodoListView: View {
         await loadMoreSuggestions()
     }
 
+    private func loadInitialCronSuggestionsIfNeeded() async {
+        guard !cronSuggestionsHasLoaded, !cronSuggestionsLoading else { return }
+        await loadMoreCronSuggestions()
+    }
+
     private func triggerLoadMoreSuggestions() {
         Task { await loadMoreSuggestions() }
+    }
+
+    private func triggerLoadMoreCronSuggestions() {
+        Task { await loadMoreCronSuggestions() }
     }
 
     private func loadMoreSuggestions() async {
@@ -1360,6 +1536,47 @@ struct TodoListView: View {
             suggestionsError = error.localizedDescription
             if suggestedTasks.isEmpty {
                 suggestedTasks = fallbackSuggestedTasks()
+            }
+        }
+    }
+
+    private func loadMoreCronSuggestions() async {
+        guard !cronSuggestionsLoading else { return }
+        cronSuggestionsLoading = true
+        cronSuggestionsError = nil
+        defer {
+            cronSuggestionsLoading = false
+            cronSuggestionsHasLoaded = true
+        }
+
+        do {
+            var response = try await SuggestionsAPI.fetchCron(
+                count: 5,
+                excludeTitles: suggestedCronTasks.map(\.title)
+            )
+            if response.degraded == true,
+               suggestedCronTasks.isEmpty,
+               response.suggestions.isEmpty {
+                response = try await SuggestionsAPI.fetchCron(
+                    count: 5,
+                    excludeTitles: suggestedCronTasks.map(\.title)
+                )
+            }
+            let newSuggestions = response.suggestions
+                .map(makeSuggestedTask(from:))
+                .filter { candidate in
+                    !suggestedCronTasks.contains { existing in
+                        existing.title.caseInsensitiveCompare(candidate.title) == .orderedSame
+                    }
+                }
+            suggestedCronTasks.append(contentsOf: newSuggestions)
+            if centeredSuggestedCronID == SuggestedTask.loaderID, let first = newSuggestions.first {
+                centeredSuggestedCronID = first.id
+            }
+        } catch {
+            cronSuggestionsError = error.localizedDescription
+            if suggestedCronTasks.isEmpty {
+                suggestedCronTasks = fallbackSuggestedCronTasks()
             }
         }
     }
@@ -1608,6 +1825,8 @@ private struct TaskSectionHeader: View {
 }
 
 private struct SuggestedInfoCard: View {
+    let title: String
+    let message: String
     let onClose: () -> Void
 
     var body: some View {
@@ -1625,11 +1844,11 @@ private struct SuggestedInfoCard: View {
 
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Smart suggestions")
+                    Text(title)
                         .font(.system(size: 24, weight: .semibold, design: .rounded))
                         .foregroundStyle(Color.black)
 
-                    Text("doit learns from the tasks you create, complete, and schedule, then suggests useful next actions that fit your patterns.")
+                    Text(message)
                         .font(.system(size: 20, weight: .regular, design: .rounded))
                         .foregroundStyle(Color.gray)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2044,66 +2263,67 @@ private struct LocationSuggestionRow: View {
     }
 }
 
-private struct ExploreConnectionsPromoCard: View {
-    let onSetup: () -> Void
+private struct ConnectionsPromoLogoHeader: View {
+    private let logos = [
+        "gmail", "googledrive", "slack", "notion",
+        "googlecalendar", "googledocs", "reddit", "linkedin"
+    ]
+    private let chipSize: CGFloat = 38
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            GeometryReader { proxy in
-                Image("Connections_Header")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: 154)
-                    .clipped()
+        HStack(spacing: -8) {
+            ForEach(logos, id: \.self) { slug in
+                ConnectionLogoChip(slug: slug, size: chipSize)
             }
-            .frame(height: 154)
-
-            VStack(alignment: .leading, spacing: 12) {
-                Spacer()
-                    .frame(height: 4)
-
-                Button(action: onSetup) {
-                    Text("Setup connections")
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .background(Color.black, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .frame(maxWidth: .infinity)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 18)
-            .padding(.bottom, 18)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .overlay {
-            ConnectionsPromoLowerBorder(topInset: 154)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-        }
+        .frame(maxWidth: .infinity)
     }
 }
 
-private struct ConnectionsPromoLowerBorder: Shape {
-    let topInset: CGFloat
+private struct ExploreConnectionsPromoCard: View {
+    let onSetup: () -> Void
 
-    func path(in rect: CGRect) -> Path {
-        let radius: CGFloat = 28
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.maxY - radius))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.minX + radius, y: rect.maxY),
-            control: CGPoint(x: rect.minX, y: rect.maxY)
-        )
-        path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.maxY))
-        path.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.maxY - radius),
-            control: CGPoint(x: rect.maxX, y: rect.maxY)
-        )
-        return path
+    private let cornerRadius: CGFloat = 28
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(spacing: SectionEmptyStateStyle.contentSpacing) {
+                Text("Connect your Apps")
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .foregroundStyle(SectionEmptyStateStyle.title)
+                    .multilineTextAlignment(.center)
+
+                ConnectionsPromoLogoHeader()
+
+                Text("Connect your favorite tools to make the most out of Doit")
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .foregroundStyle(SectionEmptyStateStyle.subtitle)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, SectionEmptyStateStyle.horizontalPadding)
+            .padding(.top, 18)
+
+            Button(action: onSetup) {
+                Text("Setup connections")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(Color.black, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 18)
+            .padding(.top, 16)
+            .padding(.bottom, 18)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+        }
     }
 }
 
@@ -2411,6 +2631,7 @@ private struct PassbookUserContactCard: View {
     let avatarURL: URL?
     let joinedAt: Date?
     let locationText: String
+    let onLocationTap: () -> Void
 
     var body: some View {
         VStack(spacing: 18) {
@@ -2427,20 +2648,24 @@ private struct PassbookUserContactCard: View {
                         .foregroundStyle(Color.primary)
                         .lineLimit(1)
 
-                    HStack(spacing: 6) {
-                        Image(systemName: "location.fill")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(.secondary)
+                    Button(action: onLocationTap) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(.secondary)
 
-                        Text(locationText)
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                            Text(locationText)
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.black.opacity(0.035), in: Capsule())
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.035), in: Capsule())
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Requests location access for nearby suggestions")
                 }
             }
             .frame(maxWidth: .infinity)
@@ -2491,24 +2716,10 @@ private struct PassbookMemorySection: View {
 
 private struct PassbookMemoryEmptyCard: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(TodoCardStyle.primaryBlue)
-                .frame(width: 38, height: 38)
-                .background(TodoCardStyle.primaryBlueTint, in: Circle())
-            Text("Doit has not learned anything durable yet.")
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
-            Text("After conversations, useful preferences and facts will appear here.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.black.opacity(0.05))
+        SectionEmptyStateCard(
+            systemImage: "plus.square.fill.on.square.fill",
+            title: "No Memories Yet",
+            subtitle: "Things that Doit remembers about you will appear here."
         )
     }
 }
@@ -2708,11 +2919,12 @@ private final class LocationProvider: NSObject, ObservableObject, CLLocationMana
     @Published private(set) var coordinate: CLLocationCoordinate2D?
     @Published private(set) var lastError: String?
     @Published private(set) var currentLocationName: String?
+    @Published private(set) var isGeocoding = false
 
     private let manager = CLLocationManager()
-    private let geocoder = CLGeocoder()
     private var lastLocationRefresh: Date?
     private var lastGeocodedCoordinate: CLLocationCoordinate2D?
+    private var geocodingTask: Task<Void, Never>?
 
     override init() {
         authorizationStatus = manager.authorizationStatus
@@ -2776,6 +2988,9 @@ private final class LocationProvider: NSObject, ObservableObject, CLLocationMana
         case .notDetermined:
             return "Tap to allow location suggestions."
         case .authorizedAlways, .authorizedWhenInUse:
+            if isGeocoding {
+                return "Finding location..."
+            }
             return coordinate == nil ? "Finding you..." : "Ready for nearby ideas."
         case .denied, .restricted:
             return "Enable location in Settings."
@@ -2819,37 +3034,54 @@ private final class LocationProvider: NSObject, ObservableObject, CLLocationMana
         }
 
         lastGeocodedCoordinate = location.coordinate
-        geocoder.cancelGeocode()
-        geocoder.reverseGeocodeLocation(location) { [weak self] placemarks, _ in
+        geocodingTask?.cancel()
+        isGeocoding = true
+
+        geocodingTask = Task { [weak self] in
             guard let self else { return }
-            DispatchQueue.main.async {
-                guard let placemark = placemarks?.first else {
+            let mapItem = await self.reverseGeocode(location: location)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self.isGeocoding = false
+                if let mapItem, let text = self.displayText(for: mapItem) {
+                    self.currentLocationName = text
+                } else {
                     self.currentLocationName = self.coordinateText(for: location.coordinate)
-                    return
                 }
-                self.currentLocationName = self.displayName(for: placemark)
-                    ?? self.coordinateText(for: location.coordinate)
             }
         }
     }
 
-    private func displayName(for placemark: CLPlacemark) -> String? {
-        let parts = [
-            placemark.name,
-            placemark.locality,
-            placemark.administrativeArea
-        ]
-            .compactMap { value -> String? in
-                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return (trimmed?.isEmpty == false) ? trimmed : nil
+    private func reverseGeocode(location: CLLocation) async -> MKMapItem? {
+        guard let request = MKReverseGeocodingRequest(location: location) else { return nil }
+        do {
+            let mapItems = try await request.mapItems
+            return mapItems.first
+        } catch {
+            if !Task.isCancelled {
+                print("[location] reverse geocoding failed: \(error.localizedDescription)")
             }
-
-        let deduped = parts.reduce(into: [String]()) { result, part in
-            if !result.contains(where: { $0.caseInsensitiveCompare(part) == .orderedSame }) {
-                result.append(part)
-            }
+            return nil
         }
-        return deduped.isEmpty ? nil : deduped.prefix(2).joined(separator: ", ")
+    }
+
+    private func displayText(for mapItem: MKMapItem) -> String? {
+        if let short = mapItem.address?.shortAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !short.isEmpty {
+            return short
+        }
+        if let full = mapItem.address?.fullAddress.trimmingCharacters(in: .whitespacesAndNewlines),
+           !full.isEmpty {
+            return full
+        }
+        if let city = mapItem.addressRepresentations?.cityWithContext?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !city.isEmpty {
+            return city
+        }
+        if let name = mapItem.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
+        }
+        return nil
     }
 
     private func coordinateText(for coordinate: CLLocationCoordinate2D) -> String {
@@ -3364,6 +3596,12 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+private struct AddTodoSheetPresentation: Identifiable {
+    let id = UUID()
+    let title: String
+    let action: AddTodoLaunchAction
+}
+
 private struct CronHandoff: Equatable {
     let todoID: UUID
     let cronJobID: UUID
@@ -3412,10 +3650,11 @@ private struct SlidingSectionTitle: View {
 }
 
 private struct SettingsTopOverlay: View {
+    let initialRoute: SettingsRoute?
     let onDismiss: () -> Void
 
     var body: some View {
-        SettingsView(onDismiss: onDismiss)
+        SettingsView(onDismiss: onDismiss, initialRoute: initialRoute)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.white)
     }
@@ -4052,21 +4291,58 @@ struct StatusBadge: View {
     }
 }
 
+private enum SectionEmptyStateStyle {
+    static let background = Color(red: 0xEC / 255, green: 0xEE / 255, blue: 0xF0 / 255)
+    static let icon = Color(red: 0xAB / 255, green: 0xAD / 255, blue: 0xAE / 255)
+    static let title = Color.black
+    static let subtitle = Color(red: 0x82 / 255, green: 0x82 / 255, blue: 0x82 / 255)
+    static let cornerRadius: CGFloat = 20
+    static let contentSpacing: CGFloat = 10
+    static let horizontalPadding: CGFloat = 32
+    static let verticalPadding: CGFloat = 32
+}
+
+private struct SectionEmptyStateCard: View {
+    let systemImage: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(spacing: SectionEmptyStateStyle.contentSpacing) {
+            Image(systemName: systemImage)
+                .font(.system(size: 32, weight: .semibold, design: .rounded))
+                .foregroundStyle(SectionEmptyStateStyle.icon)
+
+            Text(title)
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .foregroundStyle(SectionEmptyStateStyle.title)
+                .multilineTextAlignment(.center)
+
+            Text(subtitle)
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(SectionEmptyStateStyle.subtitle)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, SectionEmptyStateStyle.horizontalPadding)
+        .padding(.vertical, SectionEmptyStateStyle.verticalPadding)
+        .background(
+            SectionEmptyStateStyle.background,
+            in: RoundedRectangle(cornerRadius: SectionEmptyStateStyle.cornerRadius, style: .continuous)
+        )
+    }
+}
+
 private struct EmptyState: View {
     let section: TodoListSection
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: iconName)
-                .font(.system(size: 28))
-                .foregroundStyle(.gray)
-            Text(title)
-                .font(.title3.bold())
-            Text(subtitle)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 32)
-        }
+        SectionEmptyStateCard(
+            systemImage: iconName,
+            title: title,
+            subtitle: subtitle
+        )
     }
 
     private var iconName: String {
@@ -4088,7 +4364,7 @@ private struct EmptyState: View {
     private var subtitle: String {
         switch section {
         case .todo:
-            return "Tap + to add something. The agent prepares each task and starts working right away — tap a row to follow along."
+            return "Tap the + to create a task for your agent. Once it's done - you'll see completed tasks here."
         case .scheduled:
             return "Recurring automations like daily email checks will appear here when the agent sets them up."
         case .done:

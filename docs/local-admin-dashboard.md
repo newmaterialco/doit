@@ -9,7 +9,7 @@ HTML file talks to a Supabase Edge Function.
 | Path | Role |
 | --- | --- |
 | [`admin/index.html`](../admin/index.html) | Dashboard UI (open in any browser) |
-| [`supabase/functions/admin/index.ts`](../supabase/functions/admin/index.ts) | JSON API (`summary`, `users`, `invites`, `create_invite`) |
+| [`supabase/functions/admin/index.ts`](../supabase/functions/admin/index.ts) | JSON API (`summary`, `users`, `invites`, `feedback`, `create_invite`) |
 | [`supabase/migrations/20240601000027_admin_user_stats.sql`](../supabase/migrations/20240601000027_admin_user_stats.sql) | Postgres RPCs for aggregates |
 
 ## Quick start
@@ -40,6 +40,20 @@ Summary cards at the top:
 - **Pending provision** — `user_provisioning` in `pending` or `provisioning`
 - **Unused invites** — codes with `use_count = 0` and not expired
 - **Exhausted codes** — codes where `use_count >= max_uses`
+- **Feedback** — total beta feedback submissions
+- **Feedback (7d)** — submissions in the last 7 days
+
+### Feedback
+
+Beta users submit feedback from **Settings → Feedback** in the iOS app.
+
+| Column | Meaning |
+| --- | --- |
+| **When** | Submission timestamp |
+| **Message** | User's report (truncated in table; full text in hover title) |
+| **User** | Supabase user id prefix |
+| **Email** | Contact email if the user opted in; otherwise "Not shared" |
+| **Device** | App version and iOS version |
 
 ### Invite codes
 
@@ -124,6 +138,7 @@ All actions are `POST` to the function URL with JSON body `{ "action": "…" }`.
 | `summary` | — | Counts for dashboard overview |
 | `users` | — | `{ users: [...] }` |
 | `invites` | — | `{ invites: [...] }` with `status` and `redeemers` |
+| `feedback` | — | `{ feedback: [...] }` (latest 200, newest first) |
 | `create_invite` | `note?`, `max_uses?`, `expires_at?`, `code?` | `{ invite: {...} }` |
 
 Example (replace secret and use your project anon key):

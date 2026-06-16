@@ -120,9 +120,9 @@ def load() -> Config:
         # Defaults to <repo>/hermes/profiles/_template next to the runner.
         hermes_profile_template_dir=os.environ.get("HERMES_PROFILE_TEMPLATE_DIR", ""),
         # Model block written into new profiles (setup.md step 5/3c).
-        hermes_model_provider=os.environ.get("HERMES_MODEL_PROVIDER", "nous"),
+        hermes_model_provider=os.environ.get("HERMES_MODEL_PROVIDER", "openrouter"),
         hermes_model_default=os.environ.get(
-            "HERMES_MODEL_DEFAULT", "anthropic/claude-opus-4.6"
+            "HERMES_MODEL_DEFAULT", "google/gemini-2.5-flash"
         ),
         hermes_model_base_url=os.environ.get(
             "HERMES_MODEL_BASE_URL", "https://openrouter.ai/api/v1"

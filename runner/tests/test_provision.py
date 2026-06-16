@@ -16,8 +16,8 @@ _TEMPLATE = Path(__file__).resolve().parents[2] / "hermes" / "profiles" / "_temp
 
 
 class _FakeCfg:
-    hermes_model_default = "anthropic/claude-opus-4.6"
-    hermes_model_provider = "nous"
+    hermes_model_default = "google/gemini-2.5-flash"
+    hermes_model_provider = "openrouter"
     hermes_model_base_url = "https://openrouter.ai/api/v1"
     hermes_port_range_start = 8643
 
@@ -44,9 +44,24 @@ class RenderConfigTests(unittest.TestCase):
         self.assertIn("trs_abc/mcp", out)
         self.assertIn("secret-123", out)
         self.assertTrue(out.lstrip().startswith("model:"))
-        self.assertIn("provider: nous", out)
+        self.assertIn("provider: openrouter", out)
+        self.assertNotIn("base_url:", out)
         # Template body (memory limits etc.) survives.
         self.assertIn("memory_enabled: true", out)
+
+    def test_nous_provider_includes_base_url(self) -> None:
+        template_text = _TEMPLATE.joinpath("config.yaml").read_text()
+        cfg = _FakeCfg()
+        cfg.hermes_model_provider = "nous"
+        cfg.hermes_model_default = "anthropic/claude-opus-4.6"
+        out = render_config_yaml(
+            cfg,
+            template_text=template_text,
+            mcp_url="https://backend.composio.dev/tool_router/trs_abc/mcp",
+            mcp_headers={"x-api-key": "secret-123"},
+        )
+        self.assertIn("provider: nous", out)
+        self.assertIn("base_url: https://openrouter.ai/api/v1", out)
 
     def test_existing_model_block_not_duplicated(self) -> None:
         text = 'model:\n  default: x\n\nmcp_servers:\n  composio:\n    url: "replace-with-session-mcp-url"\n'

@@ -176,6 +176,24 @@
       </section>
 
       <section>
+        <h2>Feedback</h2>
+        <div class="table-wrap">
+          <table id="feedback-table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Message</th>
+                <th>User</th>
+                <th>Email</th>
+                <th>Device</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
         <h2>Invite codes</h2>
         <form id="invite-form" class="toolbar">
           <label>Note (optional)
@@ -289,6 +307,42 @@
       return data;
     }
 
+    function isUnknownAction(error) {
+      return String(error?.message || error).includes("unknown_action");
+    }
+
+    function shortUserID(value) {
+      if (!value) return "—";
+      const text = String(value);
+      return text.length > 8 ? `${text.slice(0, 8)}…` : text;
+    }
+
+    function renderFeedback(feedback) {
+      const tbody = $("feedback-table").querySelector("tbody");
+      tbody.innerHTML = (feedback || []).map(item => {
+        const emailCell = item.include_email && item.contact_email
+          ? item.contact_email
+          : `<span class="muted">Not shared</span>`;
+        const deviceParts = [item.app_version, item.ios_version ? `iOS ${item.ios_version}` : null]
+          .filter(Boolean);
+        const deviceCell = deviceParts.length ? deviceParts.join(" · ") : "—";
+        const message = item.message || "";
+        const preview = message.length > 140 ? `${message.slice(0, 140)}…` : message;
+        return `<tr>
+          <td>${fmtDate(item.created_at)}</td>
+          <td title="${message.replace(/"/g, "&quot;")}">${preview || "—"}</td>
+          <td><code>${shortUserID(item.user_id)}</code></td>
+          <td>${emailCell}</td>
+          <td>${deviceCell}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="5" class="muted">No feedback yet</td></tr>`;
+    }
+
+    function renderFeedbackUnavailable() {
+      const tbody = $("feedback-table").querySelector("tbody");
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">Deploy the updated admin function to load feedback.</td></tr>`;
+    }
+
     function renderStats(summary) {
       const items = [
         ["Users", summary.user_count],
@@ -299,6 +353,12 @@
         ["Unused invites", summary.unused_invites],
         ["Exhausted codes", summary.codes_exhausted],
       ];
+      if ("feedback_count" in summary) {
+        items.push(["Feedback", summary.feedback_count]);
+      }
+      if ("feedback_last_7d" in summary) {
+        items.push(["Feedback (7d)", summary.feedback_last_7d]);
+      }
       $("stats").innerHTML = items.map(([label, value]) =>
         `<div class="stat"><div class="label">${label}</div><div class="value">${value ?? 0}</div></div>`
       ).join("");
@@ -360,6 +420,17 @@
         renderUsers(usersResp.users);
         invitesCache = invitesResp.invites || [];
         renderInvites();
+
+        try {
+          const feedbackResp = await api("feedback");
+          renderFeedback(feedbackResp.feedback);
+        } catch (feedbackErr) {
+          if (isUnknownAction(feedbackErr)) {
+            renderFeedbackUnavailable();
+          } else {
+            throw feedbackErr;
+          }
+        }
       } catch (e) {
         $("load-error").textContent = String(e.message || e);
         $("load-error").classList.remove("hidden");

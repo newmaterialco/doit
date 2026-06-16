@@ -3,6 +3,12 @@ import Foundation
 struct AgentModelCatalogResponse: Codable, Sendable {
     let catalog: [AgentModelProviderOption]
     let setting: AgentModelSetting?
+    let default_selection: AgentModelSelection?
+}
+
+struct AgentModelSelection: Codable, Hashable, Sendable {
+    let provider: String
+    let model: String
 }
 
 struct AgentModelProviderOption: Codable, Identifiable, Hashable, Sendable {
@@ -16,6 +22,9 @@ struct AgentModelOption: Codable, Identifiable, Hashable, Sendable {
     let name: String
     let label: String
     let description: String
+    let locked: Bool?
+
+    var isLocked: Bool { locked ?? false }
 }
 
 struct AgentModelSetting: Codable, Hashable, Sendable {

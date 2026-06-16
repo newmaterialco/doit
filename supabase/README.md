@@ -129,6 +129,7 @@ Composio API key never reaches the iOS app.
    supabase functions deploy integrations
    supabase functions deploy agent-settings
    supabase functions deploy task-suggestions
+   supabase functions deploy cron-suggestions
    supabase functions deploy onboarding
    supabase functions deploy admin
    supabase secrets set COMPOSIO_API_KEY=ck_...
@@ -151,12 +152,48 @@ It reads recent todo history server-side and calls OpenAI (`OPENAI_SUGGESTIONS_M
 default `gpt-5.4-mini`) to generate personalized next-task ideas. Requires
 `OPENAI_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY` as Edge Function secrets.
 
+The `cron-suggestions` function powers the iOS Scheduled tab "Suggested" tiles.
+It reads recent todos, memories, and cron jobs server-side and calls OpenAI with
+the same model to generate personalized recurring-automation ideas (weekly digests,
+daily monitors, etc.). Requires the same secrets as `task-suggestions`.
+
 The function reads the caller's `auth.uid()` from the JWT and uses it as the
 Composio `entity_id`, so each user only sees their own connections.
 
 The `agent-settings` function also uses the caller's JWT, but writes through
 `service_role` so users can only choose from Doit's supported provider/model
-catalog. Provider API keys are global runner secrets, not app input.
+catalog. Hermes agent models are **OpenRouter-only** for beta: the catalog
+returns a single `openrouter` provider with selectable mid-tier models plus
+higher-tier models marked `locked: true` (visible in the app, rejected on
+`update` with `model_locked`). Provider API keys are global runner secrets,
+not app input.
+
+### Beta model deploy
+
+After changing the catalog or migration:
+
+```bash
+supabase functions deploy agent-settings
+supabase db push   # applies 20240601000028_openrouter_only_models.sql
+```
+
+On the runner VM, set provisioning defaults and ensure OpenRouter is configured:
+
+```bash
+HERMES_MODEL_PROVIDER=openrouter
+HERMES_MODEL_DEFAULT=google/gemini-2.5-flash
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Push runner code and restart from the repo root:
+
+```bash
+./scripts/deploy-runner.sh
+```
+
+The script rsyncs `runner/runner/` to the VM and restarts `doit-runner`. It
+never overwrites the VM's `.env` — add the vars above to
+`/opt/doit/runner/.env` on the VM if they are not already set.
 
 ## Keys cheat sheet
 
@@ -166,9 +203,10 @@ catalog. Provider API keys are global runner secrets, not app input.
 | `service_role` | Runner (VM env) | bypass RLS to update other users' todos |
 | `service_role` | Edge Function secret | save supported model settings server-side |
 | `COMPOSIO_API_KEY` | Edge Function secret + VM `.env` for Hermes | OAuth proxy |
-| `OPENAI_API_KEY` | Runner (VM env) | global Doit-paid OpenAI models |
-| `ANTHROPIC_API_KEY` | Runner (VM env) | global Doit-paid Claude models |
-| `OPENROUTER_API_KEY` | Runner (VM env) | global Doit-paid OpenRouter models |
+| `OPENAI_API_KEY` | Supabase Edge Function secret | transcription (`transcribe-audio`), task suggestions |
+| `OPENAI_API_KEY` | Runner (VM env, optional) | memory extraction fallback when `DOIT_MEMORY_MODEL` is set |
+| `ANTHROPIC_API_KEY` | Runner (VM env, optional) | kept for future use; not used by Hermes in beta |
+| `OPENROUTER_API_KEY` | Runner (VM env) | **required** — all Hermes agent runs in beta |
 | `BROWSERBASE_API_KEY` | Runner (VM env) and synced to `~/.hermes/.env` | Browserbase cloud browser sessions for Hermes browser tools and browse.sh CLI |
 | `BROWSERBASE_PROJECT_ID` | Runner (VM env) and synced to `~/.hermes/.env` | Browserbase project for managed browser sessions |
 | Apple `.p8` (APNs) | Runner (VM env) | push notifications |

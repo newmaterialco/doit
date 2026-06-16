@@ -2,6 +2,7 @@ import AuthenticationServices
 import SwiftUI
 
 struct IntegrationsView: View {
+    @Environment(\.safeAreaInsets) private var safeAreaInsets
     @State private var toolkits: [Toolkit] = []
     @State private var loading = true
     @State private var error: String?
@@ -43,17 +44,18 @@ struct IntegrationsView: View {
                         Divider()
                             .padding(.horizontal, 28)
                     }
-                    Text("Connected accounts let the agent act on your behalf. OAuth apps open a secure sign-in; API key apps (like Hunter) store your key via Composio — we never see it.")
+                    Text("Connected accounts let the agent act on your behalf. OAuth apps open a secure sign-in flow — we never see your credentials.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 20)
                         .padding(.top, 14)
-                        .padding(.bottom, 24)
+                        .padding(.bottom, max(24, safeAreaInsets.bottom + 8))
                 }
             }
         }
-        .background(Color.white.ignoresSafeArea())
         .scrollContentBackground(.hidden)
+        .safeAreaPadding(.bottom, 0)
+        .background(Color.white.ignoresSafeArea())
         .navigationTitle("Connections")
         .navigationBarTitleDisplayMode(.inline)
         .task { await load(showSpinner: toolkits.isEmpty) }

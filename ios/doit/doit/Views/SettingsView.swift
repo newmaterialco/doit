@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage("settings.modelDisplayName") private var cachedModelDisplayName = ""
     @State private var modelCatalog: [AgentModelProviderOption] = []
     @State private var modelSetting: AgentModelSetting?
+    @State private var defaultModelSelection: AgentModelSelection?
     @State private var selectedModelName: String?
     @State private var modelSettingsLoading = true
     @State private var modelSettingsSaving = false
@@ -18,6 +19,9 @@ struct SettingsView: View {
     @State private var displayedRoute: SettingsRoute?
 
     var onDismiss: (() -> Void)? = nil
+    var initialRoute: SettingsRoute? = nil
+
+    @State private var didOpenInitialRoute = false
 
     var body: some View {
         NavigationStack {
@@ -52,7 +56,14 @@ struct SettingsView: View {
             .background(Color.white)
             .toolbar(.hidden, for: .navigationBar)
             .task { await loadModelSettings() }
+            .onAppear { openInitialRouteIfNeeded() }
         }
+    }
+
+    private func openInitialRouteIfNeeded() {
+        guard !didOpenInitialRoute, let initialRoute else { return }
+        didOpenInitialRoute = true
+        openRoute(initialRoute)
     }
 
     private func settingsRoot(minHeight: CGFloat) -> some View {
@@ -103,6 +114,8 @@ struct SettingsView: View {
                         settingsRouteButton(.connections)
                         SettingsDivider(leadingPadding: 66)
                         settingsRouteButton(.memory)
+                        SettingsDivider(leadingPadding: 66)
+                        settingsRouteButton(.feedback)
                     }
 
                     Spacer()
@@ -210,6 +223,7 @@ struct SettingsView: View {
             ModelPickerCard(
                 catalog: modelCatalog,
                 selectedSetting: modelSetting,
+                defaultSelection: defaultModelSelection,
                 loading: modelSettingsLoading,
                 saving: modelSettingsSaving,
                 error: modelSettingsError,
@@ -266,11 +280,18 @@ struct SettingsView: View {
             let response = try await AgentSettingsAPI.getModelSettings()
             modelCatalog = response.catalog
             modelSetting = response.setting
+            defaultModelSelection = response.default_selection
             guard let setting = response.setting else {
-                selectedModelName = nil
-                cachedModelDisplayName = ""
+                if let defaultSelection = response.default_selection,
+                   let name = displayName(for: defaultSelection, in: response.catalog) {
+                    selectedModelName = name
+                    cachedModelDisplayName = name
+                } else {
+                    selectedModelName = nil
+                    cachedModelDisplayName = ""
+                }
                 modelSettingsError = nil
-                print("[settings][model] loaded catalog providers=\(response.catalog.count) setting=nil")
+                print("[settings][model] loaded catalog providers=\(response.catalog.count) setting=nil default=\(response.default_selection?.model ?? "none")")
                 return
             }
 
@@ -307,6 +328,7 @@ struct SettingsView: View {
         provider: AgentModelProviderOption,
         model: AgentModelOption
     ) async {
+        guard !model.isLocked else { return }
         guard !modelSettingsSaving else { return }
         modelSettingsSaving = true
         defer { modelSettingsSaving = false }
@@ -340,11 +362,27 @@ struct SettingsView: View {
         for setting: AgentModelSetting,
         in catalog: [AgentModelProviderOption]
     ) -> String {
-        guard let provider = catalog.first(where: { $0.id == setting.provider }) else {
-            return setting.model
+        displayName(provider: setting.provider, model: setting.model, in: catalog)
+            ?? setting.model
+    }
+
+    private func displayName(
+        for selection: AgentModelSelection,
+        in catalog: [AgentModelProviderOption]
+    ) -> String? {
+        displayName(provider: selection.provider, model: selection.model, in: catalog)
+    }
+
+    private func displayName(
+        provider providerID: String,
+        model modelID: String,
+        in catalog: [AgentModelProviderOption]
+    ) -> String? {
+        guard let provider = catalog.first(where: { $0.id == providerID }) else {
+            return modelID
         }
-        guard let model = provider.models.first(where: { $0.id == setting.model }) else {
-            return setting.model
+        guard let model = provider.models.first(where: { $0.id == modelID }) else {
+            return modelID
         }
         return modelDisplayName(provider: provider, model: model)
     }
@@ -384,11 +422,12 @@ struct SettingsView: View {
     }
 }
 
-private enum SettingsRoute: Hashable {
+enum SettingsRoute: Hashable {
     case userProfile(displayName: String, avatarImageData: Data?, avatarURL: URL?)
     case agentProfile(lastRunText: String)
     case connections
     case memory
+    case feedback
 
     var title: String {
         switch self {
@@ -398,6 +437,7 @@ private enum SettingsRoute: Hashable {
             return "doit"
         case .connections: return "Connections"
         case .memory: return "Memory"
+        case .feedback: return "Feedback"
         }
     }
 
@@ -407,6 +447,7 @@ private enum SettingsRoute: Hashable {
         case .agentProfile: return "sparkles"
         case .connections: return "arrow.left.arrow.right"
         case .memory: return "book.pages"
+        case .feedback: return "ladybug.fill"
         }
     }
 
@@ -425,6 +466,8 @@ private enum SettingsRoute: Hashable {
             IntegrationsView()
         case .memory:
             MemoryView()
+        case .feedback:
+            FeedbackView()
         }
     }
 }
@@ -534,6 +577,7 @@ private struct PersonRow: View {
 private struct ModelPickerCard: View {
     let catalog: [AgentModelProviderOption]
     let selectedSetting: AgentModelSetting?
+    let defaultSelection: AgentModelSelection?
     let loading: Bool
     let saving: Bool
     let error: String?
@@ -589,8 +633,7 @@ private struct ModelPickerCard: View {
                                 ModelPickerRow(
                                     provider: row.provider,
                                     model: row.model,
-                                    isSelected: selectedSetting?.provider == row.provider.id
-                                        && selectedSetting?.model == row.model.id,
+                                    isSelected: isRowSelected(row),
                                     saving: saving,
                                     onSelect: { onSelect(row.provider, row.model) }
                                 )
@@ -619,6 +662,16 @@ private struct ModelPickerCard: View {
             }
         }
     }
+
+    private func isRowSelected(_ row: ModelPickerRowData) -> Bool {
+        if let selectedSetting {
+            return selectedSetting.provider == row.provider.id
+                && selectedSetting.model == row.model.id
+        }
+        guard let defaultSelection else { return false }
+        return defaultSelection.provider == row.provider.id
+            && defaultSelection.model == row.model.id
+    }
 }
 
 private struct ModelPickerRowData: Identifiable {
@@ -641,33 +694,44 @@ private struct ModelPickerRow: View {
         Button(action: onSelect) {
             HStack(spacing: 14) {
                 ModelProviderLogo(assetName: modelLogoAssetName(provider: provider, model: model))
+                    .opacity(model.isLocked ? 0.45 : 1)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(modelDisplayName(provider: provider, model: model))
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color(white: 0.14))
+                        .foregroundStyle(Color(white: model.isLocked ? 0.55 : 0.14))
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
 
                     HStack(spacing: 7) {
-                        Text(priceLabel(for: model.label))
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color(white: 0.72))
+                        if model.isLocked {
+                            Text("Premium — invite only")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color(white: 0.62))
+                        } else {
+                            Text(priceLabel(for: model.label))
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Color(white: 0.72))
 
-                        Circle()
-                            .fill(Color(white: 0.78))
-                            .frame(width: 3, height: 3)
+                            Circle()
+                                .fill(Color(white: 0.78))
+                                .frame(width: 3, height: 3)
 
-                        Text(model.label)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color(white: 0.52))
-                            .lineLimit(1)
+                            Text(model.label)
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color(white: 0.52))
+                                .lineLimit(1)
+                        }
                     }
                 }
 
                 Spacer(minLength: 12)
 
-                if saving && isSelected {
+                if model.isLocked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color(white: 0.72))
+                } else if saving && isSelected {
                     ProgressView()
                         .controlSize(.small)
                 } else if isSelected {
@@ -681,14 +745,14 @@ private struct ModelPickerRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(saving)
+        .disabled(saving || model.isLocked)
     }
 
     private func priceLabel(for label: String) -> String {
         switch label {
-        case "Premium":
+        case "Premium", "Strong+":
             return "$$$"
-        case "Strong", "Legacy Strong", "Balanced", "Strong Reasoning", "Daily Driver+":
+        case "Strong", "Legacy Strong", "Balanced", "Balanced+", "Strong Reasoning", "Daily Driver+":
             return "$$"
         case "Efficient", "Budget", "Budget Agent", "Budget Coding", "Daily Driver":
             return "$"
@@ -748,6 +812,10 @@ private func modelDisplayName(
         return "Kimi - \(droppingPrefix(model.name, prefix: "Kimi "))"
     case .google:
         return "Google - \(model.name)"
+    case .anthropic:
+        return "Anthropic - \(droppingPrefix(model.name, prefix: "Claude "))"
+    case .openai:
+        return "OpenAI - \(model.name)"
     case nil:
         return model.name
     }
@@ -770,6 +838,10 @@ private func modelLogoAssetName(
         return "kimi"
     case .google:
         return "gemini"
+    case .anthropic:
+        return "anthropic"
+    case .openai:
+        return "openai"
     case nil:
         return nil
     }
@@ -780,6 +852,8 @@ private enum OpenRouterLab {
     case qwen
     case kimi
     case google
+    case anthropic
+    case openai
 }
 
 private func openRouterLab(for modelID: String) -> OpenRouterLab? {
@@ -787,6 +861,8 @@ private func openRouterLab(for modelID: String) -> OpenRouterLab? {
     if modelID.hasPrefix("qwen/") { return .qwen }
     if modelID.hasPrefix("moonshotai/") { return .kimi }
     if modelID.hasPrefix("google/") { return .google }
+    if modelID.hasPrefix("anthropic/") { return .anthropic }
+    if modelID.hasPrefix("openai/") { return .openai }
     return nil
 }
 
@@ -1081,6 +1157,191 @@ private struct SettingsDivider: View {
             .fill(Color(white: 0.94))
             .frame(height: 1)
             .padding(.leading, leadingPadding)
+    }
+}
+
+private struct FeedbackView: View {
+    @Environment(AuthModel.self) private var auth
+    @State private var message = ""
+    @State private var includeEmail = false
+    @State private var contactEmail = ""
+    @State private var submitting = false
+    @State private var errorMessage: String?
+    @State private var didSubmit = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Tell us what broke, what felt confusing, or what you'd like to see next.")
+                    .font(.system(size: 15, weight: .regular, design: .rounded))
+                    .foregroundStyle(Color(white: 0.42))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ZStack(alignment: .topLeading) {
+                    if message.isEmpty {
+                        Text("Describe the issue or idea…")
+                            .font(.system(size: 16, weight: .regular, design: .rounded))
+                            .foregroundStyle(Color(white: 0.72))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 14)
+                    }
+
+                    TextEditor(text: $message)
+                        .font(.system(size: 16, weight: .regular, design: .rounded))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 160)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .disabled(submitting)
+                }
+                .background(Color(white: 0.97), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                }
+                .onChange(of: message) { _, _ in
+                    if didSubmit { didSubmit = false }
+                }
+
+                Toggle(isOn: $includeEmail) {
+                    Text("Share my email so the team can follow up")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color(white: 0.18))
+                }
+                .toggleStyle(SwitchToggleStyle(tint: Color(white: 0.12)))
+                .disabled(submitting)
+                .onChange(of: includeEmail) { _, isOn in
+                    if isOn, contactEmail.isEmpty {
+                        contactEmail = auth.email ?? ""
+                    }
+                }
+
+                if includeEmail {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Contact email")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color(white: 0.42))
+
+                        TextField("you@example.com", text: $contactEmail)
+                            .font(.system(size: 16, weight: .regular, design: .rounded))
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.emailAddress)
+                            .textContentType(.emailAddress)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .background(Color(white: 0.97), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                            }
+                            .disabled(submitting)
+
+                        if let accountEmail = auth.email, !accountEmail.isEmpty {
+                            Text("Signed in as \(accountEmail)")
+                                .font(.system(size: 13, weight: .regular, design: .rounded))
+                                .foregroundStyle(Color(white: 0.55))
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(.red)
+                }
+
+                if didSubmit {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.green)
+                        Text("Thanks — your feedback was sent.")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color(white: 0.18))
+                    }
+                }
+
+                Button {
+                    Task { await submitFeedback() }
+                } label: {
+                    Group {
+                        if submitting {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text("Send feedback")
+                                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(
+                        canSubmit ? Color.black : Color(white: 0.72),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(submitting || !canSubmit)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 32)
+        }
+        .scrollContentBackground(.hidden)
+        .background(Color.white)
+        .onAppear {
+            if contactEmail.isEmpty {
+                contactEmail = auth.email ?? ""
+            }
+        }
+    }
+
+    private var trimmedMessage: String {
+        message.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedContactEmail: String {
+        contactEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSubmit: Bool {
+        guard !trimmedMessage.isEmpty else { return false }
+        if includeEmail {
+            return isValidEmail(trimmedContactEmail)
+        }
+        return true
+    }
+
+    private func isValidEmail(_ value: String) -> Bool {
+        let pattern = #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#
+        return value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private func resetFormAfterSubmit() {
+        message = ""
+        includeEmail = false
+        contactEmail = auth.email ?? ""
+        didSubmit = true
+    }
+
+    private func submitFeedback() async {
+        guard canSubmit, !submitting else { return }
+        submitting = true
+        errorMessage = nil
+        defer { submitting = false }
+
+        do {
+            try await FeedbackAPI.submit(
+                message: trimmedMessage,
+                includeEmail: includeEmail,
+                contactEmail: includeEmail ? trimmedContactEmail : nil
+            )
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            resetFormAfterSubmit()
+        } catch {
+            errorMessage = "Couldn't send feedback: \(error.localizedDescription)"
+        }
     }
 }
 

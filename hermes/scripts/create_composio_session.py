@@ -33,12 +33,11 @@ TOOLKITS = [
     "linear",
     "github",
     "reddit",
-    "hunter",
     "linkedin",
     "figma",
 ]
 
-API_KEY_TOOLKITS = {"hunter"}
+API_KEY_TOOLKITS: set[str] = set()
 COMPOSIO_API = "https://backend.composio.dev"
 
 

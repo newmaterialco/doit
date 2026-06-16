@@ -88,12 +88,6 @@ const CATALOG: Array<{
         description: "Browse, post, and comment on subreddits.",
     },
     {
-        slug: "hunter",
-        name: "Hunter",
-        description: "Find and verify professional email addresses.",
-        auth_type: "api_key",
-    },
-    {
         slug: "linkedin",
         name: "LinkedIn",
         description: "Read your profile and post on your behalf.",

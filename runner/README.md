@@ -93,7 +93,7 @@ Core values:
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only key used by the runner to bypass RLS |
 | `HERMES_PROFILES_DIR` | Root directory for per-user Hermes profiles |
 | `HERMES_RESTART_COMMAND_TEMPLATE` | Restart command used after profile config changes |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | Global Doit-paid model provider keys |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | Global Doit-paid model provider keys. **Beta:** Hermes uses `OPENROUTER_API_KEY` only; `OPENAI_API_KEY` is for optional memory extraction; `ANTHROPIC_API_KEY` is kept but unused by Hermes |
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | Browserbase credentials for Hermes browser automation and browse.sh CLI sessions |
 | `BROWSE_SKILL_AUTO_INSTALL` | Enables runner preflight install of matching browse.sh skills before Hermes starts |
 | `BROWSE_SKILL_INSTALL_TIMEOUT_SECS` | Timeout for browse.sh skill discovery/install bridge commands |
@@ -108,7 +108,7 @@ Core values:
 | `HERMES_PORT_RANGE_START` | First API port for newly provisioned gateways (default 8643) |
 | `HERMES_BIN` / `HERMES_PROFILE_TEMPLATE_DIR` | Hermes binary and profile template paths for the provisioner |
 | `HERMES_START_COMMAND_TEMPLATE` | Gateway start command (default `sudo systemctl enable --now hermes@{profile}`) |
-| `HERMES_MODEL_PROVIDER` / `HERMES_MODEL_DEFAULT` / `HERMES_MODEL_BASE_URL` | Model block written into new profiles |
+| `HERMES_MODEL_PROVIDER` / `HERMES_MODEL_DEFAULT` / `HERMES_MODEL_BASE_URL` | Model block written into new profiles (defaults: `openrouter` + `google/gemini-2.5-flash`; `base_url` only when provider is `nous`) |
 | `HERMES_USER_CHAR_LIMIT` / `HERMES_MEMORY_CHAR_LIMIT` | On-disk caps for `USER.md` / `MEMORY.md` (defaults 4000 / 8000) |
 | `MEMORY_CONSOLIDATE_WITH_MODEL` | Optional LLM merge when deterministic dedupe is not enough (default off) |
 
@@ -274,9 +274,10 @@ ssh "$DOIT_VM_HOST" '
   as a compact card under the task title. The agent can re-emit a block
   with the same `key` in a later turn to update an existing card in place.
 - Model settings: the iOS app writes allowlisted choices through the
-  `agent-settings` Edge Function. The runner reads pending settings with
-  `service_role`, copies Doit's global provider key from `OPENAI_API_KEY` or
-  `ANTHROPIC_API_KEY` into that user's Hermes profile `.env`, updates
+  `agent-settings` Edge Function (OpenRouter-only catalog for beta; locked
+  premium models are visible but not selectable). The runner reads pending
+  settings with `service_role`, copies Doit's global `OPENROUTER_API_KEY`
+  into that user's Hermes profile `.env`, updates
   `~/.hermes/profiles/<profile>/config.yaml`, restarts `hermes@<profile>`
   (deferred until the user's other in-flight runs finish), then marks the
   setting applied.

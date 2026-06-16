@@ -119,7 +119,7 @@ class ParsePrepareTests(unittest.TestCase):
         # Guardrail: the slugs we expose must stay aligned with the iOS asset
         # catalog and the integrations Edge Function CATALOG. Drift here
         # would mean the card icon silently goes missing for popular apps.
-        for expected in ("gmail", "googlecalendar", "slack", "notion", "hunter"):
+        for expected in ("gmail", "googlecalendar", "slack", "notion"):
             self.assertIn(expected, CONNECTION_SLUGS)
 
     def test_known_topics_include_expected_broad_buckets(self) -> None:

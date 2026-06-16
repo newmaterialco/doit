@@ -29,13 +29,13 @@ struct ModelSettingsView: View {
                 } header: {
                     Text("Provider")
                 } footer: {
-                    Text("Doit only shows providers that the backend knows how to apply to Hermes.")
+                    Text("Hermes agent models are routed through OpenRouter.")
                 }
 
                 if let provider = selectedProvider {
                     Section {
                         Picker("Model", selection: $selectedModelID) {
-                            ForEach(provider.models) { model in
+                            ForEach(selectableModels(for: provider)) { model in
                                 Text(model.name).tag(model.id)
                             }
                         }
@@ -63,6 +63,27 @@ struct ModelSettingsView: View {
                         Text("Model")
                     } footer: {
                         Text("Doit manages provider API keys centrally. Users only choose from supported models.")
+                    }
+
+                    let locked = lockedModels(for: provider)
+                    if !locked.isEmpty {
+                        Section {
+                            ForEach(locked) { model in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(model.name)
+                                        Text("Premium — invite only")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "lock.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } header: {
+                            Text("Coming Soon")
+                        }
                     }
                 }
 
@@ -102,8 +123,9 @@ struct ModelSettingsView: View {
         .refreshable { await load() }
         .onChange(of: selectedProviderID) { _, _ in
             guard let provider = selectedProvider else { return }
-            if !provider.models.contains(where: { $0.id == selectedModelID }) {
-                selectedModelID = provider.models.first?.id ?? ""
+            let selectable = selectableModels(for: provider)
+            if !selectable.contains(where: { $0.id == selectedModelID }) {
+                selectedModelID = selectable.first?.id ?? ""
             }
         }
     }
@@ -117,7 +139,16 @@ struct ModelSettingsView: View {
     }
 
     private var canSave: Bool {
-        selectedProvider != nil && selectedModel != nil
+        guard let model = selectedModel else { return false }
+        return selectedProvider != nil && !model.isLocked
+    }
+
+    private func selectableModels(for provider: AgentModelProviderOption) -> [AgentModelOption] {
+        provider.models.filter { !$0.isLocked }
+    }
+
+    private func lockedModels(for provider: AgentModelProviderOption) -> [AgentModelOption] {
+        provider.models.filter(\.isLocked)
     }
 
     private func load() async {
@@ -127,12 +158,14 @@ struct ModelSettingsView: View {
             let response = try await AgentSettingsAPI.getModelSettings()
             catalog = response.catalog
             setting = response.setting
-            if let setting = response.setting {
+            if let setting = response.setting,
+               let provider = response.catalog.first(where: { $0.id == setting.provider }),
+               provider.models.contains(where: { $0.id == setting.model && !$0.isLocked }) {
                 selectedProviderID = setting.provider
                 selectedModelID = setting.model
             } else if let provider = response.catalog.first {
                 selectedProviderID = provider.id
-                selectedModelID = provider.models.first?.id ?? ""
+                selectedModelID = selectableModels(for: provider).first?.id ?? ""
             }
             error = nil
         } catch {
@@ -141,6 +174,7 @@ struct ModelSettingsView: View {
     }
 
     private func save() async {
+        guard let model = selectedModel, !model.isLocked else { return }
         saving = true
         defer { saving = false }
         do {
@@ -164,8 +198,8 @@ struct ModelSettingsView: View {
 
     private func labelColor(_ label: String) -> Color {
         switch label {
-        case "Premium": return .purple
-        case "Strong", "Legacy Strong": return .blue
+        case "Premium", "Strong+": return .purple
+        case "Strong", "Legacy Strong", "Balanced+": return .blue
         case "Efficient", "Balanced": return .green
         case "Budget": return .orange
         default: return .secondary

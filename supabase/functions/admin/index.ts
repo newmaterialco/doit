@@ -7,6 +7,7 @@
 //   { action: "summary" }  -> admin_ops_summary()
 //   { action: "users" }    -> auth.admin.listUsers + admin_user_stats()
 //   { action: "invites" }  -> admin_invite_codes()
+//   { action: "feedback" } -> { feedback: [...] }
 //   { action: "create_invite", note?, max_uses?, expires_at? }
 //                          -> inserts invite_codes (auto-generates code if omitted)
 
@@ -153,6 +154,17 @@ serve(async (req) => {
                 const { data, error } = await serviceClient.rpc("admin_invite_codes");
                 if (error) throw error;
                 return json({ invites: data ?? [] });
+            }
+            case "feedback": {
+                const { data, error } = await serviceClient
+                    .from("beta_feedback")
+                    .select(
+                        "id,user_id,message,include_email,contact_email,app_version,ios_version,device_model,created_at",
+                    )
+                    .order("created_at", { ascending: false })
+                    .limit(200);
+                if (error) throw error;
+                return json({ feedback: data ?? [] });
             }
             case "create_invite": {
                 const note = (body.note ?? "").trim() || null;
