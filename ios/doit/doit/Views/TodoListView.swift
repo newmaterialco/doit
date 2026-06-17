@@ -65,6 +65,7 @@ struct TodoListView: View {
     @State private var exploreApiKeyInput = ""
     @State private var exploreApiKeyError: String?
     @State private var activeCronHandoff: CronHandoff?
+    @State private var completedCronHandoffGeometryIDs: Set<String> = []
     @StateObject private var locationProvider = LocationProvider()
     @Namespace private var taskCardNamespace
 
@@ -1674,14 +1675,17 @@ struct TodoListView: View {
             print("[list][cron_handoff] observed pending=\(store.pendingNewTodoID?.uuidString ?? "-") candidate=\(store.pendingNewTodoCronCandidateID()?.uuidString ?? "-") selected=\(selectedSectionID ?? -1)")
         }
         primeCronHandoffAnimationIfNeeded()
-        if store.completePendingNewTodoCronHandoffIfReady() {
+        if store.pendingNewTodoCronHandoffIsReadyToAnimate(),
+           let handoff = activeCronHandoff,
+           !completedCronHandoffGeometryIDs.contains(handoff.geometryID) {
+            completedCronHandoffGeometryIDs.insert(handoff.geometryID)
             completeCronHandoffAnimation()
+        }
+        if store.completePendingNewTodoCronHandoffIfReady() {
             return
         }
         Task {
-            if await store.reconcilePendingNewTodoCronHandoff() {
-                completeCronHandoffAnimation()
-            }
+            _ = await store.reconcilePendingNewTodoCronHandoff()
         }
     }
 
@@ -3811,8 +3815,12 @@ private struct CronJobCard: View {
                             .foregroundStyle(TodoCardStyle.muted.opacity(0.85))
                     } else {
                         Text(job.state.label)
-                            .font(.system(size: 13, weight: .regular, design: .rounded))
-                            .foregroundStyle(TodoCardStyle.muted.opacity(0.85))
+                            .font(.system(
+                                size: 13,
+                                weight: job.state == .needs_input ? .semibold : .regular,
+                                design: .rounded
+                            ))
+                            .foregroundStyle(footerStatusColor)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3862,6 +3870,10 @@ private struct CronJobCard: View {
                 .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(TodoCardStyle.muted)
         }
+    }
+
+    private var footerStatusColor: Color {
+        job.state == .needs_input ? .orange : TodoCardStyle.muted.opacity(0.85)
     }
 }
 

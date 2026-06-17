@@ -16,6 +16,7 @@
       --ok: #15803d;
       --warn: #b45309;
       --bad: #b91c1c;
+      --sidebar-width: 200px;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -34,24 +35,98 @@
       color: var(--text);
       line-height: 1.45;
     }
-    header {
-      padding: 1rem 1.5rem;
-      border-bottom: 1px solid var(--border);
-      background: var(--card);
+    #app {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      flex-wrap: wrap;
+      height: 100vh;
+      overflow: hidden;
     }
-    h1 { margin: 0; font-size: 1.25rem; }
-    main { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+    .sidebar {
+      width: var(--sidebar-width);
+      flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      background: var(--card);
+      padding: 0 0 1rem;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .sidebar-brand {
+      padding: 1.25rem 1.25rem 1rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      flex-shrink: 0;
+    }
+    .sidebar a {
+      display: block;
+      padding: 0.55rem 1.25rem;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-left: 3px solid transparent;
+    }
+    .sidebar a:hover {
+      background: var(--bg);
+    }
+    .sidebar a[aria-current="page"] {
+      border-left-color: var(--accent);
+      background: var(--bg);
+      font-weight: 600;
+    }
+    .sidebar-nav-badge {
+      display: inline-block;
+      min-width: 1.25rem;
+      margin-left: 0.35rem;
+      padding: 0.05rem 0.35rem;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      line-height: 1.2;
+      text-align: center;
+      background: var(--bad);
+      color: #fff;
+      vertical-align: middle;
+    }
+    .sidebar-nav-badge.hidden { display: none; }
+    .content {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+    }
+    .page {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      gap: 1.25rem;
+    }
+    .page.active { display: flex; }
     section {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 1rem 1.25rem;
-      margin-bottom: 1.25rem;
+    }
+    section.section-scroll {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    section.section-scroll > h2,
+    section.section-scroll > .page-header,
+    section.section-scroll > .toolbar,
+    section.section-scroll > .muted,
+    section.section-scroll > .error {
+      flex-shrink: 0;
+    }
+    .page > section:not(.section-scroll) {
+      flex-shrink: 0;
     }
     h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
     .stats {
@@ -68,7 +143,8 @@
     .stat .value { font-size: 1.35rem; font-weight: 600; }
     table {
       width: 100%;
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       font-size: 0.875rem;
     }
     th, td {
@@ -77,7 +153,61 @@
       border-bottom: 1px solid var(--border);
       vertical-align: top;
     }
-    th { color: var(--muted); font-weight: 600; }
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      background: var(--card);
+    }
+    th.row-num, td.row-num {
+      width: 2.5rem;
+      text-align: right;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    td.token-num {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .email-sent-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+      margin: 0;
+      font-size: 0.8rem;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .email-sent-toggle input {
+      width: 1rem;
+      height: 1rem;
+      margin: 0;
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
+    .copyable {
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .copyable:hover {
+      text-decoration: underline;
+      text-decoration-style: dotted;
+    }
+    .copyable.copied {
+      color: var(--ok);
+      text-decoration: none;
+    }
+    button.invite-delete-btn {
+      padding: 0.3rem 0.5rem;
+      font-size: 0.75rem;
+      background: transparent;
+      color: var(--bad);
+      border-color: var(--bad);
+    }
+    button.invite-delete-btn:disabled {
+      opacity: 0.35;
+    }
     tr.failed td { background: rgba(185, 28, 28, 0.08); }
     .badge {
       display: inline-block;
@@ -94,6 +224,8 @@
     .badge.ready { background: #dcfce7; color: #15803d; }
     .badge.failed { background: #fee2e2; color: #b91c1c; }
     .badge.pending, .badge.provisioning { background: #fef3c7; color: #b45309; }
+    .badge.warn { background: #fef3c7; color: #b45309; }
+    .badge.error { background: #fee2e2; color: #b91c1c; }
     .toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -124,33 +256,140 @@
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .muted { color: var(--muted); font-size: 0.8rem; }
     .error { color: var(--bad); margin: 0.5rem 0; }
-    .new-code {
-      margin: 0.75rem 0;
-      padding: 0.75rem;
-      border: 1px dashed var(--accent);
-      border-radius: 8px;
-      display: none;
-    }
-    .new-code.visible { display: block; }
-    .new-code code { font-size: 1.1rem; font-weight: 600; }
     .redeemers { font-size: 0.8rem; }
     .redeemers li { margin: 0.15rem 0; }
     #login-panel { max-width: 420px; margin: 4rem auto; }
     .hidden { display: none !important; }
-    .table-wrap { overflow-x: auto; }
+    .table-wrap {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+    }
+    .table-wrap thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      box-shadow: 0 1px 0 var(--border);
+    }
     .pagination {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       gap: 0.75rem;
       margin-top: 0.75rem;
+      flex-shrink: 0;
     }
     .tasks-toolbar label { min-width: 0; }
     .tasks-toolbar input[type="search"],
     .tasks-toolbar select { min-width: 8rem; }
     #tasks-search { min-width: 12rem; flex: 1; }
     #tasks-connection { width: 7rem; }
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.75rem;
+    }
+    .page-header h2 { margin: 0; }
+    .invites-toolbar label { min-width: 0; }
+    .invites-toolbar input[type="search"],
+    .invites-toolbar select { min-width: 8rem; }
+    #invite-search { min-width: 12rem; flex: 1; max-width: 18rem; }
+    dialog {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      background: var(--card);
+      color: var(--text);
+      max-width: 26rem;
+      width: calc(100% - 2rem);
+    }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+    dialog h3 {
+      margin: 0 0 1rem;
+      font-size: 1.05rem;
+    }
+    .dialog-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .dialog-form label { color: var(--text); }
+    .dialog-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      margin-top: 0.25rem;
+    }
+    .dialog-success {
+      margin-top: 0.75rem;
+      padding: 0.75rem;
+      border: 1px dashed var(--accent);
+      border-radius: 8px;
+      display: none;
+    }
+    .dialog-success.visible { display: block; }
+    .dialog-success code { font-size: 1.05rem; font-weight: 600; }
+    .page.page-scroll {
+      overflow-y: auto;
+    }
+    .charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .chart-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem;
+      min-height: 200px;
+    }
+    .chart-card h3 {
+      margin: 0 0 0.5rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .chart-card canvas {
+      width: 100% !important;
+      height: 180px !important;
+    }
+    .chart-note {
+      margin: 0 0 0.75rem;
+    }
+    @media (max-width: 640px) {
+      #app { flex-direction: column; }
+      .sidebar {
+        width: 100%;
+        flex-shrink: 0;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        padding: 0.5rem;
+        gap: 0.25rem;
+        overflow-y: visible;
+      }
+      .sidebar-brand {
+        width: 100%;
+        padding: 0.25rem 0.5rem 0.35rem;
+      }
+      .content { padding: 1rem; }
+      .sidebar a {
+        padding: 0.4rem 0.75rem;
+        border-left: none;
+        border-radius: 6px;
+      }
+      .sidebar a[aria-current="page"] {
+        border-left: none;
+        background: var(--accent);
+        color: #fff;
+      }
+    }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div id="login-panel">
@@ -173,157 +412,288 @@
   </div>
 
   <div id="app" class="hidden">
-    <header>
-      <h1>Doit Admin</h1>
-      <div class="toolbar">
-        <button id="refresh-btn" class="secondary">Refresh</button>
-        <button id="logout-btn" class="secondary">Lock</button>
-      </div>
-    </header>
-    <main>
-      <section>
-        <h2>Overview</h2>
-        <div id="stats" class="stats"></div>
-        <p id="load-error" class="error hidden"></p>
-      </section>
+    <nav class="sidebar" aria-label="Admin sections">
+      <div class="sidebar-brand">Doit</div>
+      <a href="#overview" data-page="overview">Overview</a>
+      <a href="#issues" data-page="issues">Issues <span id="issues-nav-badge" class="sidebar-nav-badge hidden"></span></a>
+      <a href="#users" data-page="users">Users</a>
+      <a href="#feedback" data-page="feedback">Feedback</a>
+      <a href="#invites" data-page="invites">Invites</a>
+      <a href="#tasks" data-page="tasks">Tasks</a>
+    </nav>
+    <main class="content">
+        <div id="page-overview" class="page page-scroll">
+          <section>
+            <h2>Overview</h2>
+            <div id="stats" class="stats"></div>
+            <p id="overview-error" class="error hidden"></p>
+          </section>
+          <section>
+            <h2>Usage</h2>
+            <p class="muted chart-note">Active users had task activity that day. Charts cover the last 30 days (UTC).</p>
+            <p id="metrics-loading" class="muted hidden">Loading charts…</p>
+            <p id="metrics-error" class="error hidden"></p>
+            <div id="charts-panel" class="charts">
+              <div class="chart-card">
+                <h3>Daily active users</h3>
+                <canvas id="chart-active-users" aria-label="Daily active users chart"></canvas>
+              </div>
+              <div class="chart-card">
+                <h3>Tasks completed per day</h3>
+                <canvas id="chart-tasks-completed" aria-label="Tasks completed per day chart"></canvas>
+              </div>
+              <div class="chart-card">
+                <h3>Tasks created per day</h3>
+                <canvas id="chart-tasks-created" aria-label="Tasks created per day chart"></canvas>
+              </div>
+            </div>
+          </section>
+        </div>
 
-      <section>
-        <h2>Feedback</h2>
-        <div class="table-wrap">
-          <table id="feedback-table">
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Message</th>
-                <th>User</th>
-                <th>Email</th>
-                <th>Device</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div id="page-issues" class="page">
+          <section>
+            <h2>Issues</h2>
+            <p class="muted chart-note">Open operational problems. Stuck items use a 10-minute lease threshold (UTC).</p>
+            <div id="issues-stats" class="stats"></div>
+            <p id="issues-error" class="error hidden"></p>
+          </section>
+          <section class="section-scroll">
+            <div class="toolbar">
+              <label>Kind
+                <select id="issues-kind-filter">
+                  <option value="">All kinds</option>
+                  <option value="failed_task">Failed task</option>
+                  <option value="stuck_running">Stuck running</option>
+                  <option value="stuck_preparing">Stuck preparing</option>
+                  <option value="failed_provision">Failed provision</option>
+                  <option value="stuck_provision">Stuck provision</option>
+                  <option value="memory_sync_failed">Memory sync failed</option>
+                  <option value="stuck_cron">Stuck cron</option>
+                </select>
+              </label>
+            </div>
+            <p id="issues-loading" class="muted hidden">Loading issues…</p>
+            <div class="table-wrap">
+              <table id="issues-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Severity</th>
+                    <th>Kind</th>
+                    <th>User</th>
+                    <th>Summary</th>
+                    <th>Detail</th>
+                    <th>Reference</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button type="button" id="issues-prev-btn" class="secondary" disabled>Previous</button>
+              <button type="button" id="issues-next-btn" class="secondary" disabled>Next</button>
+              <span id="issues-page-label" class="muted">—</span>
+            </div>
+          </section>
         </div>
-      </section>
 
-      <section id="tasks-section">
-        <h2>Tasks</h2>
-        <form id="tasks-toolbar" class="toolbar tasks-toolbar">
-          <label style="flex:1">Search
-            <input id="tasks-search" type="search" placeholder="prompt or summary" autocomplete="off" />
-          </label>
-          <label>User
-            <select id="tasks-user">
-              <option value="">All users</option>
-            </select>
-          </label>
-          <label>Status
-            <select id="tasks-status">
-              <option value="">All</option>
-              <option value="preparing">preparing</option>
-              <option value="todo">todo</option>
-              <option value="requested">requested</option>
-              <option value="running">running</option>
-              <option value="needs_input">needs_input</option>
-              <option value="needs_auth">needs_auth</option>
-              <option value="done">done</option>
-              <option value="failed">failed</option>
-              <option value="cancelled">cancelled</option>
-            </select>
-          </label>
-          <label>Integration
-            <input id="tasks-connection" type="text" placeholder="gmail" autocomplete="off" />
-          </label>
-          <button type="submit">Search</button>
-          <button type="button" id="tasks-clear-btn" class="secondary">Clear</button>
-        </form>
-        <p id="tasks-loading" class="muted hidden">Loading tasks…</p>
-        <p id="tasks-error" class="error hidden"></p>
-        <div class="table-wrap">
-          <table id="tasks-table">
-            <thead>
-              <tr>
-                <th>Created</th>
-                <th>User</th>
-                <th>Request</th>
-                <th>Status</th>
-                <th>Integration</th>
-                <th>Tokens</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div id="page-users" class="page">
+          <section class="section-scroll">
+            <h2>Users</h2>
+            <p id="users-loading" class="muted hidden">Loading users…</p>
+            <p id="users-error" class="error hidden"></p>
+            <div class="table-wrap">
+              <table id="users-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Signed up</th>
+                    <th>Provisioning</th>
+                    <th>Invite used</th>
+                    <th>Profile</th>
+                    <th>Todos</th>
+                    <th>Tokens</th>
+                    <th>Last active</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button type="button" id="users-prev-btn" class="secondary" disabled>Previous</button>
+              <button type="button" id="users-next-btn" class="secondary" disabled>Next</button>
+              <span id="users-page-label" class="muted">—</span>
+            </div>
+          </section>
         </div>
-        <div class="pagination">
-          <button type="button" id="tasks-prev-btn" class="secondary" disabled>Previous</button>
-          <button type="button" id="tasks-next-btn" class="secondary" disabled>Next</button>
-          <span id="tasks-page-label" class="muted">—</span>
-        </div>
-      </section>
 
-      <section>
-        <h2>Invite codes</h2>
-        <form id="invite-form" class="toolbar">
-          <label>Note (optional)
-            <input name="note" placeholder="for alice" />
-          </label>
-          <label>Max uses
-            <input name="max_uses" type="number" min="1" max="1000" value="1" />
-          </label>
-          <label>Expires (optional)
-            <input name="expires_at" type="datetime-local" />
-          </label>
-          <button type="submit">Generate code</button>
-          <label>Filter
-            <select id="invite-filter">
-              <option value="all">All</option>
-              <option value="unused">Unused only</option>
-              <option value="used">Used only</option>
-            </select>
-          </label>
-        </form>
-        <div id="new-code" class="new-code">
-          New code: <code id="new-code-text"></code>
-          <button type="button" id="copy-code-btn" class="secondary">Copy</button>
+        <div id="page-feedback" class="page">
+          <section class="section-scroll">
+            <h2>Feedback</h2>
+            <p id="feedback-loading" class="muted hidden">Loading feedback…</p>
+            <p id="feedback-error" class="error hidden"></p>
+            <div class="table-wrap">
+              <table id="feedback-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Message</th>
+                    <th>User</th>
+                    <th>Email</th>
+                    <th>Device</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button type="button" id="feedback-prev-btn" class="secondary" disabled>Previous</button>
+              <button type="button" id="feedback-next-btn" class="secondary" disabled>Next</button>
+              <span id="feedback-page-label" class="muted">—</span>
+            </div>
+          </section>
         </div>
-        <div class="table-wrap">
-          <table id="invites-table">
-            <thead>
-              <tr>
-                <th>Code</th>
-                <th>Status</th>
-                <th>Uses</th>
-                <th>Note</th>
-                <th>Expires</th>
-                <th>Created</th>
-                <th>Redeemers</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
 
-      <section>
-        <h2>Users</h2>
-        <div class="table-wrap">
-          <table id="users-table">
-            <thead>
-              <tr>
-                <th>Email</th>
-                <th>Signed up</th>
-                <th>Provisioning</th>
-                <th>Invite used</th>
-                <th>Profile</th>
-                <th>Todos</th>
-                <th>Tokens</th>
-                <th>Last active</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div id="page-invites" class="page">
+          <section class="section-scroll">
+            <div class="page-header">
+              <h2>Invite codes</h2>
+              <button type="button" id="invite-create-btn">New invite</button>
+            </div>
+            <form id="invites-toolbar" class="toolbar invites-toolbar">
+              <label style="flex:1">Search
+                <input id="invite-search" type="search" placeholder="code or note" autocomplete="off" />
+              </label>
+              <label>Status
+                <select id="invite-filter">
+                  <option value="all">All</option>
+                  <option value="unused">Unused only</option>
+                  <option value="used">Used only</option>
+                </select>
+              </label>
+              <label>Invite sent
+                <select id="invite-email-sent-filter">
+                  <option value="all">All</option>
+                  <option value="sent">Sent</option>
+                  <option value="not_sent">Not sent</option>
+                </select>
+              </label>
+              <label>Sort
+                <select id="invite-sort">
+                  <option value="created_desc">Created (newest)</option>
+                  <option value="created_asc">Created (oldest)</option>
+                </select>
+              </label>
+            </form>
+            <dialog id="invite-create-dialog">
+              <h3>New invite code</h3>
+              <form id="invite-form" class="dialog-form">
+                <label>Note (optional)
+                  <input name="note" placeholder="for alice" />
+                </label>
+                <label>Max uses
+                  <input name="max_uses" type="number" min="1" max="1000" value="1" />
+                </label>
+                <label>Expires (optional)
+                  <input name="expires_at" type="datetime-local" />
+                </label>
+                <div id="invite-dialog-success" class="dialog-success">
+                  New code: <code id="new-code-text" class="copyable" title="Click to copy"></code>
+                  <button type="button" id="copy-code-btn" class="secondary" style="margin-left:0.5rem">Copy</button>
+                </div>
+                <div class="dialog-actions">
+                  <button type="button" id="invite-dialog-cancel" class="secondary">Cancel</button>
+                  <button type="submit">Generate code</button>
+                </div>
+              </form>
+            </dialog>
+            <p id="invites-loading" class="muted hidden">Loading invites…</p>
+            <p id="invites-error" class="error hidden"></p>
+            <div class="table-wrap">
+              <table id="invites-table">
+                <thead>
+                  <tr>
+                    <th class="row-num">#</th>
+                    <th>Code</th>
+                    <th>Status</th>
+                    <th>Uses</th>
+                    <th>Note</th>
+                    <th>Email sent</th>
+                    <th>Expires</th>
+                    <th>Created</th>
+                    <th>Last used</th>
+                    <th>Redeemers</th>
+                    <th>Delete</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button type="button" id="invites-prev-btn" class="secondary" disabled>Previous</button>
+              <button type="button" id="invites-next-btn" class="secondary" disabled>Next</button>
+              <span id="invites-page-label" class="muted">—</span>
+            </div>
+          </section>
         </div>
-      </section>
-    </main>
+
+        <div id="page-tasks" class="page">
+          <section class="section-scroll">
+            <h2>Tasks</h2>
+            <form id="tasks-toolbar" class="toolbar tasks-toolbar">
+              <label style="flex:1">Search
+                <input id="tasks-search" type="search" placeholder="prompt or summary" autocomplete="off" />
+              </label>
+              <label>User
+                <select id="tasks-user">
+                  <option value="">All users</option>
+                </select>
+              </label>
+              <label>Status
+                <select id="tasks-status">
+                  <option value="">All</option>
+                  <option value="preparing">preparing</option>
+                  <option value="todo">todo</option>
+                  <option value="requested">requested</option>
+                  <option value="running">running</option>
+                  <option value="needs_input">needs_input</option>
+                  <option value="needs_auth">needs_auth</option>
+                  <option value="done">done</option>
+                  <option value="failed">failed</option>
+                  <option value="cancelled">cancelled</option>
+                </select>
+              </label>
+              <label>Integration
+                <input id="tasks-connection" type="text" placeholder="gmail" autocomplete="off" />
+              </label>
+              <button type="submit">Search</button>
+              <button type="button" id="tasks-clear-btn" class="secondary">Clear</button>
+            </form>
+            <p id="tasks-loading" class="muted hidden">Loading tasks…</p>
+            <p id="tasks-error" class="error hidden"></p>
+            <div class="table-wrap">
+              <table id="tasks-table">
+                <thead>
+                  <tr>
+                    <th>Created</th>
+                    <th>User</th>
+                    <th>Request</th>
+                    <th>Status</th>
+                    <th>Integration</th>
+                    <th>Tokens</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button type="button" id="tasks-prev-btn" class="secondary" disabled>Previous</button>
+              <button type="button" id="tasks-next-btn" class="secondary" disabled>Next</button>
+              <span id="tasks-page-label" class="muted">—</span>
+            </div>
+          </section>
+        </div>
+      </main>
   </div>
 
   <script>
@@ -331,12 +701,34 @@
     const DEFAULT_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZXV0aXRxZ2RzYXNjY3hmeGR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwMTMzNjksImV4cCI6MjA5NTU4OTM2OX0.j2yU_6HTLh6WJaPUFsG3vdgd0cK6VHFXm6XYW_cb26U";
     const SECRET_KEY = "doit_admin_secret";
     const URL_KEY = "doit_admin_url";
+    const PAGES = ["overview", "issues", "users", "feedback", "invites", "tasks"];
+    const PAGE_SIZE = 50;
 
-    let invitesCache = [];
-    let usersCache = [];
-    const TASKS_PAGE_SIZE = 50;
+    let currentPage = "overview";
+    const pageLoaded = { overview: false, issues: false, users: false, feedback: false, invites: false, tasks: false };
+    let tasksUserOptionsLoaded = false;
+    const usageCharts = {};
+
+    let usersOffset = 0;
+    let usersTotalCount = 0;
+    let feedbackOffset = 0;
+    let feedbackTotalCount = 0;
+    let invitesOffset = 0;
+    let invitesTotalCount = 0;
     let tasksOffset = 0;
     let tasksTotalCount = 0;
+    let issuesOffset = 0;
+    let issuesTotalCount = 0;
+
+    const ISSUE_KIND_LABELS = {
+      failed_task: "Failed task",
+      stuck_running: "Stuck running",
+      stuck_preparing: "Stuck preparing",
+      failed_provision: "Failed provision",
+      stuck_provision: "Stuck provision",
+      memory_sync_failed: "Memory sync failed",
+      stuck_cron: "Stuck cron",
+    };
 
     function $(id) { return document.getElementById(id); }
 
@@ -364,10 +756,71 @@
       return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
     }
 
+    function fmtTokens(value) {
+      const n = Number(value ?? 0);
+      if (!Number.isFinite(n)) return "0";
+      return n.toLocaleString();
+    }
+
+    async function copyToClipboard(text, el) {
+      const copyText = String(text || "").trim();
+      if (!copyText || copyText === "—" || copyText === "Not shared") return;
+      try {
+        await navigator.clipboard.writeText(copyText);
+        if (el) {
+          el.classList.add("copied");
+          const original = el.dataset.copy || el.textContent;
+          el.textContent = "Copied!";
+          setTimeout(() => {
+            el.textContent = original;
+            el.classList.remove("copied");
+          }, 1200);
+        }
+      } catch {
+        if (el) {
+          el.classList.add("copied");
+          const original = el.dataset.copy || el.textContent;
+          el.textContent = "Copy failed";
+          setTimeout(() => {
+            el.textContent = original;
+            el.classList.remove("copied");
+          }, 1200);
+        }
+      }
+    }
+
+    function copyableCode(text) {
+      if (!text) return "—";
+      return `<code class="copyable" data-copy="${escapeAttr(text)}" title="Click to copy">${escapeHtml(text)}</code>`;
+    }
+
     function badge(status) {
       if (!status) return "—";
       const cls = String(status).toLowerCase();
       return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    function updatePaginationUI({ offset, total, rowCount, prevId, nextId, labelId, emptyLabel }) {
+      const start = total === 0 ? 0 : offset + 1;
+      const end = offset + rowCount;
+      $(labelId).textContent = total === 0
+        ? (emptyLabel || "No results")
+        : `Showing ${start}–${end} of ${total}`;
+      $(prevId).disabled = offset <= 0;
+      $(nextId).disabled = end >= total;
+    }
+
+    function bindPagination({ getOffset, setOffset, getTotal, loadFn, prevId, nextId }) {
+      $(prevId).addEventListener("click", () => {
+        setOffset(Math.max(0, getOffset() - PAGE_SIZE));
+        loadFn();
+      });
+      $(nextId).addEventListener("click", () => {
+        if (getOffset() + PAGE_SIZE < getTotal()) {
+          setOffset(getOffset() + PAGE_SIZE);
+          loadFn();
+        }
+      });
     }
 
     async function api(action, extra = {}) {
@@ -400,11 +853,163 @@
       return text.length > 8 ? `${text.slice(0, 8)}…` : text;
     }
 
+    function renderStats(summary, metrics) {
+      const items = [
+        ["DAU", metrics?.dau ?? "—"],
+        ["WAU", metrics?.wau ?? "—"],
+        ["MAU", metrics?.mau ?? "—"],
+        ["Users", summary.user_count],
+        ["Provisioned", summary.provisioned_count],
+        ["Todos", summary.todo_count],
+        ["Total tokens", summary.total_tokens],
+        ["Pending provision", summary.pending_provisioning],
+        ["Unused invites", summary.unused_invites],
+        ["Exhausted codes", summary.codes_exhausted],
+      ];
+      if ("feedback_count" in summary) {
+        items.push(["Feedback", summary.feedback_count]);
+      }
+      if ("feedback_last_7d" in summary) {
+        items.push(["Feedback (7d)", summary.feedback_last_7d]);
+      }
+      $("stats").innerHTML = items.map(([label, value]) => {
+        const display = label === "Total tokens" ? fmtTokens(value) : (value ?? 0);
+        return `<div class="stat"><div class="label">${label}</div><div class="value">${display}</div></div>`;
+      }).join("");
+    }
+
+    function fmtChartDay(value) {
+      if (!value) return "";
+      const d = new Date(String(value) + "T12:00:00Z");
+      return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+
+    function chartTheme() {
+      const style = getComputedStyle(document.documentElement);
+      return {
+        accent: style.getPropertyValue("--accent").trim() || "#2563eb",
+        muted: style.getPropertyValue("--muted").trim() || "#666",
+        border: style.getPropertyValue("--border").trim() || "#ddd",
+        card: style.getPropertyValue("--card").trim() || "#fff",
+        ok: style.getPropertyValue("--ok").trim() || "#15803d",
+        warn: style.getPropertyValue("--warn").trim() || "#b45309",
+      };
+    }
+
+    function destroyUsageChart(key) {
+      if (usageCharts[key]) {
+        usageCharts[key].destroy();
+        delete usageCharts[key];
+      }
+    }
+
+    function seriesFromMetrics(metrics, key) {
+      const rows = metrics?.[key] || [];
+      return {
+        labels: rows.map(r => fmtChartDay(r.day)),
+        values: rows.map(r => Number(r.count ?? 0)),
+      };
+    }
+
+    function renderLineChart(canvasId, chartKey, label, color) {
+      if (typeof Chart === "undefined") return;
+      destroyUsageChart(chartKey);
+      const canvas = $(canvasId);
+      if (!canvas) return;
+      const theme = chartTheme();
+      const { labels, values } = seriesFromMetrics(window.__lastMetrics, chartKey === "active"
+        ? "active_users_daily"
+        : chartKey === "completed"
+          ? "tasks_completed_daily"
+          : "tasks_created_daily");
+      usageCharts[chartKey] = new Chart(canvas, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            label,
+            data: values,
+            borderColor: color,
+            backgroundColor: color + "22",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 2,
+            pointHoverRadius: 4,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+          },
+          scales: {
+            x: {
+              ticks: { maxTicksLimit: 8, color: theme.muted, font: { size: 10 } },
+              grid: { color: theme.border },
+            },
+            y: {
+              beginAtZero: true,
+              ticks: { precision: 0, color: theme.muted, font: { size: 10 } },
+              grid: { color: theme.border },
+            },
+          },
+        },
+      });
+    }
+
+    function renderMetricsUnavailable(message) {
+      $("metrics-loading").classList.add("hidden");
+      $("charts-panel").classList.add("hidden");
+      $("metrics-error").textContent = message || "Deploy the updated admin function to load usage charts.";
+      $("metrics-error").classList.remove("hidden");
+      destroyUsageChart("active");
+      destroyUsageChart("completed");
+      destroyUsageChart("created");
+    }
+
+    function renderUsageCharts(metrics) {
+      window.__lastMetrics = metrics;
+      $("charts-panel").classList.remove("hidden");
+      $("metrics-error").classList.add("hidden");
+      const theme = chartTheme();
+      renderLineChart("chart-active-users", "active", "Active users", theme.accent);
+      renderLineChart("chart-tasks-completed", "completed", "Tasks completed", theme.ok);
+      renderLineChart("chart-tasks-created", "created", "Tasks created", theme.warn);
+    }
+
+    function renderUsers(users) {
+      const tbody = $("users-table").querySelector("tbody");
+      tbody.innerHTML = (users || []).map(u => {
+        const failed = u.provisioning_status === "failed";
+        return `<tr class="${failed ? "failed" : ""}">
+          <td>${u.email ? copyableCode(u.email) : "—"}</td>
+          <td>${fmtShortDate(u.signed_up_at)}</td>
+          <td>${u.provisioning_status ? badge(u.provisioning_status) : "—"}</td>
+          <td>${u.invite_code ? `<code>${u.invite_code}</code>` : "—"}</td>
+          <td>${u.profile_name || "—"}</td>
+          <td>${u.todos_done}/${u.todos_total}${u.todos_failed ? ` <span class="muted">(${u.todos_failed} failed)</span>` : ""}</td>
+          <td class="token-num">${fmtTokens(u.total_tokens)}</td>
+          <td>${fmtDate(u.last_active_at)}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="8" class="muted">No users</td></tr>`;
+    }
+
+    function renderUsersUnavailable() {
+      $("users-loading").classList.add("hidden");
+      const tbody = $("users-table").querySelector("tbody");
+      tbody.innerHTML = `<tr><td colspan="8" class="muted">Deploy the updated admin function to load users.</td></tr>`;
+      updatePaginationUI({
+        offset: 0, total: 0, rowCount: 0,
+        prevId: "users-prev-btn", nextId: "users-next-btn", labelId: "users-page-label",
+      });
+    }
+
     function renderFeedback(feedback) {
       const tbody = $("feedback-table").querySelector("tbody");
       tbody.innerHTML = (feedback || []).map(item => {
         const emailCell = item.include_email && item.contact_email
-          ? item.contact_email
+          ? copyableCode(item.contact_email)
           : `<span class="muted">Not shared</span>`;
         const deviceParts = [item.app_version, item.ios_version ? `iOS ${item.ios_version}` : null]
           .filter(Boolean);
@@ -422,8 +1027,13 @@
     }
 
     function renderFeedbackUnavailable() {
+      $("feedback-loading").classList.add("hidden");
       const tbody = $("feedback-table").querySelector("tbody");
       tbody.innerHTML = `<tr><td colspan="5" class="muted">Deploy the updated admin function to load feedback.</td></tr>`;
+      updatePaginationUI({
+        offset: 0, total: 0, rowCount: 0,
+        prevId: "feedback-prev-btn", nextId: "feedback-next-btn", labelId: "feedback-page-label",
+      });
     }
 
     function populateTasksUserFilter(users) {
@@ -444,7 +1054,7 @@
       const userId = $("tasks-user").value.trim();
       const status = $("tasks-status").value.trim();
       const connection = $("tasks-connection").value.trim();
-      const payload = { limit: TASKS_PAGE_SIZE, offset: tasksOffset };
+      const payload = { limit: PAGE_SIZE, offset: tasksOffset };
       if (search) payload.search = search;
       if (userId) payload.user_id = userId;
       if (status) payload.status = status;
@@ -456,9 +1066,10 @@
       $("tasks-loading").classList.add("hidden");
       const tbody = $("tasks-table").querySelector("tbody");
       tbody.innerHTML = `<tr><td colspan="6" class="muted">Deploy the updated admin function to load tasks.</td></tr>`;
-      $("tasks-page-label").textContent = "—";
-      $("tasks-prev-btn").disabled = true;
-      $("tasks-next-btn").disabled = true;
+      updatePaginationUI({
+        offset: 0, total: 0, rowCount: 0,
+        prevId: "tasks-prev-btn", nextId: "tasks-next-btn", labelId: "tasks-page-label",
+      });
     }
 
     function renderTasks(tasks) {
@@ -480,17 +1091,321 @@
           <td title="${escapeAttr(tooltip)}">${escapeHtml(preview) || "—"}</td>
           <td>${task.status ? badge(task.status) : "—"}</td>
           <td>${task.connection_slug ? `<code>${escapeHtml(task.connection_slug)}</code>` : "—"}</td>
-          <td>${task.total_tokens ?? 0}</td>
+          <td class="token-num">${fmtTokens(task.total_tokens)}</td>
         </tr>`;
       }).join("") || `<tr><td colspan="6" class="muted">No tasks match these filters</td></tr>`;
 
-      const start = tasksTotalCount === 0 ? 0 : tasksOffset + 1;
-      const end = tasksOffset + (tasks?.length ?? 0);
-      $("tasks-page-label").textContent = tasksTotalCount === 0
-        ? "No tasks"
-        : `Showing ${start}–${end} of ${tasksTotalCount}`;
-      $("tasks-prev-btn").disabled = tasksOffset <= 0;
-      $("tasks-next-btn").disabled = end >= tasksTotalCount;
+      updatePaginationUI({
+        offset: tasksOffset,
+        total: tasksTotalCount,
+        rowCount: tasks?.length ?? 0,
+        prevId: "tasks-prev-btn",
+        nextId: "tasks-next-btn",
+        labelId: "tasks-page-label",
+        emptyLabel: "No tasks",
+      });
+    }
+
+    function issueKindLabel(kind) {
+      return ISSUE_KIND_LABELS[kind] || kind || "—";
+    }
+
+    function updateIssuesSidebarBadge(total) {
+      const badge = $("issues-nav-badge");
+      const n = Number(total ?? 0);
+      if (n > 0) {
+        badge.textContent = n > 99 ? "99+" : String(n);
+        badge.classList.remove("hidden");
+      } else {
+        badge.textContent = "";
+        badge.classList.add("hidden");
+      }
+    }
+
+    function renderIssuesStats(summary) {
+      const s = summary || {};
+      const items = [
+        ["Open issues", s.total ?? 0],
+        ["Failed tasks", s.failed_task ?? 0],
+        ["Stuck running", s.stuck_running ?? 0],
+        ["Stuck preparing", s.stuck_preparing ?? 0],
+        ["Failed provision", s.failed_provision ?? 0],
+        ["Stuck provision", s.stuck_provision ?? 0],
+        ["Memory sync", s.memory_sync_failed ?? 0],
+        ["Stuck cron", s.stuck_cron ?? 0],
+      ];
+      $("issues-stats").innerHTML = items.map(([label, value]) =>
+        `<div class="stat"><div class="label">${label}</div><div class="value">${value ?? 0}</div></div>`
+      ).join("");
+    }
+
+    function renderIssues(issues) {
+      const tbody = $("issues-table").querySelector("tbody");
+      tbody.innerHTML = (issues || []).map(issue => {
+        const detail = issue.detail || "—";
+        const preview = detail.length > 120 ? `${detail.slice(0, 120)}…` : detail;
+        const ref = issue.reference_id
+          ? `${issue.reference_type || "ref"}:${shortUserID(issue.reference_id)}`
+          : "—";
+        return `<tr>
+          <td>${fmtDate(issue.occurred_at)}</td>
+          <td>${issue.severity ? badge(issue.severity) : "—"}</td>
+          <td>${issueKindLabel(issue.kind)}</td>
+          <td>${issue.user_email ? copyableCode(issue.user_email) : shortUserID(issue.user_id)}</td>
+          <td>${escapeHtml(issue.summary || "—")}</td>
+          <td title="${escapeAttr(detail)}">${escapeHtml(preview)}</td>
+          <td><code>${escapeHtml(ref)}</code></td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="7" class="muted">No open issues</td></tr>`;
+    }
+
+    function renderIssuesUnavailable() {
+      $("issues-loading").classList.add("hidden");
+      const tbody = $("issues-table").querySelector("tbody");
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">Deploy the updated admin function to load issues.</td></tr>`;
+      updatePaginationUI({
+        offset: 0, total: 0, rowCount: 0,
+        prevId: "issues-prev-btn", nextId: "issues-next-btn", labelId: "issues-page-label",
+        emptyLabel: "No open issues",
+      });
+    }
+
+    async function refreshIssuesBadge() {
+      try {
+        const resp = await api("issues", { limit: 1, offset: 0 });
+        updateIssuesSidebarBadge(resp.summary?.total ?? 0);
+      } catch {
+        updateIssuesSidebarBadge(0);
+      }
+    }
+
+    async function loadIssues() {
+      $("issues-error").classList.add("hidden");
+      $("issues-loading").classList.remove("hidden");
+      $("issues-prev-btn").disabled = true;
+      $("issues-next-btn").disabled = true;
+      try {
+        const kind = $("issues-kind-filter").value;
+        const payload = { limit: PAGE_SIZE, offset: issuesOffset };
+        if (kind) payload.kind = kind;
+        const resp = await api("issues", payload);
+        issuesTotalCount = Number(resp.total_count ?? 0);
+        renderIssuesStats(resp.summary);
+        renderIssues(resp.issues || []);
+        updateIssuesSidebarBadge(resp.summary?.total ?? issuesTotalCount);
+        updatePaginationUI({
+          offset: issuesOffset,
+          total: issuesTotalCount,
+          rowCount: resp.issues?.length ?? 0,
+          prevId: "issues-prev-btn",
+          nextId: "issues-next-btn",
+          labelId: "issues-page-label",
+          emptyLabel: "No open issues",
+        });
+      } catch (e) {
+        $("issues-loading").classList.add("hidden");
+        if (isUnknownAction(e)) {
+          renderIssuesUnavailable();
+        } else {
+          $("issues-error").textContent = String(e.message || e);
+          $("issues-error").classList.remove("hidden");
+        }
+      } finally {
+        $("issues-loading").classList.add("hidden");
+        pageLoaded.issues = true;
+      }
+    }
+
+    function renderRedeemers(redeemers) {
+      if (!redeemers || redeemers.length === 0) return "—";
+      return `<ul class="redeemers">${redeemers.map(r => {
+        const identity = r.email || r.user_id;
+        const identityCell = identity ? copyableCode(identity) : "—";
+        return `<li>${identityCell} · ${badge(r.provisioning_status)} · ${fmtDate(r.redeemed_at)}</li>`;
+      }).join("")}</ul>`;
+    }
+
+    function renderInvites(invites) {
+      const tbody = $("invites-table").querySelector("tbody");
+      tbody.innerHTML = (invites || []).map((inv, i) => `<tr>
+        <td class="row-num">${invitesOffset + i + 1}</td>
+        <td>${copyableCode(inv.code)}</td>
+        <td>${badge(inv.status)}</td>
+        <td>${inv.use_count}/${inv.max_uses}</td>
+        <td>${inv.note ? copyableCode(inv.note) : "—"}</td>
+        <td>
+          <label class="email-sent-toggle" title="Mark when you've emailed this invite">
+            <input type="checkbox" class="invite-email-sent" data-code="${escapeAttr(inv.code)}"
+              ${inv.email_sent ? "checked" : ""} />
+            <span>${inv.email_sent ? "Yes" : "No"}</span>
+          </label>
+        </td>
+        <td>${inv.expires_at ? fmtShortDate(inv.expires_at) : "—"}</td>
+        <td>${fmtShortDate(inv.created_at)}</td>
+        <td>${inv.last_used_at ? fmtDate(inv.last_used_at) : "—"}</td>
+        <td>${renderRedeemers(inv.redeemers)}</td>
+        <td>${inv.use_count > 0
+          ? `<span class="muted" title="Redeemed codes can't be deleted">—</span>`
+          : `<button type="button" class="invite-delete-btn" data-code="${escapeAttr(inv.code)}">Delete</button>`
+        }</td>
+      </tr>`).join("") || `<tr><td colspan="11" class="muted">No invite codes</td></tr>`;
+    }
+
+    function renderInvitesUnavailable() {
+      $("invites-loading").classList.add("hidden");
+      const tbody = $("invites-table").querySelector("tbody");
+      tbody.innerHTML = `<tr><td colspan="11" class="muted">Deploy the updated admin function to load invites.</td></tr>`;
+      updatePaginationUI({
+        offset: 0, total: 0, rowCount: 0,
+        prevId: "invites-prev-btn", nextId: "invites-next-btn", labelId: "invites-page-label",
+      });
+    }
+
+    async function loadOverview() {
+      $("overview-error").classList.add("hidden");
+      $("metrics-error").classList.add("hidden");
+      $("metrics-loading").classList.remove("hidden");
+      let summary = {};
+      let metrics = null;
+      try {
+        summary = await api("summary");
+      } catch (e) {
+        $("overview-error").textContent = String(e.message || e);
+        $("overview-error").classList.remove("hidden");
+      }
+      try {
+        metrics = await api("metrics");
+        renderUsageCharts(metrics);
+      } catch (e) {
+        if (isUnknownAction(e)) {
+          renderMetricsUnavailable();
+        } else {
+          renderMetricsUnavailable(String(e.message || e));
+        }
+      }
+      renderStats(summary, metrics);
+      $("metrics-loading").classList.add("hidden");
+      pageLoaded.overview = true;
+    }
+
+    async function loadUsers() {
+      $("users-error").classList.add("hidden");
+      $("users-loading").classList.remove("hidden");
+      $("users-prev-btn").disabled = true;
+      $("users-next-btn").disabled = true;
+      try {
+        const usersResp = await api("users", { limit: PAGE_SIZE, offset: usersOffset });
+        usersTotalCount = Number(usersResp.total_count ?? 0);
+        renderUsers(usersResp.users || []);
+        updatePaginationUI({
+          offset: usersOffset,
+          total: usersTotalCount,
+          rowCount: usersResp.users?.length ?? 0,
+          prevId: "users-prev-btn",
+          nextId: "users-next-btn",
+          labelId: "users-page-label",
+          emptyLabel: "No users",
+        });
+      } catch (e) {
+        if (isUnknownAction(e)) {
+          renderUsersUnavailable();
+        } else {
+          $("users-error").textContent = String(e.message || e);
+          $("users-error").classList.remove("hidden");
+        }
+      } finally {
+        $("users-loading").classList.add("hidden");
+        pageLoaded.users = true;
+      }
+    }
+
+    async function loadFeedback() {
+      $("feedback-error").classList.add("hidden");
+      $("feedback-loading").classList.remove("hidden");
+      $("feedback-prev-btn").disabled = true;
+      $("feedback-next-btn").disabled = true;
+      try {
+        const resp = await api("feedback", { limit: PAGE_SIZE, offset: feedbackOffset });
+        feedbackTotalCount = Number(resp.total_count ?? 0);
+        renderFeedback(resp.feedback || []);
+        updatePaginationUI({
+          offset: feedbackOffset,
+          total: feedbackTotalCount,
+          rowCount: resp.feedback?.length ?? 0,
+          prevId: "feedback-prev-btn",
+          nextId: "feedback-next-btn",
+          labelId: "feedback-page-label",
+          emptyLabel: "No feedback",
+        });
+      } catch (e) {
+        $("feedback-loading").classList.add("hidden");
+        if (isUnknownAction(e)) {
+          renderFeedbackUnavailable();
+        } else {
+          $("feedback-error").textContent = String(e.message || e);
+          $("feedback-error").classList.remove("hidden");
+        }
+      } finally {
+        $("feedback-loading").classList.add("hidden");
+        pageLoaded.feedback = true;
+      }
+    }
+
+    async function loadInvites() {
+      $("invites-error").classList.add("hidden");
+      $("invites-loading").classList.remove("hidden");
+      $("invites-prev-btn").disabled = true;
+      $("invites-next-btn").disabled = true;
+      try {
+        const filter = $("invite-filter").value;
+        const emailSentFilter = $("invite-email-sent-filter").value;
+        const sort = $("invite-sort").value;
+        const search = $("invite-search").value.trim();
+        const resp = await api("invites", {
+          limit: PAGE_SIZE,
+          offset: invitesOffset,
+          invite_status: filter,
+          invite_email_sent: emailSentFilter,
+          invite_sort: sort,
+          invite_search: search || undefined,
+        });
+        invitesTotalCount = Number(resp.total_count ?? 0);
+        renderInvites(resp.invites || []);
+        updatePaginationUI({
+          offset: invitesOffset,
+          total: invitesTotalCount,
+          rowCount: resp.invites?.length ?? 0,
+          prevId: "invites-prev-btn",
+          nextId: "invites-next-btn",
+          labelId: "invites-page-label",
+          emptyLabel: "No invite codes",
+        });
+      } catch (e) {
+        $("invites-loading").classList.add("hidden");
+        if (isUnknownAction(e)) {
+          renderInvitesUnavailable();
+        } else {
+          $("invites-error").textContent = String(e.message || e);
+          $("invites-error").classList.remove("hidden");
+        }
+      } finally {
+        $("invites-loading").classList.add("hidden");
+        pageLoaded.invites = true;
+      }
+    }
+
+    async function loadTasksUserOptions() {
+      if (tasksUserOptionsLoaded) return;
+      try {
+        const resp = await api("user_options");
+        populateTasksUserFilter(resp.users || []);
+        tasksUserOptionsLoaded = true;
+      } catch (e) {
+        if (!isUnknownAction(e)) {
+          $("tasks-error").textContent = String(e.message || e);
+          $("tasks-error").classList.remove("hidden");
+        }
+      }
     }
 
     async function loadTasks() {
@@ -499,6 +1414,7 @@
       $("tasks-prev-btn").disabled = true;
       $("tasks-next-btn").disabled = true;
       try {
+        await loadTasksUserOptions();
         const resp = await api("tasks", tasksFilterPayload());
         renderTasks(resp.tasks || []);
       } catch (err) {
@@ -509,6 +1425,9 @@
           $("tasks-error").textContent = String(err.message || err);
           $("tasks-error").classList.remove("hidden");
         }
+      } finally {
+        $("tasks-loading").classList.add("hidden");
+        pageLoaded.tasks = true;
       }
     }
 
@@ -520,117 +1439,62 @@
       tasksOffset = 0;
     }
 
-    function renderStats(summary) {
-      const items = [
-        ["Users", summary.user_count],
-        ["Provisioned", summary.provisioned_count],
-        ["Todos", summary.todo_count],
-        ["Total tokens", summary.total_tokens],
-        ["Pending provision", summary.pending_provisioning],
-        ["Unused invites", summary.unused_invites],
-        ["Exhausted codes", summary.codes_exhausted],
-      ];
-      if ("feedback_count" in summary) {
-        items.push(["Feedback", summary.feedback_count]);
+    function pageFromHash() {
+      const hash = (location.hash || "#overview").replace(/^#/, "");
+      return PAGES.includes(hash) ? hash : "overview";
+    }
+
+    function setActivePageUI(page) {
+      currentPage = page;
+      for (const p of PAGES) {
+        const el = $("page-" + p);
+        if (el) el.classList.toggle("active", p === page);
       }
-      if ("feedback_last_7d" in summary) {
-        items.push(["Feedback (7d)", summary.feedback_last_7d]);
-      }
-      $("stats").innerHTML = items.map(([label, value]) =>
-        `<div class="stat"><div class="label">${label}</div><div class="value">${value ?? 0}</div></div>`
-      ).join("");
-    }
-
-    function renderRedeemers(redeemers) {
-      if (!redeemers || redeemers.length === 0) return "—";
-      return `<ul class="redeemers">${redeemers.map(r =>
-        `<li>${r.email || r.user_id} · ${badge(r.provisioning_status)} · ${fmtDate(r.redeemed_at)}</li>`
-      ).join("")}</ul>`;
-    }
-
-    function renderInvites() {
-      const filter = $("invite-filter").value;
-      const rows = invitesCache.filter(inv => {
-        if (filter === "unused") return inv.use_count === 0;
-        if (filter === "used") return inv.use_count > 0;
-        return true;
-      });
-      const tbody = $("invites-table").querySelector("tbody");
-      tbody.innerHTML = rows.map(inv => `<tr>
-        <td><code>${inv.code}</code></td>
-        <td>${badge(inv.status)}</td>
-        <td>${inv.use_count}/${inv.max_uses}</td>
-        <td>${inv.note || "—"}</td>
-        <td>${inv.expires_at ? fmtShortDate(inv.expires_at) : "—"}</td>
-        <td>${fmtShortDate(inv.created_at)}</td>
-        <td>${renderRedeemers(inv.redeemers)}</td>
-      </tr>`).join("") || `<tr><td colspan="7" class="muted">No invite codes</td></tr>`;
-    }
-
-    function renderUsers(users) {
-      const tbody = $("users-table").querySelector("tbody");
-      tbody.innerHTML = (users || []).map(u => {
-        const failed = u.provisioning_status === "failed";
-        return `<tr class="${failed ? "failed" : ""}">
-          <td>${u.email || "—"}</td>
-          <td>${fmtShortDate(u.signed_up_at)}</td>
-          <td>${u.provisioning_status ? badge(u.provisioning_status) : "—"}</td>
-          <td>${u.invite_code ? `<code>${u.invite_code}</code>` : "—"}</td>
-          <td>${u.profile_name || "—"}</td>
-          <td>${u.todos_done}/${u.todos_total}${u.todos_failed ? ` <span class="muted">(${u.todos_failed} failed)</span>` : ""}</td>
-          <td>${u.total_tokens ?? 0}</td>
-          <td>${fmtDate(u.last_active_at)}</td>
-        </tr>`;
-      }).join("") || `<tr><td colspan="8" class="muted">No users</td></tr>`;
-    }
-
-    async function loadDashboard() {
-      $("load-error").classList.add("hidden");
-      $("refresh-btn").disabled = true;
-      try {
-        const [summary, usersResp, invitesResp] = await Promise.all([
-          api("summary"),
-          api("users"),
-          api("invites"),
-        ]);
-        renderStats(summary);
-        usersCache = usersResp.users || [];
-        renderUsers(usersCache);
-        populateTasksUserFilter(usersCache);
-        invitesCache = invitesResp.invites || [];
-        renderInvites();
-
-        loadTasks();
-
-        try {
-          const feedbackResp = await api("feedback");
-          renderFeedback(feedbackResp.feedback);
-        } catch (feedbackErr) {
-          if (isUnknownAction(feedbackErr)) {
-            renderFeedbackUnavailable();
-          } else {
-            throw feedbackErr;
-          }
+      document.querySelectorAll(".sidebar a[data-page]").forEach(link => {
+        const isActive = link.dataset.page === page;
+        if (isActive) {
+          link.setAttribute("aria-current", "page");
+        } else {
+          link.removeAttribute("aria-current");
         }
-      } catch (e) {
-        $("load-error").textContent = String(e.message || e);
-        $("load-error").classList.remove("hidden");
-      } finally {
-        $("refresh-btn").disabled = false;
+      });
+    }
+
+    function loadCurrentPage(force) {
+      if (!force && pageLoaded[currentPage]) return;
+      switch (currentPage) {
+        case "overview": return loadOverview();
+        case "issues": return loadIssues();
+        case "users": return loadUsers();
+        case "feedback": return loadFeedback();
+        case "invites": return loadInvites();
+        case "tasks": return loadTasks();
       }
+    }
+
+    function navigateTo(page, { force = false } = {}) {
+      if (!PAGES.includes(page)) page = "overview";
+      if (location.hash !== "#" + page) {
+        location.hash = page;
+        return;
+      }
+      setActivePageUI(page);
+      loadCurrentPage(force);
     }
 
     function showApp() {
       $("login-panel").classList.add("hidden");
       $("app").classList.remove("hidden");
-      loadDashboard();
-    }
-
-    function showLogin() {
-      sessionStorage.removeItem(SECRET_KEY);
-      $("app").classList.add("hidden");
-      $("login-panel").classList.remove("hidden");
-      $("secret-input").value = "";
+      for (const p of PAGES) pageLoaded[p] = false;
+      tasksUserOptionsLoaded = false;
+      const page = pageFromHash();
+      setActivePageUI(page);
+      if (location.hash !== "#" + page) {
+        location.hash = page;
+      } else {
+        loadCurrentPage(true);
+      }
+      refreshIssuesBadge();
     }
 
     $("login-btn").addEventListener("click", () => {
@@ -647,31 +1511,197 @@
       showApp();
     });
 
-    $("logout-btn").addEventListener("click", showLogin);
-    $("refresh-btn").addEventListener("click", loadDashboard);
-    $("invite-filter").addEventListener("change", renderInvites);
+    document.querySelectorAll(".sidebar a[data-page]").forEach(link => {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        navigateTo(link.dataset.page);
+      });
+    });
+
+    window.addEventListener("hashchange", () => {
+      const page = pageFromHash();
+      setActivePageUI(page);
+      loadCurrentPage(false);
+    });
+
+    bindPagination({
+      getOffset: () => issuesOffset,
+      setOffset: (v) => { issuesOffset = v; },
+      getTotal: () => issuesTotalCount,
+      loadFn: loadIssues,
+      prevId: "issues-prev-btn",
+      nextId: "issues-next-btn",
+    });
+
+    $("issues-kind-filter").addEventListener("change", () => {
+      issuesOffset = 0;
+      pageLoaded.issues = false;
+      loadIssues();
+    });
+
+    bindPagination({
+      getOffset: () => usersOffset,
+      setOffset: (v) => { usersOffset = v; },
+      getTotal: () => usersTotalCount,
+      loadFn: loadUsers,
+      prevId: "users-prev-btn",
+      nextId: "users-next-btn",
+    });
+
+    bindPagination({
+      getOffset: () => feedbackOffset,
+      setOffset: (v) => { feedbackOffset = v; },
+      getTotal: () => feedbackTotalCount,
+      loadFn: loadFeedback,
+      prevId: "feedback-prev-btn",
+      nextId: "feedback-next-btn",
+    });
+
+    bindPagination({
+      getOffset: () => invitesOffset,
+      setOffset: (v) => { invitesOffset = v; },
+      getTotal: () => invitesTotalCount,
+      loadFn: loadInvites,
+      prevId: "invites-prev-btn",
+      nextId: "invites-next-btn",
+    });
+
+    bindPagination({
+      getOffset: () => tasksOffset,
+      setOffset: (v) => { tasksOffset = v; },
+      getTotal: () => tasksTotalCount,
+      loadFn: loadTasks,
+      prevId: "tasks-prev-btn",
+      nextId: "tasks-next-btn",
+    });
+
+    $("app").addEventListener("click", (e) => {
+      const el = e.target.closest(".copyable");
+      if (!el || el.closest("#login-panel")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const text = el.dataset.copy || el.textContent;
+      copyToClipboard(text, el);
+    });
+
+    $("invite-filter").addEventListener("change", () => {
+      invitesOffset = 0;
+      pageLoaded.invites = false;
+      loadInvites();
+    });
+
+    $("invite-email-sent-filter").addEventListener("change", () => {
+      invitesOffset = 0;
+      pageLoaded.invites = false;
+      loadInvites();
+    });
+
+    $("invite-sort").addEventListener("change", () => {
+      invitesOffset = 0;
+      pageLoaded.invites = false;
+      loadInvites();
+    });
+
+    $("invites-toolbar").addEventListener("submit", (e) => {
+      e.preventDefault();
+      invitesOffset = 0;
+      pageLoaded.invites = false;
+      loadInvites();
+    });
+
+    function resetInviteDialog() {
+      const form = $("invite-form");
+      form.reset();
+      form.elements.max_uses.value = "1";
+      $("invite-dialog-success").classList.remove("visible");
+      $("new-code-text").textContent = "";
+      delete $("new-code-text").dataset.copy;
+    }
+
+    $("invite-create-btn").addEventListener("click", () => {
+      resetInviteDialog();
+      $("invite-create-dialog").showModal();
+    });
+
+    $("invite-dialog-cancel").addEventListener("click", () => {
+      $("invite-create-dialog").close();
+      resetInviteDialog();
+    });
+
+    $("invite-create-dialog").addEventListener("close", () => {
+      resetInviteDialog();
+    });
+
+    function inviteErrorMessage(err) {
+      const code = String(err?.message || err);
+      if (code === "invite_in_use") {
+        return "Can't delete a code that has been redeemed.";
+      }
+      if (code === "not_found") {
+        return "Invite code not found.";
+      }
+      return code;
+    }
+
+    async function deleteInvite(code) {
+      if (!confirm(`Delete invite ${code}? This cannot be undone.`)) return;
+      $("invites-error").classList.add("hidden");
+      try {
+        await api("delete_invite", { code });
+        if (invitesOffset > 0) {
+          const rowsOnPage = $("invites-table").querySelectorAll("tbody tr").length;
+          if (rowsOnPage <= 1) {
+            invitesOffset = Math.max(0, invitesOffset - PAGE_SIZE);
+          }
+        }
+        pageLoaded.invites = false;
+        await loadInvites();
+      } catch (err) {
+        $("invites-error").textContent = inviteErrorMessage(err);
+        $("invites-error").classList.remove("hidden");
+      }
+    }
+
+    $("invites-table").addEventListener("click", (e) => {
+      const btn = e.target.closest(".invite-delete-btn");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      deleteInvite(btn.dataset.code);
+    });
+
+    $("invites-table").addEventListener("change", async (e) => {
+      const input = e.target;
+      if (!input.classList?.contains("invite-email-sent")) return;
+      const code = input.dataset.code;
+      const emailSent = input.checked;
+      const label = input.closest("label")?.querySelector("span");
+      const previous = !emailSent;
+      if (label) label.textContent = emailSent ? "Yes" : "No";
+      input.disabled = true;
+      try {
+        await api("set_invite_email_sent", { code, email_sent: emailSent });
+      } catch (err) {
+        input.checked = previous;
+        if (label) label.textContent = previous ? "Yes" : "No";
+        $("invites-error").textContent = String(err.message || err);
+        $("invites-error").classList.remove("hidden");
+      } finally {
+        input.disabled = false;
+      }
+    });
 
     $("tasks-toolbar").addEventListener("submit", (e) => {
       e.preventDefault();
       tasksOffset = 0;
+      pageLoaded.tasks = false;
       loadTasks();
     });
 
     $("tasks-clear-btn").addEventListener("click", () => {
       resetTasksFilters();
+      pageLoaded.tasks = false;
       loadTasks();
-    });
-
-    $("tasks-prev-btn").addEventListener("click", () => {
-      tasksOffset = Math.max(0, tasksOffset - TASKS_PAGE_SIZE);
-      loadTasks();
-    });
-
-    $("tasks-next-btn").addEventListener("click", () => {
-      if (tasksOffset + TASKS_PAGE_SIZE < tasksTotalCount) {
-        tasksOffset += TASKS_PAGE_SIZE;
-        loadTasks();
-      }
     });
 
     $("invite-form").addEventListener("submit", async (e) => {
@@ -689,19 +1719,22 @@
         const code = resp.invite?.code;
         if (code) {
           $("new-code-text").textContent = code;
-          $("new-code").classList.add("visible");
+          $("new-code-text").dataset.copy = code;
+          $("invite-dialog-success").classList.add("visible");
         }
         e.target.reset();
         e.target.elements.max_uses.value = "1";
-        await loadDashboard();
+        invitesOffset = 0;
+        pageLoaded.invites = false;
+        await loadInvites();
       } catch (err) {
-        $("load-error").textContent = String(err.message || err);
-        $("load-error").classList.remove("hidden");
+        $("invites-error").textContent = String(err.message || err);
+        $("invites-error").classList.remove("hidden");
       }
     });
 
     $("copy-code-btn").addEventListener("click", async () => {
-      const code = $("new-code-text").textContent;
+      const code = $("new-code-text").dataset.copy || $("new-code-text").textContent;
       try {
         await navigator.clipboard.writeText(code);
         $("copy-code-btn").textContent = "Copied!";

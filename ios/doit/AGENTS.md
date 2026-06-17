@@ -5,7 +5,9 @@ renders on the task list / detail screens. Read
 [`/docs/task-realtime.md`](../../docs/task-realtime.md) before touching
 anything in `Views/TodoListView.swift`, `Views/TodoDetailView.swift`,
 `Views/CronJobDetailView.swift`, `Supabase/TodoRealtimeHub.swift`, or
-`Stores/TodoStore.swift`.
+`Stores/TodoStore.swift`. For a plain-language overview of list completion
+updates and the cron handoff animation, see
+[`/docs/ios-list-live-updates.md`](../../docs/ios-list-live-updates.md).
 
 ## Hard rules
 
@@ -60,6 +62,19 @@ anything in `Views/TodoListView.swift`, `Views/TodoDetailView.swift`,
    `AgentLiveActivityManager`'s job. Read
    [`/docs/task-realtime.md`](../../docs/task-realtime.md) §"Agent
    activity service" before changing anything in this chain.
+
+9. **Do not animate active cards with row move transitions.** `TodoCard`
+   deliberately changes identity via `cardRefreshID` as status, title,
+   artifacts, and live activity update. Adding `.transition(.move(...))` to
+   active task rows makes normal prep updates look like the card is jumping
+   in from the bottom. Keep active cards anchored; use store-driven status
+   changes and the existing layout animation.
+
+10. **Cron chat reconfigure must reset the claim lease.** When scheduled-task
+   chat sets a cron job back to `configuring`, the API must also clear
+   `configure_claimed_at` so the runner can claim it immediately. If
+   "Updating schedule…" sticks, debug the cron configure lease before adding
+   client polling.
 
 ## Quick reference
 

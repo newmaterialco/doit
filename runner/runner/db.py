@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from supabase import Client, create_client
@@ -17,12 +17,45 @@ from .memory_symbol import infer_memory_symbol, resolve_memory_symbol
 log = logging.getLogger(__name__)
 
 
+UTC = timezone.utc
 _TITLE_MAX = 120
 _CLAIM_STALE_AFTER = timedelta(minutes=15)
 
 
 def _iso_z(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _parse_supabase_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _cron_config_claimable(row: dict[str, Any], stale_before: datetime) -> bool:
+    claimed_at = _parse_supabase_datetime(row.get("configure_claimed_at"))
+    if claimed_at is None:
+        return True
+    if claimed_at < stale_before:
+        return True
+    updated_at = _parse_supabase_datetime(row.get("updated_at"))
+    if updated_at is None:
+        return False
+    # Reconfiguration updates `updated_at`; a runner claim also touches
+    # `updated_at`, so require a real gap to avoid immediately reclaiming
+    # our own fresh lease.
+    return updated_at > claimed_at + timedelta(seconds=1)
 
 
 def _derive_title(text: str) -> str:
@@ -1552,29 +1585,35 @@ class DB:
         """Atomically claim the oldest cron job needing configuration."""
         now = datetime.now(UTC)
         now_iso = _iso_z(now)
-        stale_before = _iso_z(now - _CLAIM_STALE_AFTER)
+        stale_before = now - _CLAIM_STALE_AFTER
         try:
             resp = (
                 self._client.table("cron_jobs")
                 .select("*")
                 .eq("state", "configuring")
-                .or_(f"configure_claimed_at.is.null,configure_claimed_at.lt.{stale_before}")
                 .order("updated_at")
-                .limit(1)
+                .limit(25)
                 .execute()
             )
             rows = resp.data or []
-            if not rows:
+            candidate = next(
+                (row for row in rows if _cron_config_claimable(row, stale_before)),
+                None,
+            )
+            if candidate is None:
                 return None
-            candidate = rows[0]
-            upd = (
+            update = (
                 self._client.table("cron_jobs")
                 .update({"configure_claimed_at": now_iso})
                 .eq("id", candidate["id"])
                 .eq("state", "configuring")
-                .or_(f"configure_claimed_at.is.null,configure_claimed_at.lt.{stale_before}")
-                .execute()
             )
+            claimed_raw = candidate.get("configure_claimed_at")
+            if claimed_raw is None:
+                update = update.is_("configure_claimed_at", "null")
+            else:
+                update = update.eq("configure_claimed_at", claimed_raw)
+            upd = update.execute()
             claimed = upd.data or []
             return claimed[0] if claimed else None
         except Exception as e:

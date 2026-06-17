@@ -10,6 +10,7 @@ enum ConversationItem: Identifiable, Hashable {
     case userMessage(id: UUID, text: String, ts: Date)
     case agentStep(TodoStep)
     case agentThinking(label: String)
+    case agentConfirmation(id: String, text: String, ts: Date)
     case agentInteraction(ChatInteractionEnvelope)
     case agentError(text: String)
     /// Bubble rendered when the runner has prepped the task and is
@@ -33,6 +34,8 @@ enum ConversationItem: Identifiable, Hashable {
             // Constant id so SwiftUI keeps the same view instance across
             // label changes and the contentTransition can crossfade.
             return "agent-thinking"
+        case .agentConfirmation(let id, _, _):
+            return "agent-confirmation-\(id)"
         case .agentInteraction(let interaction):
             return "interaction-\(interaction.id.uuidString)"
         case .agentError(let text):
@@ -186,7 +189,7 @@ private extension ConversationItem {
         switch self {
         case .userRequest, .userAttachments, .userMessage:
             return 0
-        case .agentStep, .agentThinking, .agentInteraction, .agentError, .agentReadyToRun:
+        case .agentStep, .agentThinking, .agentConfirmation, .agentInteraction, .agentError, .agentReadyToRun:
             return 1
         }
     }

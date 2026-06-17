@@ -105,6 +105,11 @@ final class TodoStore {
     /// Creation timestamp for `pendingNewTodoID`, used to distinguish a cron
     /// conversion from older scheduled jobs already in the list.
     private var pendingNewTodoCreatedAt: Date?
+    /// Set when the pending todo disappears before its cron replacement has
+    /// arrived. Realtime can deliver DELETE before INSERT, so the handoff gets
+    /// a short correlation window instead of being cleared immediately.
+    private var pendingNewTodoDeletedAt: Date?
+    private var pendingCronHandoffGraceTask: Task<Void, Never>?
     /// Scoped fallback refresh while the pending todo is still in `preparing`.
     /// Covers realtime delivery gaps without polling the whole list.
     private var pendingSurfaceWatchTask: Task<Void, Never>?
@@ -157,6 +162,9 @@ final class TodoStore {
         trackedTodoIDs = []
         pendingNewTodoID = nil
         pendingNewTodoCreatedAt = nil
+        pendingNewTodoDeletedAt = nil
+        pendingCronHandoffGraceTask?.cancel()
+        pendingCronHandoffGraceTask = nil
         pendingSurfaceWatchTask?.cancel()
         pendingSurfaceWatchTask = nil
         cronHandoffRevision = 0
@@ -476,6 +484,9 @@ final class TodoStore {
     func insertOptimistic(_ todo: Todo) {
         pendingNewTodoID = todo.id
         pendingNewTodoCreatedAt = todo.created_at
+        pendingNewTodoDeletedAt = nil
+        pendingCronHandoffGraceTask?.cancel()
+        pendingCronHandoffGraceTask = nil
         upsertTodo(todo)
         startPendingTodoSurfaceWatch(id: todo.id)
     }
@@ -523,6 +534,13 @@ final class TodoStore {
         print("[store][cron_handoff] complete pending=\(pending) cron=\(candidate?.uuidString ?? "-")")
         clearPendingNewTodo()
         return true
+    }
+
+    /// True once a cron candidate exists for the pending todo, even if the
+    /// todo row is still present. The list uses this to start the visual
+    /// handoff while matched-geometry still has both endpoints available.
+    func pendingNewTodoCronHandoffIsReadyToAnimate() -> Bool {
+        pendingNewTodoID != nil && pendingNewTodoCronCandidateID() != nil
     }
 
     /// Cron creation and todo deletion can arrive in either order. When the
@@ -587,7 +605,7 @@ final class TodoStore {
     /// Hard-delete a todo (and its cascaded children). Removes locally
     /// first so the row disappears immediately even if the API call lags.
     func deleteTodo(_ id: UUID) async {
-        removeTodoLocal(id: id)
+        removeTodoLocal(id: id, clearPendingIfNoCandidate: true)
         do {
             try await TodosAPI.delete(id)
         } catch {
@@ -784,6 +802,11 @@ final class TodoStore {
     private func clearPendingNewTodo() {
         pendingNewTodoID = nil
         pendingNewTodoCreatedAt = nil
+        pendingNewTodoDeletedAt = nil
+        pendingCronHandoffGraceTask?.cancel()
+        pendingCronHandoffGraceTask = nil
+        pendingSurfaceWatchTask?.cancel()
+        pendingSurfaceWatchTask = nil
     }
 
     private func patchTodoLocal(id: UUID, _ mutate: (inout Todo) -> Void) {
@@ -791,7 +814,7 @@ final class TodoStore {
         mutate(&todos[idx])
     }
 
-    private func removeTodoLocal(id: UUID) {
+    private func removeTodoLocal(id: UUID, clearPendingIfNoCandidate: Bool = false) {
         todos.removeAll { $0.id == id }
         openInteractions.removeValue(forKey: id)
         artifactsByTodoID.removeValue(forKey: id)
@@ -803,11 +826,36 @@ final class TodoStore {
             // will never come back.
             if pendingNewTodoCronCandidateID() != nil {
                 notifyCronHandoffIfNeeded()
-            } else {
+            } else if clearPendingIfNoCandidate {
                 clearPendingNewTodo()
+            } else {
+                pendingNewTodoDeletedAt = Date()
+                notifyCronHandoffIfNeeded()
+                startPendingCronHandoffGraceWindow(for: id)
             }
         } else {
             notifyCronHandoffIfNeeded()
+        }
+    }
+
+    private func startPendingCronHandoffGraceWindow(for id: UUID) {
+        pendingCronHandoffGraceTask?.cancel()
+        pendingCronHandoffGraceTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard let self, !Task.isCancelled, self.pendingNewTodoID == id else { return }
+            await self.loadAll()
+            if self.pendingNewTodoCronCandidateID() != nil {
+                self.notifyCronHandoffIfNeeded()
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(6500))
+            guard !Task.isCancelled, self.pendingNewTodoID == id else { return }
+            if self.pendingNewTodoCronCandidateID() == nil,
+               self.pendingNewTodoDeletedAt != nil,
+               !self.todos.contains(where: { $0.id == id }) {
+                print("[store][cron_handoff] clear missing candidate pending=\(id)")
+                self.clearPendingNewTodo()
+            }
         }
     }
 

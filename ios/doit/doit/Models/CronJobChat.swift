@@ -51,10 +51,12 @@ struct CronJobInteraction: Codable, Identifiable, Hashable, Sendable {
 
     var options: [InteractionOption] {
         guard let raw = payload?.objectValue?["options"]?.arrayValue else { return [] }
+        var seenIDs: Set<String> = []
         return raw.compactMap { value in
             guard let obj = value.objectValue else { return nil }
             guard let id = obj["id"]?.stringValue,
                   let label = obj["label"]?.stringValue else { return nil }
+            guard seenIDs.insert(id).inserted else { return nil }
             let style = obj["style"]?.stringValue.flatMap(InteractionStyle.init(rawValue:))
             return InteractionOption(id: id, label: label, style: style)
         }

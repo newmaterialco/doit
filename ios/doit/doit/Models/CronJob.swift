@@ -15,7 +15,7 @@ enum CronJobState: String, Codable, Sendable, CaseIterable {
         case .paused: return "Paused"
         case .running: return "Running"
         case .completed: return "Completed"
-        case .needs_input: return "Waiting for you…"
+        case .needs_input: return "Needs input"
         }
     }
 

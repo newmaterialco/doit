@@ -119,9 +119,22 @@ enum CronJobsAPI {
     private static func reconfigure(_ jobID: UUID) async throws {
         try await Supa.client
             .from("cron_jobs")
-            .update(CronJobFieldsPatch(state: .configuring))
+            .update(CronJobReconfigurePatch())
             .eq("id", value: jobID)
             .execute()
+    }
+}
+
+private struct CronJobReconfigurePatch: Encodable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case configure_claimed_at
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(CronJobState.configuring.rawValue, forKey: .state)
+        try container.encodeNil(forKey: .configure_claimed_at)
     }
 }
 

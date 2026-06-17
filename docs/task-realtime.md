@@ -5,6 +5,9 @@ you change any of the pieces below, read this whole file first — every line
 here exists because a previous change broke "the list doesn't update until I
 open the task".
 
+**See also:** [`ios-list-live-updates.md`](ios-list-live-updates.md) — readable
+helper for list completion updates and the prep → cron handoff animation.
+
 ## Single source of truth
 
 ```
@@ -139,6 +142,42 @@ When Hermes finishes:
 Every one of these writes goes through `service_role`, which means RLS is
 bypassed on the runner side but the realtime publication still fires for
 each row change. The iOS app sees the change via the user feed.
+
+### Prep-to-cron handoff contract
+
+Prep cron conversion is intentionally tolerant of realtime event ordering.
+The runner writes the cron row and deletes the placeholder todo, but Supabase
+Realtime may deliver those events in either order. iOS therefore treats the
+fresh `+` sheet todo as a short-lived handoff session:
+
+- `TodoStore.insertOptimistic` sets `pendingNewTodoID` and
+  `pendingNewTodoCreatedAt`.
+- If the pending todo disappears before a cron candidate is visible,
+  `TodoStore` records `pendingNewTodoDeletedAt`, bumps `cronHandoffRevision`,
+  and gives the cron row a short grace window to arrive. Manual user deletes
+  still clear the marker immediately.
+- `TodoListView` starts the Scheduled-section slide as soon as both the
+  pending todo and candidate cron row exist, then clears handoff state once
+  the placeholder todo is gone.
+
+Do not add row-level `.move` transitions to active `TodoCard` rows to force
+completion animations. The cards already refresh by `cardRefreshID`; adding
+row transitions makes normal prep/activity updates look like the card is
+jumping in from the bottom.
+
+### Cron chat reconfiguration lease
+
+Scheduled-task chat requeues configuration by setting
+`cron_jobs.state = configuring`. That must also clear `configure_claimed_at`
+so the runner can claim the job immediately after a user message or
+interaction reply. The runner's claim path also treats rows as claimable when
+`updated_at` is newer than `configure_claimed_at`, which protects older
+clients that only set `state = configuring`.
+
+The chat should show `"Updating schedule…"` only while `job.state ==
+.configuring` and no interaction is open. If that message sticks around,
+inspect `configure_claimed_at`, `updated_at`, and the runner's cron configure
+claim logs before adding client-side polling.
 
 Realtime is configured in the migrations under `supabase/migrations/`. The
 relevant `alter publication supabase_realtime add table ...` statements live

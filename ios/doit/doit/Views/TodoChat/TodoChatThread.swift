@@ -240,6 +240,8 @@ struct TodoChatThread: View {
             )
         case .agentThinking(let label):
             AgentThinkingMessage(label: label)
+        case .agentConfirmation(_, let text, _):
+            AgentConfirmationMessage(text: text)
         case .agentInteraction(let interaction):
             AgentInteractionMessage(
                 interaction: interaction,
@@ -397,6 +399,20 @@ private struct AgentThinkingMessage: View {
                 }
             }
             .accessibilityLabel("Hermes is \(label.lowercased())")
+    }
+}
+
+private struct AgentConfirmationMessage: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 15, weight: .regular, design: .rounded))
+            .foregroundStyle(.secondary)
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(text)
     }
 }
 

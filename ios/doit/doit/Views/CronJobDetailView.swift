@@ -218,6 +218,13 @@ struct CronJobDetailView: View {
             )
             if let idx = messages.firstIndex(where: { $0.id == optimistic.id }) {
                 messages[idx] = saved
+            } else if let idx = messages.firstIndex(where: { $0.id == saved.id }) {
+                messages[idx] = saved
+            } else if let idx = messages.firstIndex(where: { message in
+                message.body == saved.body
+                    && abs(message.created_at.timeIntervalSince(optimistic.created_at)) < 10
+            }) {
+                messages[idx] = saved
             } else {
                 messages.append(saved)
             }
@@ -253,9 +260,20 @@ struct CronJobDetailView: View {
 
     private func loadMessages() async {
         do {
-            messages = try await CronJobsAPI.messages(for: jobID)
+            messages = mergedMessages(with: try await CronJobsAPI.messages(for: jobID))
         } catch {
             print("[cron] messages load failed: \(error)")
+        }
+    }
+
+    private func mergedMessages(with fetched: [CronJobMessage]) -> [CronJobMessage] {
+        var mergedByID: [UUID: CronJobMessage] = [:]
+        for message in messages + fetched {
+            mergedByID[message.id] = message
+        }
+        return mergedByID.values.sorted { lhs, rhs in
+            if lhs.created_at != rhs.created_at { return lhs.created_at < rhs.created_at }
+            return lhs.id.uuidString < rhs.id.uuidString
         }
     }
 }
