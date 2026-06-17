@@ -137,8 +137,8 @@ struct TodoChatThread: View {
             .background(alignment: .bottom) {
                 LinearGradient(
                     stops: [
-                        .init(color: .white.opacity(0), location: 0),
-                        .init(color: .white.opacity(0.5), location: 1)
+                        .init(color: AppSemanticColors.composerFadeClear, location: 0),
+                        .init(color: AppSemanticColors.composerFadeOpaque, location: 1)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -715,7 +715,7 @@ private struct EmailDraftPreview: View {
         .frame(maxWidth: 320, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -858,7 +858,7 @@ private struct CalendarInvitePreview: View {
         .frame(maxWidth: 320, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -1088,7 +1088,7 @@ private struct ChatComposer: View {
             .padding(8)
             .background(
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(Color.white)
+                    .fill(AppSemanticColors.elevatedSurface)
                     .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
             )
             .overlay(
@@ -1135,9 +1135,9 @@ private struct ChatComposer: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.gray)
+                    .foregroundStyle(AppSemanticColors.mutedChrome)
                     .frame(width: 40, height: 40)
-                    .background(Color.gray.opacity(0.18), in: Circle())
+                    .background(AppSemanticColors.neutralFillStrong, in: Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel recording")
@@ -1152,16 +1152,14 @@ private struct ChatComposer: View {
             } label: {
                 Image(systemName: "checkmark")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(.black)
-                    .frame(width: 40, height: 40)
-                    .background(Color.gray.opacity(0.30), in: Circle())
+                    .recordingConfirmButtonChrome()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Use recording")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
-        .background(Color.white, in: Capsule())
+        .background(AppSemanticColors.elevatedSurface, in: Capsule())
         .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
         .overlay(
             Capsule()
@@ -1183,7 +1181,7 @@ private struct ChatComposer: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
-        .background(Color.white, in: Capsule())
+        .background(AppSemanticColors.elevatedSurface, in: Capsule())
         .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
         .overlay(
             Capsule()

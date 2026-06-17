@@ -72,16 +72,7 @@ public struct VerticalSplit<
     @State var didSetInitialSplit = false
 
     var shouldLog = false
-    var bgColor: Color = {
-        Color(uiColor: .init(dynamicProvider: { trait in
-            switch trait.userInterfaceStyle {
-            case .dark:
-                return .init(white: 0.16, alpha: 1)
-            default:
-                return .systemBackground
-            }
-        }))
-    }()
+    var bgColor: Color = AppSemanticColors.splitPaneBackground
     var textColor: Color = .primary
 
     @GestureState var isDragging: Bool = false
@@ -339,7 +330,11 @@ public struct VerticalSplit<
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 8)
                     .opacity(0)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(
+                        isMinimalPill
+                            ? AppSemanticColors.splitHandleMinimalForeground
+                            : AppSemanticColors.splitHandleTrackForeground
+                    )
 
                 Spacer()
                     .frame(width: max(0, (20 + 8) * CGFloat(trailingCount) - 8))
@@ -348,7 +343,13 @@ public struct VerticalSplit<
             .padding(.horizontal, 12)
             .frame(height: isMinimalPill ? 44 : currentSpacing)
             .frame(maxWidth: isMinimalPill ? nil : .infinity)
-            .background(Capsule().fill(.black))
+            .background(
+                Capsule().fill(
+                    isMinimalPill
+                        ? AppSemanticColors.splitHandleMinimalBackground
+                        : AppSemanticColors.splitHandleTrackBackground
+                )
+            )
             .offset(
                 y: (hideTop ? -lil + 8 : hideBottom ? lil - 8 - bottomExtraOffset : 0)
                 + (partition + overscroll / (hideTop || hideBottom ? 1 : 5))
@@ -400,7 +401,7 @@ public struct VerticalSplit<
                        !isAccessoriesPill {
                         Text(label)
                             .font(.system(size: 13, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppSemanticColors.splitHandleTrackForeground)
                             .lineLimit(1)
                             .fixedSize()
                             .contentTransition(.numericText(value: numericValue(of: label)))
@@ -448,7 +449,11 @@ public struct VerticalSplit<
                 }
             }
             .fontWeight(.medium)
-            .foregroundStyle(.white)
+            .foregroundStyle(
+                isMinimalPill
+                    ? AppSemanticColors.splitHandleMinimalForeground
+                    : AppSemanticColors.splitHandleTrackForeground
+            )
             .padding(.horizontal, isMinimalPill ? 12 : 24 + abs(overscroll / 20))
             .frame(height: isMinimalPill ? 44 : currentSpacing)
             .scaleEffect(isAccessoriesPill ? 0.9 : 1)
@@ -511,7 +516,7 @@ public struct VerticalSplit<
 
             ZStack {
                 Capsule()
-                    .fill(.white.opacity(0.3))
+                    .fill(AppSemanticColors.splitHandleGrabber)
                     .frame(width: 56, height: 5)
                     .transaction({ t in
                         t.animation = .easeInOut(duration: 0.3)
@@ -531,8 +536,7 @@ public struct VerticalSplit<
                     .scaleEffect(isMinimalPill ? 1 : 0.9)
                     .blur(radius: isMinimalPill ? 0 : 12)
                     .opacity(isMinimalPill ? 1 : 0)
-                    .foregroundStyle(.white)
-                    .offset(x: CGFloat(leadingCount - trailingCount) * (20 + 8) / 2)
+                    .foregroundStyle(AppSemanticColors.splitHandleMinimalForeground)
             }
             .scaleEffect(1)
             .scaleEffect(isAccessoriesPill ? 0.9 : 1)
@@ -546,7 +550,7 @@ public struct VerticalSplit<
             .allowsHitTesting(false)
 
         }
-        .background(.black)
+        .background(AppSemanticColors.splitChromeBackground)
         .onAppear {
             didUpdateSplit(split: detent)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {

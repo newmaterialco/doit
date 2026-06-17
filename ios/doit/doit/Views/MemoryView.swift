@@ -91,7 +91,7 @@ struct MemoryView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .navigationTitle("Memory")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

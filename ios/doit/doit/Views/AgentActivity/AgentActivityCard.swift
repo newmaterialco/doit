@@ -99,13 +99,13 @@ private struct AgentIntentStackCard: View {
             Image(systemName: item.isCompleted ? "checkmark" : item.symbolName)
                 .font(.system(size: 12, weight: .bold))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.black.opacity(0.5))
+                .foregroundStyle(Color.secondary)
                 .frame(width: 21, height: 21)
-                .background(Circle().foregroundStyle(Color.black.opacity(0.12)))
+                .background(Circle().foregroundStyle(AppSemanticColors.neutralFill))
 
             Text(item.title)
                 .font(.callout)
-                .foregroundStyle(Color.black)
+                .foregroundStyle(.primary)
                 .frame(height: 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
@@ -114,12 +114,12 @@ private struct AgentIntentStackCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 60)
         .background(
-            Color.white,
+            AppSemanticColors.elevatedSurface,
             in: .rect(cornerRadius: depth == 0 ? 16 : 10, style: .continuous)
         )
         .overlay {
             RoundedRectangle(cornerRadius: depth == 0 ? 16 : 10, style: .continuous)
-                .strokeBorder(Color.black.opacity(depth == 0 ? 0.05 : 0.03), lineWidth: 1)
+                .strokeBorder(AppSemanticColors.separator.opacity(depth == 0 ? 1 : 0.6), lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(depth == 0 ? 0.08 : 0.03), radius: depth == 0 ? 12 : 4, x: 0, y: 3)
         .scaleEffect(scale)

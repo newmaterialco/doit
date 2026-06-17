@@ -202,7 +202,7 @@ struct TaskHeaderView: View {
                         .padding(10)
                         .background(
                             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                .fill(Color.primary.opacity(0.04))
+                                .fill(AppSemanticColors.insetPanelBackground)
                         )
                 }
                 .buttonStyle(.plain)
@@ -353,11 +353,11 @@ struct TaskHeaderView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+                .strokeBorder(AppSemanticColors.separator, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
     }
@@ -498,11 +498,11 @@ private struct ArtifactCardShell<Content: View>: View {
         .padding(ArtifactCardLayout.contentPadding)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+                .strokeBorder(AppSemanticColors.separator, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -571,11 +571,11 @@ private struct LinkArtifactCard: View {
         .padding(ArtifactCardLayout.contentPadding)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+                .strokeBorder(AppSemanticColors.separator, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -630,11 +630,11 @@ private struct EmailArtifactCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+                .strokeBorder(AppSemanticColors.separator, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
     }
@@ -814,12 +814,12 @@ private struct TextArtifactCard: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+                .strokeBorder(AppSemanticColors.separator, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
         .frame(maxWidth: .infinity, alignment: .leading)

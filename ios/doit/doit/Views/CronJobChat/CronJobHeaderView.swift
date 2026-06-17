@@ -125,12 +125,12 @@ struct CronJobHeaderView: View {
 
                 Text(job.schedulePillText)
                     .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color(white: 0.35))
+                    .foregroundStyle(Color(.secondaryLabel))
                     .padding(.vertical, 8)
                     .padding(.horizontal, 14)
                     .background(
                         Capsule()
-                            .fill(Color(white: 0.92))
+                            .fill(AppSemanticColors.neutralFill)
                     )
                     .accessibilityLabel("Schedule: \(job.schedulePillText)")
 

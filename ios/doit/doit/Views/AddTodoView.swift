@@ -64,7 +64,7 @@ struct AddTodoView: View {
                             .font(.system(size: 22, weight: .regular, design: .rounded))
                             .lineSpacing(4)
                             .scrollContentBackground(.hidden)
-                            .background(Color.white)
+                            .background(AppSemanticColors.surface)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .padding(.horizontal, 20)
                             .padding(.top, pendingImages.isEmpty ? 20 : 12)
@@ -77,19 +77,19 @@ struct AddTodoView: View {
                             .foregroundStyle(.red)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 12)
-                            .background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 14))
+                            .background(AppSemanticColors.surface.opacity(0.92), in: RoundedRectangle(cornerRadius: 14))
                             .padding()
                     }
                 }
             }
             .background {
-                Color.white.ignoresSafeArea()
+                AppSemanticColors.surface.ignoresSafeArea()
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
             }
             .toolbar(.hidden, for: .navigationBar)
-            .presentationBackground(.white)
+            .presentationBackground(AppSemanticColors.surface)
             .photosPicker(
                 isPresented: $showPhotoPicker,
                 selection: $photoSelections,
@@ -140,7 +140,7 @@ struct AddTodoView: View {
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundStyle(.primary)
                         .frame(width: 34, height: 34)
-                        .background(Color.gray.opacity(0.12), in: Circle())
+                        .background(AppSemanticColors.neutralFill, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close")
@@ -155,7 +155,7 @@ struct AddTodoView: View {
                         .foregroundStyle(canCreate ? .white : .secondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(canCreate ? Color.blue : Color.gray.opacity(0.16), in: Capsule())
+                        .background(canCreate ? Color.blue : AppSemanticColors.neutralFill, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .disabled(!canCreate)
@@ -164,7 +164,7 @@ struct AddTodoView: View {
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 12)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
     }
 
     private var attachmentStrip: some View {
@@ -200,7 +200,7 @@ struct AddTodoView: View {
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 10)
-                                .background(Color.gray.opacity(0.10), in: Capsule())
+                                .background(AppSemanticColors.neutralFill, in: Capsule())
                         }
                         .buttonStyle(.plain)
                         .disabled(voice.isRecording || isTranscribing)
@@ -212,7 +212,7 @@ struct AddTodoView: View {
         }
         .padding(.top, 10)
         .padding(.bottom, 10)
-        .background(.white)
+        .background(AppSemanticColors.surface)
         .animation(.spring(response: 0.32, dampingFraction: 0.78), value: voice.isRecording)
         .animation(.easeInOut(duration: 0.2), value: isTranscribing)
     }
@@ -256,7 +256,7 @@ struct AddTodoView: View {
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
-                .background(Color.gray.opacity(0.12), in: Circle())
+                .background(AppSemanticColors.neutralFill, in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(!canAddMoreAttachments)
@@ -272,7 +272,7 @@ struct AddTodoView: View {
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
-                .background(Color.gray.opacity(0.12), in: Circle())
+                .background(AppSemanticColors.neutralFill, in: Circle())
         }
         .buttonStyle(.plain)
         .disabled(!canAddMoreAttachments)
@@ -288,9 +288,9 @@ struct AddTodoView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.gray)
+                    .foregroundStyle(AppSemanticColors.mutedChrome)
                     .frame(width: 40, height: 40)
-                    .background(Color.gray.opacity(0.18), in: Circle())
+                    .background(AppSemanticColors.neutralFillStrong, in: Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Cancel recording")
@@ -305,16 +305,14 @@ struct AddTodoView: View {
             } label: {
                 Image(systemName: "checkmark")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(.black)
-                    .frame(width: 40, height: 40)
-                    .background(Color.gray.opacity(0.30), in: Circle())
+                    .recordingConfirmButtonChrome()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Use recording")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
-        .background(Color.gray.opacity(0.10), in: Capsule())
+        .background(AppSemanticColors.neutralFill, in: Capsule())
         .transition(.opacity.combined(with: .scale(scale: 0.97)))
     }
 
@@ -331,7 +329,7 @@ struct AddTodoView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
-        .background(Color.gray.opacity(0.10), in: Capsule())
+        .background(AppSemanticColors.neutralFill, in: Capsule())
         .transition(.opacity)
     }
 

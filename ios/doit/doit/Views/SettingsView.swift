@@ -34,7 +34,7 @@ struct SettingsView: View {
                         if let displayedRoute {
                             settingsDestination(displayedRoute)
                                 .frame(width: proxy.size.width, height: proxy.size.height)
-                                .background(Color.white)
+                                .background(AppSemanticColors.surface)
                                 .offset(x: activeRoute == nil ? proxy.size.width : 0)
                         }
                     }
@@ -54,7 +54,7 @@ struct SettingsView: View {
                 .animation(settingsNavigationAnimation, value: showModelPicker)
             }
             .ignoresSafeArea(.container, edges: .bottom)
-            .background(Color.white)
+            .background(AppSemanticColors.surface)
             .toolbar(.hidden, for: .navigationBar)
             .task { await loadModelSettings() }
             .onAppear { openInitialRouteIfNeeded() }
@@ -178,7 +178,7 @@ struct SettingsView: View {
             route.content
                 .padding(.top, 60)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.white)
+                .background(AppSemanticColors.surface)
                 .toolbar(.hidden, for: .navigationBar)
 
             SettingsPageHeader(title: route.title) {
@@ -186,7 +186,7 @@ struct SettingsView: View {
                 closeRoute()
             }
         }
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
     }
 
     private func openRoute(_ route: SettingsRoute) {
@@ -249,7 +249,7 @@ struct SettingsView: View {
         ZStack {
             Text("Settings")
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(white: 0.08))
+                .foregroundStyle(.primary)
 
             HStack {
                 Button {
@@ -258,7 +258,7 @@ struct SettingsView: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color(white: 0.58))
+                        .foregroundStyle(.secondary)
                         .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
@@ -270,7 +270,7 @@ struct SettingsView: View {
         }
         .frame(height: 56)
         .padding(.bottom, 4)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .zIndex(1)
     }
 
@@ -482,13 +482,13 @@ private struct SettingsPageHeader: View {
         ZStack {
             Text(title)
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(white: 0.08))
+                .foregroundStyle(.primary)
 
             HStack {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color(white: 0.58))
+                        .foregroundStyle(.secondary)
                         .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
@@ -500,7 +500,7 @@ private struct SettingsPageHeader: View {
         }
         .frame(height: 56)
         .padding(.bottom, 4)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .zIndex(1)
     }
 }
@@ -517,26 +517,26 @@ private struct SettingsRow: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(Color(white: 0.58))
+                .foregroundStyle(.secondary)
                 .frame(width: 34, height: 38)
 
             Text(title)
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(white: 0.18))
+                .foregroundStyle(.primary)
 
             Spacer(minLength: 12)
 
             if let value, !value.isEmpty {
                 Text(value)
                     .font(.system(size: 16, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color(white: 0.42))
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
 
             if showsChevron {
                 Image(systemName: trailingSystemName)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color(white: 0.72))
+                    .foregroundStyle(Color(.tertiaryLabel))
                     .rotationEffect(trailingRotation)
             }
         }
@@ -560,10 +560,10 @@ private struct PersonRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(size: 19, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(white: 0.16))
+                    .foregroundStyle(.primary)
                 Text(subtitle)
                     .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color(white: 0.58))
+                    .foregroundStyle(.secondary)
             }
 
             Spacer()
@@ -572,7 +572,7 @@ private struct PersonRow: View {
                 if let trailingBadge {
                     Text(trailingBadge)
                         .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.black)
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(
@@ -583,7 +583,7 @@ private struct PersonRow: View {
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color(white: 0.72))
+                    .foregroundStyle(Color(.tertiaryLabel))
             }
         }
         .frame(minHeight: 78)
@@ -617,16 +617,16 @@ private struct ModelPickerCard: View {
             HStack {
                 Text("Select a model")
                     .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(white: 0.1))
+                    .foregroundStyle(.primary)
 
                 Spacer()
 
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color(white: 0.55))
+                        .foregroundStyle(.secondary)
                         .frame(width: 34, height: 34)
-                        .background(Color(white: 0.95), in: Circle())
+                        .background(AppSemanticColors.neutralFill, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close model picker")
@@ -677,7 +677,7 @@ private struct ModelPickerCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(height: height)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
     }
@@ -726,7 +726,7 @@ private struct ModelPickerRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(modelDisplayName(provider: provider, model: model))
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color(white: model.isLocked ? 0.55 : 0.14))
+                        .foregroundStyle(model.isLocked ? Color.secondary : Color.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
 
@@ -734,19 +734,19 @@ private struct ModelPickerRow: View {
                         if model.isLocked {
                             Text("Premium — invite only")
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color(white: 0.62))
+                                .foregroundStyle(.secondary)
                         } else {
                             Text(priceLabel(for: model.label))
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color(white: 0.72))
+                                .foregroundStyle(Color(.tertiaryLabel))
 
                             Circle()
-                                .fill(Color(white: 0.78))
+                                .fill(AppSemanticColors.separator)
                                 .frame(width: 3, height: 3)
 
                             Text(model.label)
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color(white: 0.52))
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                     }
@@ -757,7 +757,7 @@ private struct ModelPickerRow: View {
                 if model.isLocked {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color(white: 0.72))
+                        .foregroundStyle(Color(.tertiaryLabel))
                 } else if saving && isSelected {
                     ProgressView()
                         .controlSize(.small)
@@ -815,7 +815,7 @@ private struct ModelProviderLogo: View {
             } else {
                 Text("?")
                     .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(white: 0.32))
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(width: 38, height: 38)
@@ -938,25 +938,25 @@ struct ProfileAvatar: View {
         .clipShape(Circle())
         .overlay {
             Circle()
-                .stroke(Color(white: 0.9), lineWidth: 1)
+                .stroke(AppSemanticColors.avatarBorder, lineWidth: 1.5)
         }
     }
 
     private func initialsFallback(_ initials: String?) -> some View {
         ZStack {
             Circle()
-                .fill(Color.black)
+                .fill(AppSemanticColors.avatarPlaceholderBackground)
 
             if let initials, !initials.isEmpty {
                 Text(initials)
                     .font(.system(size: size * 0.4, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppSemanticColors.avatarPlaceholderForeground)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             } else {
                 Image(systemName: "person.fill")
                     .font(.system(size: size * 0.42, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppSemanticColors.avatarPlaceholderForeground)
             }
         }
     }
@@ -996,7 +996,7 @@ private struct UserProfileView: View {
                     .id("profile-editor-avatar")
                     Text("Change Photo")
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color(white: 0.36))
+                        .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
@@ -1005,7 +1005,7 @@ private struct UserProfileView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Name")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color(white: 0.58))
+                    .foregroundStyle(.secondary)
                 TextField("Your name", text: $displayName)
                     .font(.system(size: 17, weight: .medium, design: .rounded))
                     .textInputAutocapitalization(.words)
@@ -1047,7 +1047,7 @@ private struct UserProfileView: View {
             .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .navigationTitle("You")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -1127,14 +1127,14 @@ private struct AgentProfileView: View {
                 .padding(.top, 28)
             Text("doit")
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(white: 0.14))
+                .foregroundStyle(.primary)
             Text(lastRunText)
                 .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(Color(white: 0.58))
+                .foregroundStyle(.secondary)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .navigationTitle("doit")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -1168,7 +1168,7 @@ private struct SectionLabel: View {
         HStack {
             Text(title.uppercased())
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color(white: 0.68))
+                .foregroundStyle(.tertiary)
             Spacer()
         }
         .padding(.horizontal, 20)
@@ -1181,7 +1181,7 @@ private struct SettingsDivider: View {
 
     var body: some View {
         Rectangle()
-            .fill(Color(white: 0.94))
+            .fill(AppSemanticColors.neutralFill)
             .frame(height: 1)
             .padding(.leading, leadingPadding)
     }
@@ -1201,14 +1201,14 @@ private struct FeedbackView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Tell us what broke, what felt confusing, or what you'd like to see next.")
                     .font(.system(size: 15, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color(white: 0.42))
+                    .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 ZStack(alignment: .topLeading) {
                     if message.isEmpty {
                         Text("Describe the issue or idea…")
                             .font(.system(size: 16, weight: .regular, design: .rounded))
-                            .foregroundStyle(Color(white: 0.72))
+                            .foregroundStyle(Color(.tertiaryLabel))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 14)
                     }
@@ -1221,10 +1221,10 @@ private struct FeedbackView: View {
                         .padding(.vertical, 8)
                         .disabled(submitting)
                 }
-                .background(Color(white: 0.97), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                        .stroke(AppSemanticColors.separator, lineWidth: 1)
                 }
                 .onChange(of: message) { _, _ in
                     if didSubmit { didSubmit = false }
@@ -1233,9 +1233,9 @@ private struct FeedbackView: View {
                 Toggle(isOn: $includeEmail) {
                     Text("Share my email so the team can follow up")
                         .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color(white: 0.18))
+                        .foregroundStyle(.primary)
                 }
-                .toggleStyle(SwitchToggleStyle(tint: Color(white: 0.12)))
+                .toggleStyle(SwitchToggleStyle(tint: Color(.label)))
                 .disabled(submitting)
                 .onChange(of: includeEmail) { _, isOn in
                     if isOn, contactEmail.isEmpty {
@@ -1247,7 +1247,7 @@ private struct FeedbackView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Contact email")
                             .font(.system(size: 14, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color(white: 0.42))
+                            .foregroundStyle(.tertiary)
 
                         TextField("you@example.com", text: $contactEmail)
                             .font(.system(size: 16, weight: .regular, design: .rounded))
@@ -1257,17 +1257,17 @@ private struct FeedbackView: View {
                             .textContentType(.emailAddress)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
-                            .background(Color(white: 0.97), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                                    .stroke(AppSemanticColors.separator, lineWidth: 1)
                             }
                             .disabled(submitting)
 
                         if let accountEmail = auth.email, !accountEmail.isEmpty {
                             Text("Signed in as \(accountEmail)")
                                 .font(.system(size: 13, weight: .regular, design: .rounded))
-                                .foregroundStyle(Color(white: 0.55))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -1284,7 +1284,7 @@ private struct FeedbackView: View {
                             .foregroundStyle(Color.green)
                         Text("Thanks — your feedback was sent.")
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color(white: 0.18))
+                            .foregroundStyle(.primary)
                     }
                 }
 
@@ -1304,7 +1304,7 @@ private struct FeedbackView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 50)
                     .background(
-                        canSubmit ? Color.black : Color(white: 0.72),
+                        canSubmit ? Color.black : Color(.tertiaryLabel),
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous)
                     )
                 }
@@ -1316,7 +1316,7 @@ private struct FeedbackView: View {
             .padding(.bottom, 32)
         }
         .scrollContentBackground(.hidden)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .onAppear {
             if contactEmail.isEmpty {
                 contactEmail = auth.email ?? ""

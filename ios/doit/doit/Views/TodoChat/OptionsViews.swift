@@ -192,7 +192,7 @@ struct OptionsPreview: View {
         .frame(maxWidth: 320, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -244,11 +244,11 @@ struct OptionsArtifactCard: View {
             .padding(ArtifactCardLayout.contentPadding)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white)
+                    .fill(AppSemanticColors.elevatedSurface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.black.opacity(0.05), lineWidth: 1)
+                    .strokeBorder(AppSemanticColors.separator, lineWidth: 1)
             )
             .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
             .frame(maxWidth: .infinity, alignment: .leading)

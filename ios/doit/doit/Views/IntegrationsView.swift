@@ -52,7 +52,7 @@ struct IntegrationsView: View {
                 }
             }
         }
-        .background(Color.white.ignoresSafeArea())
+        .background(AppSemanticColors.surface.ignoresSafeArea())
         .ignoresSafeArea(.container, edges: .bottom)
         .scrollContentBackground(.hidden)
         .navigationTitle("Connections")
@@ -277,14 +277,9 @@ private struct ToolkitRow: View {
             } else if toolkit.isConnectable {
                 Button("Connect", action: onConnect)
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.black)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 10))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color(.systemGray4), lineWidth: 1)
-                    }
+                    .connectButtonChrome()
             }
         }
         .padding(.vertical, 18)

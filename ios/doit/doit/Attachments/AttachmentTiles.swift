@@ -38,7 +38,7 @@ struct AttachmentTile<Thumbnail: View>: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                            .stroke(AppSemanticColors.separator, lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
@@ -130,7 +130,7 @@ struct RemoteAttachmentTile: View {
 
     private var placeholder: some View {
         ZStack {
-            Color.gray.opacity(0.12)
+            AppSemanticColors.neutralFill
             Image(systemName: "photo")
                 .font(.system(size: 18, weight: .regular, design: .rounded))
                 .foregroundStyle(.secondary)

@@ -73,7 +73,7 @@ struct TodoListView: View {
         ZStack(alignment: .top) {
             NavigationStack(path: $navigationPath) {
                 ZStack {
-                    Color(red: 0.98, green: 0.98, blue: 0.98)
+                    AppSemanticColors.screenBackground
                         .ignoresSafeArea()
 
                     Group {
@@ -234,7 +234,7 @@ struct TodoListView: View {
             }
 
             if showSettings {
-                Color.white
+                AppSemanticColors.surface
                     .ignoresSafeArea()
                     .opacity(settingsSheetIsVisible ? 1 : 0)
                     .animation(settingsPresentationAnimation, value: settingsSheetIsVisible)
@@ -250,7 +250,7 @@ struct TodoListView: View {
             }
 
             if showActivityGroupDetail, let selectedActivityGroup {
-                Color.white
+                AppSemanticColors.surface
                     .ignoresSafeArea()
                     .opacity(activityGroupDetailIsVisible ? 1 : 0)
                     .animation(settingsPresentationAnimation, value: activityGroupDetailIsVisible)
@@ -265,7 +265,7 @@ struct TodoListView: View {
 
     private var topControls: some View {
         ZStack(alignment: .top) {
-            Color(red: 0xFA / 255, green: 0xFA / 255, blue: 0xFA / 255)
+            AppSemanticColors.screenBackground
             .frame(height: 114)
             .ignoresSafeArea(.container, edges: .top)
 
@@ -281,9 +281,9 @@ struct TodoListView: View {
                     } label: {
                         Image(systemName: "ladybug.fill")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Color.gray.opacity(0.55))
+                            .foregroundStyle(AppSemanticColors.mutedChrome)
                             .frame(width: 32, height: 32)
-                            .background(Color.gray.opacity(0.12), in: Circle())
+                            .background(AppSemanticColors.neutralFill, in: Circle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Beta feedback")
@@ -300,10 +300,6 @@ struct TodoListView: View {
                             ),
                             size: 32
                         )
-                        .overlay {
-                            Circle()
-                                .stroke(Color.gray.opacity(0.16), lineWidth: 2.5)
-                        }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Profile")
@@ -724,9 +720,9 @@ struct TodoListView: View {
                 Image(systemName: "plus")
                     .font(.title3.weight(.semibold))
                     .frame(width: 52, height: 52)
-                    .foregroundStyle(.white)
-                    .background(Color.black, in: Circle())
-                    .shadow(color: .black.opacity(0.10), radius: 10, y: 4)
+                    .foregroundStyle(AppSemanticColors.fabForeground)
+                    .background(AppSemanticColors.fabBackground, in: Circle())
+                    .shadow(color: AppSemanticColors.invertedSurface.opacity(0.12), radius: 10, y: 4)
             }
             .buttonStyle(.plain)
             .contentShape(Circle())
@@ -1039,7 +1035,7 @@ struct TodoListView: View {
             .refreshable { await store.loadAll() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
     }
 
     private func presentSuggestedInfo() {
@@ -1787,7 +1783,7 @@ private struct CaptureToolbelt: View {
                 icon: "mic.fill",
                 label: "Record voice note",
                 foreground: .primary,
-                background: Color.white,
+                background: AppSemanticColors.elevatedSurface,
                 showsBorder: true,
                 action: onMic
             )
@@ -1795,7 +1791,7 @@ private struct CaptureToolbelt: View {
                 icon: "camera.fill",
                 label: "Take a photo",
                 foreground: .primary,
-                background: Color.white,
+                background: AppSemanticColors.elevatedSurface,
                 showsBorder: true,
                 action: onCamera
             )
@@ -1803,7 +1799,7 @@ private struct CaptureToolbelt: View {
                 icon: "photo.on.rectangle",
                 label: "Choose from library",
                 foreground: .primary,
-                background: Color.white,
+                background: AppSemanticColors.elevatedSurface,
                 showsBorder: true,
                 action: onGallery
             )
@@ -1811,7 +1807,7 @@ private struct CaptureToolbelt: View {
                 icon: "square.and.pencil",
                 label: "Write a note",
                 foreground: .primary,
-                background: Color.white,
+                background: AppSemanticColors.elevatedSurface,
                 showsBorder: true,
                 action: onNote
             )
@@ -1836,7 +1832,7 @@ private struct CaptureToolbelt: View {
                 .overlay {
                     if showsBorder {
                         RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                            .stroke(AppSemanticColors.separator, lineWidth: 1)
                     }
                 }
         }
@@ -1855,7 +1851,7 @@ private struct TaskSectionHeader: View {
         HStack(spacing: 8) {
             Text(title)
                 .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.black.opacity(0.78))
+                .foregroundStyle(Color.primary.opacity(0.78))
 
             Spacer(minLength: 0)
 
@@ -1864,7 +1860,7 @@ private struct TaskSectionHeader: View {
                     Button(action: trailingAction) {
                         Image(systemName: trailingIconName)
                             .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(Color.gray.opacity(0.58))
+                            .foregroundStyle(.secondary)
                             .frame(width: 36, height: 30)
                             .contentShape(Rectangle())
                     }
@@ -1873,7 +1869,7 @@ private struct TaskSectionHeader: View {
                 } else {
                     Image(systemName: trailingIconName)
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.gray.opacity(0.58))
+                        .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
                 }
             }
@@ -1906,11 +1902,11 @@ private struct SuggestedInfoCard: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(title)
                         .font(.system(size: 24, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.black)
+                        .foregroundStyle(.primary)
 
                     Text(message)
                         .font(.system(size: 20, weight: .regular, design: .rounded))
-                        .foregroundStyle(Color.gray)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -1928,7 +1924,7 @@ private struct SuggestedInfoCard: View {
             .padding(.top, 22)
             .padding(.bottom, 24)
         }
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
     }
@@ -2045,10 +2041,10 @@ private struct SuggestedTaskTile: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+            .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                    .stroke(AppSemanticColors.separator, lineWidth: 1)
             }
             .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
         }
@@ -2067,17 +2063,17 @@ private struct SuggestedTaskTile: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(suggestion.theme)
                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.gray)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .background(Color.gray.opacity(0.10), in: Capsule())
+                .background(AppSemanticColors.neutralFill, in: Capsule())
 
             Spacer(minLength: 0)
 
             Text(suggestion.title)
                 .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.black)
+                .foregroundStyle(.primary)
                 .lineLimit(3)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2105,7 +2101,7 @@ private struct SuggestedTaskTile: View {
     }
 
     private var skeletonFill: Color {
-        Color.gray.opacity(skeletonIsAnimating ? 0.18 : 0.08)
+        AppSemanticColors.neutralFill.opacity(skeletonIsAnimating ? 1.0 : 0.5)
     }
 }
 
@@ -2160,10 +2156,10 @@ private struct ExploreLocationCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 }
@@ -2239,7 +2235,7 @@ private struct LocationMapSquareTile: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(TodoCardStyle.primaryBlue)
                 .frame(width: 30, height: 30)
-                .background(Color.white.opacity(0.75), in: Circle())
+                .background(AppSemanticColors.elevatedSurface.opacity(0.75), in: Circle())
 
             Text(locationProvider.permissionActionText)
                 .font(.system(size: 9, weight: .semibold, design: .rounded))
@@ -2392,10 +2388,10 @@ private struct ExploreConnectionsPromoCard: View {
             .padding(.bottom, 12)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 }
@@ -2443,10 +2439,10 @@ private struct LocationMapTile: View {
             .padding(12)
         }
         .frame(width: 264, height: 190)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         .onTapGesture {
@@ -2462,7 +2458,7 @@ private struct LocationMapTile: View {
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(TodoCardStyle.primaryBlue)
                 .frame(width: 58, height: 58)
-                .background(Color.white.opacity(0.75), in: Circle())
+                .background(AppSemanticColors.elevatedSurface.opacity(0.75), in: Circle())
 
             Text(locationProvider.permissionActionText)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -2509,10 +2505,10 @@ private struct ExploreActionTile: View {
             }
             .padding(style.padding)
             .frame(width: style.width, height: style.height, alignment: .leading)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous))
+            .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                    .stroke(AppSemanticColors.separator, lineWidth: 1)
             }
         }
         .buttonStyle(.plain)
@@ -2598,10 +2594,10 @@ private struct ExploreConnectionCard: View {
         }
         .padding(16)
         .frame(width: 220, height: 204, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 }
@@ -2610,30 +2606,30 @@ private struct ExploreConnectionSkeletonCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Circle()
-                .fill(Color.gray.opacity(0.12))
+                .fill(AppSemanticColors.neutralFill)
                 .frame(width: 34, height: 34)
 
             VStack(alignment: .leading, spacing: 8) {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.gray.opacity(0.12))
+                    .fill(AppSemanticColors.neutralFill)
                     .frame(width: 118, height: 16)
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.gray.opacity(0.10))
+                    .fill(AppSemanticColors.neutralFill.opacity(0.85))
                     .frame(width: 160, height: 12)
             }
 
             Spacer()
 
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.gray.opacity(0.10))
+                .fill(AppSemanticColors.neutralFill.opacity(0.85))
                 .frame(height: 34)
         }
         .padding(16)
         .frame(width: 220, height: 188)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 }
@@ -2735,7 +2731,7 @@ private struct PassbookUserContactCard: View {
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.035), in: Capsule())
+                        .background(AppSemanticColors.neutralFill, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .accessibilityHint("Requests location access for nearby suggestions")
@@ -2747,10 +2743,10 @@ private struct PassbookUserContactCard: View {
         .padding(.bottom, 12)
         .padding(22)
         .frame(maxWidth: .infinity)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 }
@@ -2840,11 +2836,11 @@ private struct PassbookMemoryCard: View {
             .padding(.leading, 14)
             .padding(.trailing, 20)
             .padding(.vertical, 14)
-            .background(Color.white, in: rowShape)
+            .background(AppSemanticColors.elevatedSurface, in: rowShape)
             .contentShape(rowShape)
             .overlay(
                 rowShape
-                    .stroke(Color.black.opacity(0.05))
+                    .stroke(AppSemanticColors.separator)
             )
         }
         .buttonStyle(.plain)
@@ -2858,7 +2854,7 @@ private struct PassbookMemorySymbolAvatar: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.black.opacity(0.06))
+                .fill(AppSemanticColors.separator)
             Image(systemName: memory.effectiveSymbolName)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color.secondary.opacity(0.72))
@@ -2894,7 +2890,7 @@ private struct PassbookMemoryDetailCard: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)
                         .frame(height: 32)
-                        .background(Color.black.opacity(0.06), in: Capsule())
+                        .background(AppSemanticColors.neutralFill, in: Capsule())
                         .buttonStyle(.plain)
                 }
                 Button(action: onClose) {
@@ -2902,7 +2898,7 @@ private struct PassbookMemoryDetailCard: View {
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.secondary)
                         .frame(width: 32, height: 32)
-                        .background(Color.black.opacity(0.06), in: Circle())
+                        .background(AppSemanticColors.neutralFill, in: Circle())
                 }
                 .buttonStyle(.plain)
             }
@@ -2967,10 +2963,10 @@ private struct PassbookMemoryDetailCard: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(26)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
-                .stroke(Color.black.opacity(0.05))
+                .stroke(AppSemanticColors.separator)
         )
     }
 }
@@ -3298,7 +3294,7 @@ private struct ActivityDateDivider: View {
     var body: some View {
         Text(Self.label(for: date))
             .font(.system(size: 12, weight: .medium, design: .rounded))
-            .foregroundStyle(Color.black.opacity(0.36))
+            .foregroundStyle(Color.secondary)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 4)
             .accessibilityAddTraits(.isHeader)
@@ -3445,7 +3441,7 @@ private struct CompletedActivityToggle: View {
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.white.opacity(0.86))
+                    .fill(AppSemanticColors.elevatedSurface.opacity(0.86))
                     .frame(width: segmentWidth, height: pillHeight)
                     .offset(
                         x: inset + segmentWidth * CGFloat(selection.index),
@@ -3460,7 +3456,7 @@ private struct CompletedActivityToggle: View {
                         } label: {
                             segmentLabel(for: filter)
                                 .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundStyle(selection == filter ? Color.black : Color.black.opacity(0.48))
+                                .foregroundStyle(selection == filter ? Color.primary : Color.secondary)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: pillHeight)
                         }
@@ -3473,7 +3469,7 @@ private struct CompletedActivityToggle: View {
             }
         }
         .frame(height: 46)
-        .background(Color.black.opacity(0.05), in: Capsule())
+        .background(AppSemanticColors.neutralFill, in: Capsule())
     }
 
     @ViewBuilder
@@ -3483,7 +3479,7 @@ private struct CompletedActivityToggle: View {
                 Text(filter.title)
                 Text("\(allActivityCount)")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(selection == filter ? Color.black.opacity(0.42) : Color.black.opacity(0.30))
+                    .foregroundStyle(selection == filter ? Color.secondary : Color(.tertiaryLabel))
             }
         } else {
             Text(filter.title)
@@ -3562,7 +3558,7 @@ private struct ActivityEmptyCard: View {
 
             Text(title)
                 .font(.system(size: 17, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.black.opacity(0.82))
+                .foregroundStyle(Color.primary.opacity(0.82))
 
             Text(message)
                 .font(.system(size: 14, weight: .regular, design: .rounded))
@@ -3571,10 +3567,10 @@ private struct ActivityEmptyCard: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous))
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 }
@@ -3620,7 +3616,7 @@ private struct ActivityGroupDetailHeader: View {
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 12)
-        .background(Color.white)
+        .background(AppSemanticColors.surface)
     }
 }
 
@@ -3729,7 +3725,7 @@ private struct SettingsTopOverlay: View {
     var body: some View {
         SettingsView(onDismiss: onDismiss, initialRoute: initialRoute)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white)
+            .background(AppSemanticColors.surface)
     }
 }
 
@@ -3746,11 +3742,7 @@ private struct CronJobCard: View {
     private static let contentTopPadding: CGFloat = 12
     private static let contentBottomPadding: CGFloat = 16
     private static let footerHeight: CGFloat = 54
-    private static let footerBackground = Color(
-        red: 0xF6 / 255,
-        green: 0xF7 / 255,
-        blue: 0xF9 / 255
-    )
+    private static let footerBackground = AppSemanticColors.footerSurface
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -3780,7 +3772,7 @@ private struct CronJobCard: View {
                 Button(action: onOpen) {
                     Text(job.name)
                         .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.black)
+                        .foregroundStyle(.primary)
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3803,7 +3795,7 @@ private struct CronJobCard: View {
                     ),
                     style: .continuous
                 )
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
@@ -3829,12 +3821,12 @@ private struct CronJobCard: View {
                     Button(action: onTogglePause) {
                         Image(systemName: job.state == .paused ? "play.fill" : "pause")
                             .font(.system(size: 15, weight: .heavy))
-                            .foregroundStyle(Color.black)
+                            .foregroundStyle(.primary)
                             .frame(width: 38, height: 38)
-                            .background(Color.white, in: Circle())
+                            .background(AppSemanticColors.elevatedSurface, in: Circle())
                             .overlay {
                                 Circle()
-                                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                                    .stroke(AppSemanticColors.separator, lineWidth: 1)
                             }
                     }
                     .buttonStyle(.plain)
@@ -3853,7 +3845,7 @@ private struct CronJobCard: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 
@@ -3925,11 +3917,11 @@ private struct TodoCard: View {
         .frame(maxWidth: .infinity)
         .background {
             RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
         }
         .overlay {
             RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 
@@ -3950,7 +3942,7 @@ private struct TodoCard: View {
                     ),
                     style: .continuous
                 )
-                .fill(Color.white)
+                .fill(AppSemanticColors.elevatedSurface)
             }
 
             bottomRow
@@ -3966,7 +3958,7 @@ private struct TodoCard: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                .stroke(AppSemanticColors.separator, lineWidth: 1)
         }
     }
 
@@ -3974,7 +3966,7 @@ private struct TodoCard: View {
         Button(action: onOpen) {
             Text(displayTitle)
                 .font(.system(size: 20, weight: .regular, design: .rounded))
-                .foregroundStyle(Color.black)
+                .foregroundStyle(.primary)
                 .lineLimit(todo.status == .done ? nil : 3)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -4006,7 +3998,7 @@ private struct TodoCard: View {
             if connectionSlugs.isEmpty {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.black.opacity(0.28))
+                    .foregroundStyle(Color(.tertiaryLabel))
                     .frame(width: 20, height: 20)
             } else {
                 ConnectionLogosRow(
@@ -4139,14 +4131,10 @@ private struct TodoCard: View {
 /// spec: muted #B6B6B6 for chrome text/strokes, iOS system blue tint for
 /// the primary action.
 private enum TodoCardStyle {
-    static let muted = Color(red: 0xB6 / 255, green: 0xB6 / 255, blue: 0xB6 / 255)
+    static let muted = AppSemanticColors.mutedChrome
     static let primaryBlue = Color(red: 0, green: 122 / 255, blue: 1)
     static let primaryBlueTint = Color(red: 0, green: 122 / 255, blue: 1).opacity(0.15)
-    static let footerBackground = Color(
-        red: 0xF6 / 255,
-        green: 0xF7 / 255,
-        blue: 0xF9 / 255
-    )
+    static let footerBackground = AppSemanticColors.footerSurface
     static let cardCornerRadius: CGFloat = 30
     /// Green used for the completed-todo toggle (iOS system green).
     static let completedGreen = Color(red: 52 / 255, green: 199 / 255, blue: 89 / 255)
@@ -4232,7 +4220,7 @@ struct PillButton: View {
             switch self {
             case .primary: return TodoCardStyle.primaryBlueTint
             case .destructive: return Color.red.opacity(0.15)
-            case .neutral: return Color(white: 0.92)
+            case .neutral: return AppSemanticColors.neutralFill
             }
         }
 
@@ -4240,7 +4228,7 @@ struct PillButton: View {
             switch self {
             case .primary: return TodoCardStyle.primaryBlue
             case .destructive: return Color.red
-            case .neutral: return Color(white: 0.35)
+            case .neutral: return Color(.secondaryLabel)
             }
         }
     }
@@ -4315,10 +4303,10 @@ private struct ConnectionLogoChip: View {
         ConnectionLogo(slug: slug)
             .frame(width: size * 0.56, height: size * 0.56)
             .frame(width: size, height: size)
-            .background(Color.white, in: Circle())
+            .background(AppSemanticColors.elevatedSurface, in: Circle())
             .overlay {
                 Circle()
-                    .strokeBorder(Color.black.opacity(0.10), lineWidth: 1)
+                    .strokeBorder(AppSemanticColors.separator, lineWidth: 1)
             }
             .accessibilityLabel("Connection: \(slug)")
     }
@@ -4373,10 +4361,10 @@ struct StatusBadge: View {
 }
 
 private enum SectionEmptyStateStyle {
-    static let background = Color(red: 0xEC / 255, green: 0xEE / 255, blue: 0xF0 / 255)
-    static let icon = Color(red: 0xAB / 255, green: 0xAD / 255, blue: 0xAE / 255)
-    static let title = Color.black
-    static let subtitle = Color(red: 0x82 / 255, green: 0x82 / 255, blue: 0x82 / 255)
+    static let background = AppSemanticColors.elevatedSurface
+    static let icon = AppSemanticColors.mutedChrome
+    static let title = Color(.label)
+    static let subtitle = Color(.secondaryLabel)
     static let cornerRadius: CGFloat = 20
     static let contentSpacing: CGFloat = 10
     static let horizontalPadding: CGFloat = 32
@@ -4461,19 +4449,23 @@ struct InitialsAvatar: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(Color.black)
+                .fill(AppSemanticColors.avatarPlaceholderBackground)
             if let initials, !initials.isEmpty {
                 Text(initials)
                     .font(.system(size: size * 0.42, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppSemanticColors.avatarPlaceholderForeground)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             } else {
                 Image(systemName: "person.fill")
                     .font(.system(size: size * 0.5, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppSemanticColors.avatarPlaceholderForeground)
             }
         }
         .frame(width: size, height: size)
+        .overlay {
+            Circle()
+                .stroke(AppSemanticColors.avatarBorder, lineWidth: 1.5)
+        }
     }
 }

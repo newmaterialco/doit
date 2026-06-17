@@ -155,7 +155,7 @@ private struct LockScreenLayout: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 10)
         .frame(height: 160)
-        .background(Color.white.opacity(isWaiting || state.isTerminal ? 1 : 0.76))
+        .background(Color(.systemBackground).opacity(isWaiting || state.isTerminal ? 1 : 0.76))
     }
 
     private var header: some View {
@@ -380,7 +380,7 @@ private struct SettledCard: View {
             iconView
             Text(title)
                 .font(.callout)
-                .foregroundStyle(.black)
+                .foregroundStyle(.primary)
                 .frame(height: 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
@@ -388,7 +388,7 @@ private struct SettledCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 60)
-        .background(Color.white, in: .rect(cornerRadius: 16, style: .continuous))
+        .background(Color(.systemBackground), in: .rect(cornerRadius: 16, style: .continuous))
     }
 
     @ViewBuilder
@@ -398,9 +398,9 @@ private struct SettledCard: View {
             Image(systemName: symbolName)
                 .font(.system(size: 12, weight: .bold))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.black.opacity(0.5))
+                .foregroundStyle(Color.secondary)
                 .frame(width: 21, height: 21)
-                .background(Circle().foregroundStyle(.black.opacity(0.12)))
+                .background(Circle().foregroundStyle(Color(.systemGray5)))
         case .success:
             Image(systemName: "checkmark")
                 .font(.system(size: 12, weight: .bold))
@@ -437,12 +437,12 @@ private struct IntentCard: View {
             Image(systemName: intent.isCompleted ? "checkmark" : intent.symbolName)
                 .font(.system(size: 12, weight: .bold))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.black.opacity(0.5))
+                .foregroundStyle(Color.secondary)
                 .frame(width: 21, height: 21)
-                .background(Circle().foregroundStyle(.black.opacity(0.12)))
+                .background(Circle().foregroundStyle(Color(.systemGray5)))
             Text(intent.title)
                 .font(.callout)
-                .foregroundStyle(.black)
+                .foregroundStyle(.primary)
                 .frame(height: 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
@@ -450,7 +450,7 @@ private struct IntentCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 60)
-        .background(Color.white, in: .rect(cornerRadius: isBehind ? 10 : 16, style: .continuous))
+        .background(Color(.systemBackground), in: .rect(cornerRadius: isBehind ? 10 : 16, style: .continuous))
         .scaleEffect(isBehind ? 0.9 : 1)
         .offset(y: isBehind ? 10 : 0)
         .opacity(isBehind ? 0.72 : 1)
