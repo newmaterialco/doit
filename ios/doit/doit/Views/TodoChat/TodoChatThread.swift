@@ -279,49 +279,6 @@ private struct UserTextBubble: View {
     }
 }
 
-private struct MarkdownMessageText: View {
-    let text: String
-    var foregroundColor: Color = .primary
-
-    var body: some View {
-        Text(attributedText)
-            .font(.system(size: ChatStyle.messageFontSize, weight: .regular, design: .rounded))
-            .foregroundStyle(foregroundColor)
-            .tint(.accentColor)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var attributedText: AttributedString {
-        let parsed = (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(text)
-        return parsed.withLinkedPlainURLs(in: text)
-    }
-}
-
-private extension AttributedString {
-    func withLinkedPlainURLs(in source: String) -> AttributedString {
-        var attributed = self
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
-            return attributed
-        }
-        let nsRange = NSRange(source.startIndex..<source.endIndex, in: source)
-        detector.enumerateMatches(in: source, options: [], range: nsRange) { match, _, _ in
-            guard let match,
-                  let url = match.url,
-                  let stringRange = Range(match.range, in: source),
-                  let lower = AttributedString.Index(stringRange.lowerBound, within: attributed),
-                  let upper = AttributedString.Index(stringRange.upperBound, within: attributed) else {
-                return
-            }
-            attributed[lower..<upper].link = url
-        }
-        return attributed
-    }
-}
-
 /// Right-aligned image strip for a user turn. Sits on the timeline
 /// immediately above the text bubble that follows (the builder sorts
 /// attachments before messages at the same timestamp). Sent images are

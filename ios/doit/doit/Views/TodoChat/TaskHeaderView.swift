@@ -792,12 +792,8 @@ private struct TextArtifactCard: View {
             )
 
             if hasBody, !collapsible || isExpanded {
-                Text(body)
-                    .font(.system(size: 15, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color.primary)
+                MarkdownMessageText(text: body, fontSize: 15)
                     .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
                     .padding(ArtifactCardLayout.contentPadding)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background {

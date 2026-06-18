@@ -141,7 +141,6 @@ private struct IslandElapsedText: View {
 
 private struct LockScreenLayout: View {
     let context: ActivityViewContext<HermesActivityAttributes>
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let state = context.state
@@ -155,7 +154,9 @@ private struct LockScreenLayout: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 10)
         .frame(height: 160)
-        .background(Color(.systemBackground).opacity(isWaiting || state.isTerminal ? 1 : 0.76))
+        .background(
+            LiveActivityColors.canvas.opacity(isWaiting || state.isTerminal ? 1 : 0.76)
+        )
     }
 
     private var header: some View {
@@ -163,9 +164,9 @@ private struct LockScreenLayout: View {
             HStack(spacing: 7) {
                 agentAvatar
                     .frame(width: 21, height: 21)
-                    .background(primaryForeground.opacity(0.10), in: Circle())
+                    .background(LiveActivityColors.primaryNavy.opacity(0.10), in: Circle())
                     .overlay {
-                        Circle().stroke(primaryForeground.opacity(0.12))
+                        Circle().stroke(LiveActivityColors.primaryNavy.opacity(0.12))
                     }
 
                 Text(context.attributes.taskTitle)
@@ -192,7 +193,7 @@ private struct LockScreenLayout: View {
         .font(.subheadline.bold())
         .frame(height: 28)
         .padding(.horizontal, 6)
-        .foregroundStyle(primaryForeground)
+        .foregroundStyle(LiveActivityColors.primaryNavy)
     }
 
     @ViewBuilder
@@ -261,7 +262,7 @@ private struct LockScreenLayout: View {
 
             timerText(isWaiting: isWaiting)
         }
-        .foregroundStyle(primaryForeground)
+        .foregroundStyle(LiveActivityColors.primaryNavy)
         .padding(.leading, 4)
         .padding(.trailing, 12)
         .font(.footnote.bold())
@@ -325,9 +326,9 @@ private struct LockScreenLayout: View {
             .padding(.vertical, 4)
             .padding(.horizontal, 8)
             .overlay {
-                Capsule().stroke(primaryForeground.opacity(alert ? 0.06 : 0.12))
+                Capsule().stroke(LiveActivityColors.primaryNavy.opacity(alert ? 0.06 : 0.12))
             }
-            .background(primaryForeground.opacity(alert ? 0.12 : 0), in: .capsule)
+            .background(LiveActivityColors.primaryNavy.opacity(alert ? 0.12 : 0), in: .capsule)
             .monospacedDigit()
     }
 
@@ -354,17 +355,9 @@ private struct LockScreenLayout: View {
         )
     }
 
-    private var primaryForeground: Color {
-        Color(red: 47 / 255, green: 59 / 255, blue: 84 / 255)
-    }
-
-    private var userTaskOpacity: CGFloat {
-        colorScheme == .dark ? 0.24 : 0.12
-    }
 }
 
-/// Fixed-copy card for paused / completed / failed states. Matches the
-/// running `IntentCard` chrome without pulling runner prompt text.
+/// Fixed-copy card for paused / completed / failed states.
 private struct SettledCard: View {
     enum IconStyle {
         case standard(symbolName: String)
@@ -380,7 +373,7 @@ private struct SettledCard: View {
             iconView
             Text(title)
                 .font(.callout)
-                .foregroundStyle(.primary)
+                .foregroundStyle(LiveActivityColors.cardText)
                 .frame(height: 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
@@ -388,7 +381,7 @@ private struct SettledCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 60)
-        .background(Color(.systemBackground), in: .rect(cornerRadius: 16, style: .continuous))
+        .background(LiveActivityColors.card, in: .rect(cornerRadius: 16, style: .continuous))
     }
 
     @ViewBuilder
@@ -398,9 +391,9 @@ private struct SettledCard: View {
             Image(systemName: symbolName)
                 .font(.system(size: 12, weight: .bold))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.secondary)
+                .foregroundStyle(LiveActivityColors.iconForeground)
                 .frame(width: 21, height: 21)
-                .background(Circle().foregroundStyle(Color(.systemGray5)))
+                .background(Circle().foregroundStyle(LiveActivityColors.iconCircle))
         case .success:
             Image(systemName: "checkmark")
                 .font(.system(size: 12, weight: .bold))
@@ -437,12 +430,12 @@ private struct IntentCard: View {
             Image(systemName: intent.isCompleted ? "checkmark" : intent.symbolName)
                 .font(.system(size: 12, weight: .bold))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.secondary)
+                .foregroundStyle(LiveActivityColors.iconForeground)
                 .frame(width: 21, height: 21)
-                .background(Circle().foregroundStyle(Color(.systemGray5)))
+                .background(Circle().foregroundStyle(LiveActivityColors.iconCircle))
             Text(intent.title)
                 .font(.callout)
-                .foregroundStyle(.primary)
+                .foregroundStyle(LiveActivityColors.cardText)
                 .frame(height: 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
@@ -450,7 +443,7 @@ private struct IntentCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 60)
-        .background(Color(.systemBackground), in: .rect(cornerRadius: isBehind ? 10 : 16, style: .continuous))
+        .background(LiveActivityColors.card, in: .rect(cornerRadius: isBehind ? 10 : 16, style: .continuous))
         .scaleEffect(isBehind ? 0.9 : 1)
         .offset(y: isBehind ? 10 : 0)
         .opacity(isBehind ? 0.72 : 1)
