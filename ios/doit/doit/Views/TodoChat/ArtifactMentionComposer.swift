@@ -824,7 +824,7 @@ struct MentionPickerOverlay: View {
             .scrollIndicators(.visible)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(uiColor: .systemBackground))
+                    .fill(AppSemanticColors.elevatedSurface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)

@@ -8,6 +8,8 @@ struct RootView: View {
         switch auth.state {
         case .loading:
             ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(AppSemanticColors.screenBackground.ignoresSafeArea())
         case .signedOut:
             SignInView()
         case .signedIn(let userID):

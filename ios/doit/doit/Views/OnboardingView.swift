@@ -45,6 +45,7 @@ struct OnboardingView: View {
             .padding(.bottom, 12)
         }
         .padding(.horizontal, 24)
+        .background(AppSemanticColors.screenBackground.ignoresSafeArea())
         .animation(.default, value: onboarding.phase)
     }
 

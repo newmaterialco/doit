@@ -3,10 +3,22 @@ import UIKit
 
 /// UIKit-backed semantic colors shared across doit surfaces.
 enum AppSemanticColors {
-    static let screenBackground = Color(.systemGroupedBackground)
-    static let surface = Color(.systemBackground)
-    static let elevatedSurface = Color(.secondarySystemGroupedBackground)
-    static let footerSurface = Color(.tertiarySystemGroupedBackground)
+    private static let lightCanvasUIColor = UIColor(
+        red: 250 / 255, green: 250 / 255, blue: 250 / 255, alpha: 1
+    )
+
+    static let screenBackground = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? .systemGroupedBackground : lightCanvasUIColor
+    })
+    static let surface = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? .systemBackground : lightCanvasUIColor
+    })
+    static let elevatedSurface = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? .secondarySystemGroupedBackground : .white
+    })
+    static let footerSurface = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? .tertiarySystemGroupedBackground : lightCanvasUIColor
+    })
     static let separator = Color(.separator)
     static let mutedChrome = Color(.tertiaryLabel)
     static let neutralFill = Color(.systemGray5)
@@ -40,7 +52,7 @@ enum AppSemanticColors {
     static let splitPaneBackground = Color(uiColor: UIColor { trait in
         trait.userInterfaceStyle == .dark
             ? UIColor(white: 0.16, alpha: 1)
-            : .systemBackground
+            : lightCanvasUIColor
     })
     static let splitChromeBackground = Color.black
 
@@ -56,14 +68,12 @@ enum AppSemanticColors {
 
     /// Fade behind the chat composer at the bottom of the split pane.
     static let composerFadeClear = Color(uiColor: UIColor { trait in
-        trait.userInterfaceStyle == .dark
-            ? UIColor.black.withAlphaComponent(0)
-            : UIColor.white.withAlphaComponent(0)
+        let base = trait.userInterfaceStyle == .dark ? UIColor.black : lightCanvasUIColor
+        return base.withAlphaComponent(0)
     })
     static let composerFadeOpaque = Color(uiColor: UIColor { trait in
-        trait.userInterfaceStyle == .dark
-            ? UIColor.black.withAlphaComponent(0.5)
-            : UIColor.white.withAlphaComponent(0.5)
+        let base = trait.userInterfaceStyle == .dark ? UIColor.black : lightCanvasUIColor
+        return base.withAlphaComponent(0.5)
     })
 
     /// Inset panel behind grouped stacks (e.g. animated activity cards).

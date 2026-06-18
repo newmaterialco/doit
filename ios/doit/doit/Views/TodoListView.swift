@@ -343,14 +343,6 @@ struct TodoListView: View {
                         todoCard(for: todo)
                     }
 
-                    CaptureToolbelt(
-                        onMic: { openAddSheet(action: .recordVoice) },
-                        onCamera: { openAddSheet(action: .camera) },
-                        onGallery: { openAddSheet(action: .photoLibrary) },
-                        onNote: { openAddSheet(action: .note) }
-                    )
-                    .padding(.top, activeItems.isEmpty ? 8 : 14)
-
                     if !suggestions.isEmpty {
                         TaskSectionHeader(
                             title: "Suggested",
@@ -387,7 +379,7 @@ struct TodoListView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 116)
-                .padding(.bottom, 96)
+                .padding(.bottom, DockStyle.scrollBottomInset)
                 .animation(.smooth(duration: 0.34), value: taskLayoutSignature)
                 .animation(.smooth(duration: 0.34), value: shouldShowConnectionsPromo)
             }
@@ -607,7 +599,7 @@ struct TodoListView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 116)
-            .padding(.bottom, 96)
+            .padding(.bottom, DockStyle.scrollBottomInset)
         }
         .refreshable {
             locationProvider.refreshIfAuthorized()
@@ -699,7 +691,7 @@ struct TodoListView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 116)
-                .padding(.bottom, 96)
+                .padding(.bottom, DockStyle.scrollBottomInset)
             }
             .refreshable { await store.loadAll() }
             .task {
@@ -709,81 +701,100 @@ struct TodoListView: View {
     }
 
     private var bottomControls: some View {
-        HStack(alignment: .bottom) {
-            dockControls
-
-            Spacer()
-
-            Button {
-                openAddSheet()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 52, height: 52)
-                    .foregroundStyle(AppSemanticColors.fabForeground)
-                    .background(AppSemanticColors.fabBackground, in: Circle())
-                    .shadow(color: AppSemanticColors.invertedSurface.opacity(0.12), radius: 10, y: 4)
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                addTaskButton
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 8)
             }
-            .buttonStyle(.plain)
-            .contentShape(Circle())
-            .accessibilityLabel("New Task")
+            dockControls
         }
-        .padding(.leading, 28)
-        .padding(.trailing, 20)
-        .padding(.bottom, 0)
+    }
+
+    private var addTaskButton: some View {
+        Button {
+            openAddSheet()
+        } label: {
+            Image(systemName: "plus")
+                .font(.title3.weight(.semibold))
+                .frame(width: 52, height: 52)
+                .foregroundStyle(AppSemanticColors.fabForeground)
+                .background(AppSemanticColors.fabBackground, in: Circle())
+                .shadow(color: AppSemanticColors.invertedSurface.opacity(0.12), radius: 10, y: 4)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .accessibilityLabel("New Task")
     }
 
     private enum DockStyle {
-        static let buttonWidth: CGFloat = 34
-        static let buttonHeight: CGFloat = 38
-        static let capsulePadding: CGFloat = 6
+        static let buttonWidth: CGFloat = 44
+        static let buttonHeight: CGFloat = 40
+        static let barHorizontalPadding: CGFloat = 56
+        static let barTopPadding: CGFloat = 8
+        static let barBottomPadding: CGFloat = 4
+        static let topBorderHeight: CGFloat = 0.5
+        static let scrollBottomInset: CGFloat = 50
     }
 
     private var dockControls: some View {
         HStack(spacing: 0) {
             ForEach(TodoListSection.allCases) { section in
                 dockButton(section)
+                    .frame(maxWidth: .infinity)
             }
         }
-        .padding(DockStyle.capsulePadding)
-        .glassEffect(.regular, in: Capsule())
-        .contentShape(Capsule())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 6)
-                .onChanged { value in
-                    scrubDock(at: value.location.x)
-                }
-                .onEnded { value in
-                    scrubDock(at: value.location.x)
-                    commitDockScrub()
-                }
-        )
+        .padding(.horizontal, DockStyle.barHorizontalPadding)
+        .padding(.top, DockStyle.barTopPadding)
+        .padding(.bottom, DockStyle.barBottomPadding)
+        .frame(maxWidth: .infinity)
+        .background {
+            AppSemanticColors.screenBackground
+                .ignoresSafeArea(.container, edges: .bottom)
+        }
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(AppSemanticColors.separator.opacity(0.35))
+                .frame(height: DockStyle.topBorderHeight)
+        }
+        .contentShape(Rectangle())
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 6)
+                            .onChanged { value in
+                                scrubDock(at: value.location.x, dockWidth: proxy.size.width)
+                            }
+                            .onEnded { value in
+                                scrubDock(at: value.location.x, dockWidth: proxy.size.width)
+                                commitDockScrub()
+                            }
+                    )
+            }
+        }
     }
 
     private func dockButton(_ section: TodoListSection) -> some View {
         let isSelected = selectedSectionID == section.index
         return Button {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
-                selectedSectionID = section.index
-            }
+            selectedSectionID = section.index
         } label: {
             Image(systemName: section.symbolName)
-                .font(.title3.weight(.semibold))
-                .scaleEffect(isSelected ? 1.15 : 0.9)
+                .font(.title2.weight(.semibold))
                 .frame(width: DockStyle.buttonWidth, height: DockStyle.buttonHeight)
                 .foregroundStyle(isSelected ? .primary : .secondary)
                 .opacity(isSelected ? 1 : 0.55)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DockButtonStyle())
         .contentShape(Circle())
         .accessibilityLabel(section.title)
-        .animation(.spring(response: 0.32, dampingFraction: 0.72), value: selectedSectionID)
     }
 
-    private func scrubDock(at xPosition: CGFloat) {
+    private func scrubDock(at xPosition: CGFloat, dockWidth: CGFloat) {
         let sectionCount = TodoListSection.allCases.count
-        let dockWidth = CGFloat(sectionCount) * DockStyle.buttonWidth
-            + DockStyle.capsulePadding * 2
         let sectionWidth = dockWidth / CGFloat(sectionCount)
         let clampedX = min(max(xPosition, 0), dockWidth - 0.1)
         let sectionIndex = Int(clampedX / sectionWidth)
@@ -1030,7 +1041,7 @@ struct TodoListView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
-                .padding(.bottom, 96)
+                .padding(.bottom, DockStyle.scrollBottomInset)
             }
             .refreshable { await store.loadAll() }
         }
@@ -1771,73 +1782,13 @@ struct TodoListView: View {
     }
 }
 
-private struct CaptureToolbelt: View {
-    let onMic: () -> Void
-    let onCamera: () -> Void
-    let onGallery: () -> Void
-    let onNote: () -> Void
+private struct DockButtonStyle: ButtonStyle {
+    private static let pressedScale: CGFloat = 0.9
 
-    var body: some View {
-        HStack(spacing: 8) {
-            toolbeltButton(
-                icon: "mic.fill",
-                label: "Record voice note",
-                foreground: .primary,
-                background: AppSemanticColors.elevatedSurface,
-                showsBorder: true,
-                action: onMic
-            )
-            toolbeltButton(
-                icon: "camera.fill",
-                label: "Take a photo",
-                foreground: .primary,
-                background: AppSemanticColors.elevatedSurface,
-                showsBorder: true,
-                action: onCamera
-            )
-            toolbeltButton(
-                icon: "photo.on.rectangle",
-                label: "Choose from library",
-                foreground: .primary,
-                background: AppSemanticColors.elevatedSurface,
-                showsBorder: true,
-                action: onGallery
-            )
-            toolbeltButton(
-                icon: "square.and.pencil",
-                label: "Write a note",
-                foreground: .primary,
-                background: AppSemanticColors.elevatedSurface,
-                showsBorder: true,
-                action: onNote
-            )
-        }
-    }
-
-    private func toolbeltButton(
-        icon: String,
-        label: String,
-        foreground: Color,
-        background: Color,
-        showsBorder: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(foreground)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(background, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .overlay {
-                    if showsBorder {
-                        RoundedRectangle(cornerRadius: 22, style: .continuous)
-                            .stroke(AppSemanticColors.separator, lineWidth: 1)
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? Self.pressedScale : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.82), value: configuration.isPressed)
     }
 }
 

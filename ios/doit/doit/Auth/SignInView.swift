@@ -34,6 +34,7 @@ struct SignInView: View {
             }
             Spacer().frame(height: 12)
         }
+        .background(AppSemanticColors.screenBackground.ignoresSafeArea())
     }
 
     private func handle(_ result: Result<ASAuthorization, Error>) async {
