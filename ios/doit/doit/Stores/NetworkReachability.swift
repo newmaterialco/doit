@@ -1,14 +1,22 @@
 import Foundation
 import Network
+import Observation
 
-/// Observes network path changes and fires when connectivity is restored
-/// after an outage. Used by `TodoStore` to reconcile active todos without
-/// polling.
+/// Observes network path changes, drives the app-wide "No Connection" toast,
+/// and fires when connectivity is restored after an outage. Used by
+/// `TodoStore` to reconcile active todos without polling.
 @MainActor
-final class NetworkReachability {
+@Observable
+final class ConnectivityMonitor {
     private let monitor = NWPathMonitor()
     private let queue = DispatchQueue(label: "doit.networkReachability")
-    private var isSatisfied = true
+    private var hadConnectivityFailure = false
+
+    private(set) var isConnected = true
+
+    var showBanner: Bool {
+        !isConnected || hadConnectivityFailure
+    }
 
     var onConnectivityRestored: (() async -> Void)?
 
@@ -16,10 +24,13 @@ final class NetworkReachability {
         monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
                 guard let self else { return }
-                let nowSatisfied = path.status == .satisfied
-                let wasSatisfied = self.isSatisfied
-                self.isSatisfied = nowSatisfied
-                if nowSatisfied, !wasSatisfied {
+                let nowConnected = path.status == .satisfied
+                let wasConnected = self.isConnected
+                self.isConnected = nowConnected
+                if nowConnected {
+                    self.hadConnectivityFailure = false
+                }
+                if nowConnected, !wasConnected {
                     print("[network] connectivity restored")
                     await self.onConnectivityRestored?()
                 }
@@ -30,6 +41,22 @@ final class NetworkReachability {
 
     func stop() {
         monitor.cancel()
-        isSatisfied = true
+        isConnected = true
+        hadConnectivityFailure = false
+    }
+
+    /// Returns `true` when the error is connectivity-related and the toast
+    /// should be shown instead of an inline error message.
+    @discardableResult
+    func reportFailure(_ error: Error) -> Bool {
+        guard ConnectivityError.isConnectivityFailure(error) else { return false }
+        hadConnectivityFailure = true
+        return true
+    }
+
+    /// Clears a request-driven failure once a call succeeds while online.
+    func reportSuccess() {
+        guard isConnected else { return }
+        hadConnectivityFailure = false
     }
 }

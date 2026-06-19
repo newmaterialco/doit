@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MemoryView: View {
     @Environment(AuthModel.self) private var auth
+    @Environment(ConnectivityMonitor.self) private var connectivity
 
     @State private var memories: [AgentMemory] = []
     @State private var loading = true
@@ -159,8 +160,13 @@ struct MemoryView: View {
             }
             memories = try await memoriesTask
             error = nil
+            connectivity.reportSuccess()
         } catch {
-            self.error = "Couldn't load memories: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't load memories: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -177,8 +183,13 @@ struct MemoryView: View {
             automaticSuggestionsEnabled = settings.automatic_suggestions_enabled
             customInstructions = settings.custom_instructions ?? ""
             error = nil
+            connectivity.reportSuccess()
         } catch {
-            self.error = "Couldn't save memory settings: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't save memory settings: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -194,8 +205,13 @@ struct MemoryView: View {
             )
             memories.insert(memory, at: 0)
             error = nil
+            connectivity.reportSuccess()
         } catch {
-            self.error = "Couldn't save memory: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't save memory: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -209,7 +225,11 @@ struct MemoryView: View {
             try await MemoriesAPI.update(updated)
             await load()
         } catch {
-            self.error = "Couldn't update memory: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't update memory: \(error.localizedDescription)"
+            }
         }
     }
 

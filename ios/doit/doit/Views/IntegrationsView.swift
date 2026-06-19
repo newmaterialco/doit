@@ -2,6 +2,8 @@ import AuthenticationServices
 import SwiftUI
 
 struct IntegrationsView: View {
+    @Environment(ConnectivityMonitor.self) private var connectivity
+
     @State private var toolkits: [Toolkit] = []
     @State private var loading = true
     @State private var error: String?
@@ -96,10 +98,15 @@ struct IntegrationsView: View {
         do {
             toolkits = try await IntegrationsAPI.list()
             error = nil
+            connectivity.reportSuccess()
         } catch where IntegrationsAPI.isCancellation(error) {
             print("[integrations] list cancelled")
         } catch {
-            self.error = "Couldn't load integrations: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't load integrations: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -116,7 +123,11 @@ struct IntegrationsView: View {
             await runOAuth(url: url)
             await load()
         } catch {
-            self.error = "Couldn't start connection: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't start connection: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -143,7 +154,11 @@ struct IntegrationsView: View {
                     "Saved your key but couldn't confirm the connection. Pull down to refresh."
             }
         } catch {
-            apiKeySheetError = IntegrationsAPI.userFacingError(error)
+            if connectivity.reportFailure(error) {
+                apiKeySheetError = nil
+            } else {
+                apiKeySheetError = IntegrationsAPI.userFacingError(error)
+            }
         }
     }
 
@@ -166,7 +181,11 @@ struct IntegrationsView: View {
         } catch where IntegrationsAPI.isCancellation(error) {
             print("[integrations] disconnect cancelled toolkit=\(tk.slug) connection=\(cid)")
         } catch {
-            self.error = "Couldn't disconnect: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't disconnect: \(error.localizedDescription)"
+            }
         }
     }
 

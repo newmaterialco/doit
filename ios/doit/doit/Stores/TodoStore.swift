@@ -116,7 +116,7 @@ final class TodoStore {
     /// Coalesces overlapping `loadAll()` calls from reconnect, scene-active,
     /// and pull-to-refresh so they don't race.
     private var loadAllTask: Task<Void, Never>?
-    private let networkReachability = NetworkReachability()
+    private weak var connectivity: ConnectivityMonitor?
 
     // MARK: - Lifecycle
 
@@ -124,20 +124,20 @@ final class TodoStore {
     /// twice with the same id is a no-op (the realtime hub takes care of
     /// reusing existing channels). Call from `RootView` when auth flips to
     /// `signedIn`.
-    func start(userID: UUID) {
+    func start(userID: UUID, connectivity: ConnectivityMonitor) {
         if self.userID == userID { return }
         stop()
         self.userID = userID
+        self.connectivity = connectivity
 
         TodoRealtimeHub.startUserFeed(
             userID: userID,
             handlers: makeUserFeedHandlers()
         )
 
-        networkReachability.onConnectivityRestored = { [weak self] in
+        connectivity.onConnectivityRestored = { [weak self] in
             await self?.reconcileAfterConnectivityRestored()
         }
-        networkReachability.start()
 
         Task { await loadAll() }
     }
@@ -146,8 +146,8 @@ final class TodoStore {
     /// user signing in on the same device doesn't see stale data.
     func stop() {
         TodoRealtimeHub.stopUserFeed()
-        networkReachability.stop()
-        networkReachability.onConnectivityRestored = nil
+        connectivity?.onConnectivityRestored = nil
+        connectivity = nil
         loadAllTask?.cancel()
         loadAllTask = nil
         liveActivityManager.endAll()
@@ -283,6 +283,7 @@ final class TodoStore {
             cronJobs = await cronTask
             memories = await memoriesTask.filter(\.isVisibleMemory)
             loadError = nil
+            connectivity?.reportSuccess()
             await refreshAllOpenInteractions()
             await refreshAllArtifacts()
             await refreshAllAgentActivities()
@@ -291,7 +292,9 @@ final class TodoStore {
             }
         } catch {
             print("[store] loadAll failed: \(error)")
-            loadError = "Couldn't load todos: \(error.localizedDescription)"
+            if connectivity?.reportFailure(error) != true {
+                loadError = "Couldn't load todos: \(error.localizedDescription)"
+            }
         }
     }
 

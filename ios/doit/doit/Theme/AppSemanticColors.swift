@@ -35,6 +35,16 @@ enum AppSemanticColors {
 
     static let fabBackground = invertedSurface
     static let fabForeground = invertedForeground
+
+    /// Collapsed new-task morph FAB. Pure white in light mode.
+    static let morphFabBackground = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? .secondarySystemGroupedBackground : .white
+    })
+
+    /// Expanded new-task morph card. Light canvas in light mode, elevated grey in dark mode.
+    static let morphComposerBackground = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? .secondarySystemGroupedBackground : lightCanvasUIColor
+    })
     static let avatarPlaceholderBackground = invertedSurface
     static let avatarPlaceholderForeground = invertedForeground
     static let avatarBorder = neutralFillStrong

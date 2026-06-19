@@ -15,6 +15,7 @@ struct doitApp: App {
     /// `todoStore.start` and push registration wait for `isReady` so an
     /// unprovisioned user never has tasks stuck on "Preparing…".
     @State private var onboarding = OnboardingModel()
+    @State private var connectivity = ConnectivityMonitor()
 
     var body: some Scene {
         WindowGroup {
@@ -23,9 +24,20 @@ struct doitApp: App {
                 .environment(push)
                 .environment(todoStore)
                 .environment(onboarding)
+                .environment(connectivity)
+                .overlay(alignment: .top) {
+                    if connectivity.showBanner {
+                        ConnectivityToast()
+                            .padding(.top, 12)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                            .zIndex(100)
+                    }
+                }
+                .animation(.smooth(duration: 0.3), value: connectivity.showBanner)
                 .task {
                     appDelegate.pushManager = push
                     appDelegate.todoStore = todoStore
+                    connectivity.start()
                     auth.bootstrap()
                 }
                 .onChange(of: auth.state) { _, newValue in
@@ -35,10 +47,12 @@ struct doitApp: App {
                         // who already finished onboarding; flips `isReady`
                         // when the agent exists, which starts the store
                         // below.
-                        onboarding.begin(userID: userID)
+                        onboarding.begin(userID: userID, connectivity: connectivity)
                     case .signedOut:
                         todoStore.stop()
                         onboarding.reset()
+                        connectivity.stop()
+                        connectivity.start()
                     case .loading:
                         break
                     }
@@ -49,7 +63,7 @@ struct doitApp: App {
                     // Start the store before any view appears so the
                     // initial render sees a populated list rather than
                     // an empty placeholder.
-                    todoStore.start(userID: userID)
+                    todoStore.start(userID: userID, connectivity: connectivity)
                 }
         }
     }

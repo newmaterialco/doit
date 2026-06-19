@@ -37,6 +37,7 @@ final class OnboardingModel {
 
     private var userID: UUID?
     private var watchTask: Task<Void, Never>?
+    private weak var connectivity: ConnectivityMonitor?
 
     private static func cacheKey(_ userID: UUID) -> String {
         "onboarding_ready_\(userID.uuidString)"
@@ -44,10 +45,11 @@ final class OnboardingModel {
 
     // MARK: - Lifecycle
 
-    func begin(userID: UUID) {
+    func begin(userID: UUID, connectivity: ConnectivityMonitor) {
         if self.userID == userID, isReady { return }
         reset()
         self.userID = userID
+        self.connectivity = connectivity
         if UserDefaults.standard.bool(forKey: Self.cacheKey(userID)) {
             markReady()
             return
@@ -60,6 +62,7 @@ final class OnboardingModel {
         watchTask?.cancel()
         watchTask = nil
         userID = nil
+        connectivity = nil
         isReady = false
         isBusy = false
         inviteError = nil
@@ -79,7 +82,9 @@ final class OnboardingModel {
             print("[onboarding] status failed: \(error)")
             if phase == .checking {
                 phase = .inviteEntry
-                inviteError = "Couldn't reach the server. Check your connection and try again."
+                if connectivity?.reportFailure(error) != true {
+                    inviteError = "Couldn't reach the server. Check your connection and try again."
+                }
             }
         }
     }
@@ -102,7 +107,9 @@ final class OnboardingModel {
             applyProvisioning(resp.provisioning)
         } catch {
             print("[onboarding] redeem failed: \(error)")
-            inviteError = "Something went wrong. Check your connection and try again."
+            if connectivity?.reportFailure(error) != true {
+                inviteError = "Something went wrong. Check your connection and try again."
+            }
         }
     }
 
@@ -121,12 +128,14 @@ final class OnboardingModel {
             }
         } catch {
             print("[onboarding] retry failed: \(error)")
+            _ = connectivity?.reportFailure(error)
         }
     }
 
     // MARK: - State transitions
 
     private func apply(_ resp: OnboardingStatusResponse) {
+        connectivity?.reportSuccess()
         if resp.agent_ready {
             markReady()
             return

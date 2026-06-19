@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ModelSettingsView: View {
+    @Environment(ConnectivityMonitor.self) private var connectivity
+
     @State private var catalog: [AgentModelProviderOption] = []
     @State private var setting: AgentModelSetting?
     @State private var selectedProviderID = ""
@@ -168,8 +170,13 @@ struct ModelSettingsView: View {
                 selectedModelID = selectableModels(for: provider).first?.id ?? ""
             }
             error = nil
+            connectivity.reportSuccess()
         } catch {
-            self.error = "Couldn't load model settings: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't load model settings: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -183,8 +190,13 @@ struct ModelSettingsView: View {
                 model: selectedModelID
             )
             error = nil
+            connectivity.reportSuccess()
         } catch {
-            self.error = "Couldn't save model settings: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't save model settings: \(error.localizedDescription)"
+            }
         }
     }
 

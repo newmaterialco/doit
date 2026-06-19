@@ -9,6 +9,7 @@ struct CronJobDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(TodoStore.self) private var store
+    @Environment(ConnectivityMonitor.self) private var connectivity
 
     /// Chat-only state owned by the detail view. The cron job row lives in
     /// the store; full interaction history is per-detail because the user
@@ -169,7 +170,11 @@ struct CronJobDetailView: View {
                 await store.refreshCronJob(id: jobID)
             }
         } catch {
-            self.error = "Couldn't send your response: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't send your response: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -233,7 +238,11 @@ struct CronJobDetailView: View {
             await store.refreshCronJob(id: jobID)
         } catch {
             messages.removeAll { $0.id == optimistic.id }
-            self.error = "Couldn't send your message: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't send your message: \(error.localizedDescription)"
+            }
         }
     }
 

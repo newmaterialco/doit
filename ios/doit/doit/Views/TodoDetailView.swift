@@ -15,6 +15,7 @@ struct TodoDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(TodoStore.self) private var store
+    @Environment(ConnectivityMonitor.self) private var connectivity
 
     /// Chat-only state owned by the detail view. Task row, artifacts, and
     /// interaction history all come from the store.
@@ -481,7 +482,11 @@ struct TodoDetailView: View {
             print("[chat] send failed: \(error)")
             messages.removeAll { $0.id == optimistic.id }
             await store.setStatus(todoID, priorStatus)
-            self.error = "Couldn't send your message: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't send your message: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -556,7 +561,11 @@ struct TodoDetailView: View {
                 showConnectionError: true
             )
         } catch {
-            self.error = "Couldn't start the \(toolkitName(for: normalizedSlug)) connection: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't start the \(toolkitName(for: normalizedSlug)) connection: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -577,7 +586,11 @@ struct TodoDetailView: View {
                 error = "Finish connecting \(toolkitName(for: toolkitSlug)) to continue this task."
             }
         } catch {
-            self.error = "Couldn't verify the \(toolkitName(for: toolkitSlug)) connection: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't verify the \(toolkitName(for: toolkitSlug)) connection: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -640,9 +653,14 @@ struct TodoDetailView: View {
             if steps.contains(where: \.containsInteractionMarker) {
                 await refreshInteractionsWithRetry()
             }
+            connectivity.reportSuccess()
         } catch {
             print("[realtime][steps] load failed todo=\(todoID): \(error)")
-            self.error = "Couldn't load steps: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                self.error = nil
+            } else {
+                self.error = "Couldn't load steps: \(error.localizedDescription)"
+            }
         }
     }
 

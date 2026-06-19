@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AuthModel.self) private var auth
     @Environment(TodoStore.self) private var store
+    @Environment(ConnectivityMonitor.self) private var connectivity
     @AppStorage("settings.modelDisplayName") private var cachedModelDisplayName = ""
     @State private var modelCatalog: [AgentModelProviderOption] = []
     @State private var modelSetting: AgentModelSetting?
@@ -46,7 +47,13 @@ struct SettingsView: View {
                             .transition(.opacity)
                             .zIndex(2)
 
-                        modelPickerPanel(height: modelPickerHeight(for: proxy.size.height))
+                        modelPickerPanel(
+                            height: modelPickerHeight(
+                                for: proxy.size.height,
+                                bottomInset: proxy.safeAreaInsets.bottom
+                            ),
+                            bottomInset: proxy.safeAreaInsets.bottom
+                        )
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                             .zIndex(3)
                     }
@@ -219,7 +226,7 @@ struct SettingsView: View {
             }
     }
 
-    private func modelPickerPanel(height: CGFloat) -> some View {
+    private func modelPickerPanel(height: CGFloat, bottomInset: CGFloat) -> some View {
         VStack {
             Spacer()
             ModelPickerCard(
@@ -240,7 +247,7 @@ struct SettingsView: View {
                 }
             )
             .padding(.horizontal, 18)
-            .padding(.bottom, 0)
+            .padding(.bottom, max(bottomInset, 12) + 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -293,6 +300,7 @@ struct SettingsView: View {
                     cachedModelDisplayName = ""
                 }
                 modelSettingsError = nil
+                connectivity.reportSuccess()
                 print("[settings][model] loaded catalog providers=\(response.catalog.count) setting=nil default=\(response.default_selection?.model ?? "none")")
                 return
             }
@@ -301,12 +309,17 @@ struct SettingsView: View {
             selectedModelName = name
             cachedModelDisplayName = name
             modelSettingsError = nil
+            connectivity.reportSuccess()
             print(
                 "[settings][model] loaded provider=\(setting.provider) model=\(setting.model) status=\(setting.apply_status.rawValue)"
             )
         } catch {
             selectedModelName = nil
-            modelSettingsError = "Couldn't load model settings: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                modelSettingsError = nil
+            } else {
+                modelSettingsError = "Couldn't load model settings: \(error.localizedDescription)"
+            }
             print("[settings][model] load failed error=\(error.localizedDescription)")
         }
     }
@@ -346,12 +359,17 @@ struct SettingsView: View {
             selectedModelName = name
             cachedModelDisplayName = name
             modelSettingsError = nil
+            connectivity.reportSuccess()
             print(
                 "[settings][model] saved provider=\(updated.provider) model=\(updated.model) status=\(updated.apply_status.rawValue)"
             )
             dismissModelPicker()
         } catch {
-            modelSettingsError = "Couldn't save model settings: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                modelSettingsError = nil
+            } else {
+                modelSettingsError = "Couldn't save model settings: \(error.localizedDescription)"
+            }
             print("[settings][model] save failed provider=\(provider.id) model=\(model.id) error=\(error.localizedDescription)")
         }
     }
@@ -389,8 +407,9 @@ struct SettingsView: View {
         return modelDisplayName(provider: provider, model: model)
     }
 
-    private func modelPickerHeight(for containerHeight: CGFloat) -> CGFloat {
-        min(UIScreen.main.bounds.height * 0.5, containerHeight - 36)
+    private func modelPickerHeight(for containerHeight: CGFloat, bottomInset: CGFloat) -> CGFloat {
+        let bottomPadding = max(bottomInset, 12) + 8
+        return min(UIScreen.main.bounds.height * 0.48, containerHeight - 56 - bottomPadding)
     }
 
     private func close() {
@@ -677,7 +696,7 @@ private struct ModelPickerCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(height: height)
-        .background(AppSemanticColors.surface)
+        .background(AppSemanticColors.elevatedSurface)
         .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
     }

@@ -20,9 +20,12 @@ struct TodoListView: View {
     @Environment(AuthModel.self) private var auth
     @Environment(TodoStore.self) private var store
     @Environment(PushManager.self) private var push
+    @Environment(ConnectivityMonitor.self) private var connectivity
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var addTodoSheetPresentation: AddTodoSheetPresentation?
+    @State private var addTodoComposer: AddTodoSheetPresentation?
+    @State private var isAddTodoComposerExpanded = false
+    @State private var isAddTodoComposerContentVisible = false
     @State private var showSettings = false
     @State private var settingsSheetIsVisible = false
     @State private var settingsInitialRoute: SettingsRoute?
@@ -125,19 +128,6 @@ struct TodoListView: View {
                         Task { await prepareExploreIfNeeded() }
                     }
                 }
-                .sheet(item: $addTodoSheetPresentation) { presentation in
-                    AddTodoView(
-                        userID: userID,
-                        initialTitle: presentation.title,
-                        initialAction: presentation.action
-                    ) { newTodo in
-                        // The store owns the list; insert there so realtime
-                        // reconciliation can update the same row in place when
-                        // the runner's prep pass finishes.
-                        store.insertOptimistic(newTodo)
-                        selectedSectionID = TodoListSection.todo.index
-                    }
-                }
                 .sheet(item: $exploreApiKeyToolkit) { toolkit in
                     ExploreApiKeySheet(
                         toolkit: toolkit,
@@ -199,6 +189,7 @@ struct TodoListView: View {
                     }
                 }
             }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
 
             if showSuggestedInfo {
                 suggestedInfoBackdrop
@@ -260,6 +251,20 @@ struct TodoListView: View {
                     .offset(y: activityGroupDetailOffset)
                     .zIndex(9)
             }
+
+            AddTodoMorphOverlay(
+                isExpanded: isAddTodoComposerExpanded,
+                isContentVisible: isAddTodoComposerContentVisible,
+                presentation: addTodoComposer,
+                userID: userID,
+                onExpand: { openAddComposer() },
+                onDismiss: dismissAddComposer,
+                onCreated: { newTodo in
+                    store.insertOptimistic(newTodo)
+                    selectedSectionID = TodoListSection.todo.index
+                }
+            )
+            .zIndex(7)
         }
     }
 
@@ -702,30 +707,12 @@ struct TodoListView: View {
 
     private var bottomControls: some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                addTaskButton
-                    .padding(.trailing, 20)
-                    .padding(.bottom, 8)
+            if !isAddTodoComposerExpanded {
+                Color.clear
+                    .frame(height: DockStyle.fabClearanceHeight)
             }
             dockControls
         }
-    }
-
-    private var addTaskButton: some View {
-        Button {
-            openAddSheet()
-        } label: {
-            Image(systemName: "plus")
-                .font(.title3.weight(.semibold))
-                .frame(width: 52, height: 52)
-                .foregroundStyle(AppSemanticColors.fabForeground)
-                .background(AppSemanticColors.fabBackground, in: Circle())
-                .shadow(color: AppSemanticColors.invertedSurface.opacity(0.12), radius: 10, y: 4)
-        }
-        .buttonStyle(.plain)
-        .contentShape(Circle())
-        .accessibilityLabel("New Task")
     }
 
     private enum DockStyle {
@@ -736,6 +723,9 @@ struct TodoListView: View {
         static let barBottomPadding: CGFloat = 4
         static let topBorderHeight: CGFloat = 0.5
         static let scrollBottomInset: CGFloat = 50
+        static var barHeight: CGFloat { barTopPadding + buttonHeight + barBottomPadding }
+        static let fabGapAboveDock: CGFloat = 12
+        static var fabClearanceHeight: CGFloat { barHeight + fabGapAboveDock }
     }
 
     private var dockControls: some View {
@@ -833,6 +823,10 @@ struct TodoListView: View {
 
     private func playFirmHaptic() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
+    }
+
+    private var addTodoComposerAnimation: Animation {
+        AddTodoComposerMotion.morph
     }
 
     private var settingsPresentationAnimation: Animation {
@@ -1329,13 +1323,35 @@ struct TodoListView: View {
         openSuggestedTask(suggestion)
     }
 
-    private func openAddSheet(title: String = "", action: AddTodoLaunchAction = .note) {
+    private func openAddComposer(title: String = "", action: AddTodoLaunchAction = .note) {
         playLightHaptic()
-        addTodoSheetPresentation = AddTodoSheetPresentation(title: title, action: action)
+        isAddTodoComposerContentVisible = false
+        addTodoComposer = AddTodoSheetPresentation(title: title, action: action)
+        withAnimation(addTodoComposerAnimation) {
+            isAddTodoComposerExpanded = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + AddTodoComposerMotion.contentRevealDelay) {
+            guard isAddTodoComposerExpanded else { return }
+            withAnimation(AddTodoComposerMotion.contentReveal) {
+                isAddTodoComposerContentVisible = true
+            }
+        }
+    }
+
+    private func dismissAddComposer() {
+        isAddTodoComposerContentVisible = false
+        withAnimation(addTodoComposerAnimation) {
+            isAddTodoComposerExpanded = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + AddTodoComposerMotion.dismissCleanupDelay) {
+            if !isAddTodoComposerExpanded {
+                addTodoComposer = nil
+            }
+        }
     }
 
     private func openSuggestedTask(_ suggestion: SuggestedTask) {
-        openAddSheet(title: suggestion.title)
+        openAddComposer(title: suggestion.title)
     }
 
     private func selectCronSuggestion(_ suggestion: SuggestedTask) {
@@ -1344,7 +1360,7 @@ struct TodoListView: View {
     }
 
     private func openSuggestedCronTask(_ suggestion: SuggestedTask) {
-        openAddSheet(title: suggestion.title)
+        openAddComposer(title: suggestion.title)
     }
 
     private var locationActions: [ExploreActionItem] {
@@ -1457,10 +1473,15 @@ struct TodoListView: View {
             exploreToolkits = try await IntegrationsAPI.list()
             exploreToolkitsHasLoaded = true
             exploreError = nil
+            connectivity.reportSuccess()
         } catch where IntegrationsAPI.isCancellation(error) {
             print("[integrations][explore] list cancelled")
         } catch {
-            exploreError = "Couldn't load connections: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                exploreError = nil
+            } else {
+                exploreError = "Couldn't load connections: \(error.localizedDescription)"
+            }
         }
 
         exploreToolkitsLoading = false
@@ -1480,7 +1501,11 @@ struct TodoListView: View {
             await runExploreOAuth(url: url)
             await loadExploreToolkits(showSpinner: false, force: true)
         } catch {
-            exploreError = "Couldn't start connection: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                exploreError = nil
+            } else {
+                exploreError = "Couldn't start connection: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -1509,7 +1534,11 @@ struct TodoListView: View {
                 exploreApiKeyError = "Saved your key but couldn't confirm the connection. Pull down to refresh."
             }
         } catch {
-            exploreApiKeyError = IntegrationsAPI.userFacingError(error)
+            if connectivity.reportFailure(error) {
+                exploreApiKeyError = nil
+            } else {
+                exploreApiKeyError = IntegrationsAPI.userFacingError(error)
+            }
         }
     }
 
@@ -1527,7 +1556,11 @@ struct TodoListView: View {
         } catch where IntegrationsAPI.isCancellation(error) {
             print("[integrations][explore] disconnect cancelled toolkit=\(toolkit.slug) connection=\(connectionID)")
         } catch {
-            exploreError = "Couldn't disconnect: \(error.localizedDescription)"
+            if connectivity.reportFailure(error) {
+                exploreError = nil
+            } else {
+                exploreError = "Couldn't disconnect: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -3616,10 +3649,226 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+private enum AddTodoComposerMotion {
+    /// Fast morph with a slight ease-out settle at the end.
+    static let morph = Animation.spring(response: 0.30, dampingFraction: 0.80)
+    static let backdrop = Animation.easeOut(duration: 0.22)
+    static let contentReveal = Animation.easeOut(duration: 0.15)
+    static let contentRevealDelay: TimeInterval = 0.14
+    static let dismissCleanupDelay: TimeInterval = 0.30
+    /// Show the FAB "+" before collapse cleanup finishes; shell is ~circle-sized by then.
+    static let plusIconRevealDelay: TimeInterval = 0.17
+}
+
 private struct AddTodoSheetPresentation: Identifiable {
     let id = UUID()
     let title: String
     let action: AddTodoLaunchAction
+}
+
+private struct MorphComposerHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct AddTodoMorphOverlay: View {
+    let isExpanded: Bool
+    let isContentVisible: Bool
+    let presentation: AddTodoSheetPresentation?
+    let userID: UUID
+    let onExpand: () -> Void
+    let onDismiss: () -> Void
+    let onCreated: (Todo) -> Void
+
+    @State private var showsPlusIcon = true
+    @State private var keyboardOverlap: CGFloat = 0
+    @State private var measuredContentHeight: CGFloat = 0
+
+    private let fabSize: CGFloat = 52
+    private let panelMinWidth: CGFloat = 360
+    private let panelCornerRadius: CGFloat = 34
+    /// Fallback until the morph shell measures `AddTodoView` on first expand frame.
+    private let estimatedExpandedHeight: CGFloat = 290
+    private let leadingInset: CGFloat = 14
+    private let trailingInset: CGFloat = 14
+    private let expandedBottomInset: CGFloat = 12
+    private let keyboardGapAboveKeyboard: CGFloat = 8
+    private let fabGapAboveDock: CGFloat = 12
+    /// Matches `DockStyle` bar padding + button height (8 + 40 + 4).
+    private let dockBarHeight: CGFloat = 52
+    private var collapsedBottomInset: CGFloat { dockBarHeight + fabGapAboveDock }
+
+    private func composerBottomPadding(expanded: Bool) -> CGFloat {
+        guard expanded else { return collapsedBottomInset }
+        if keyboardOverlap > 0 {
+            return keyboardOverlap + keyboardGapAboveKeyboard
+        }
+        return expandedBottomInset
+    }
+
+    private var morphAnimation: Animation {
+        AddTodoComposerMotion.morph
+    }
+
+    private var expandedShellHeight: CGFloat {
+        if measuredContentHeight > fabSize {
+            return measuredContentHeight
+        }
+        return estimatedExpandedHeight
+    }
+
+    var body: some View {
+        ZStack {
+            if isExpanded {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .onTapGesture { onDismiss() }
+                    .transition(.opacity)
+            }
+
+            GeometryReader { proxy in
+                let availableWidth = proxy.size.width - leadingInset - trailingInset
+                let panelWidth = max(panelMinWidth, availableWidth)
+                let shellWidth = isExpanded ? panelWidth : fabSize
+                let shellHeight = isExpanded ? expandedShellHeight : fabSize
+                let shellCornerRadius = isExpanded ? panelCornerRadius : fabSize / 2
+
+                VStack {
+                    Spacer()
+
+                    HStack {
+                        Spacer(minLength: 0)
+
+                        ZStack(alignment: .bottomTrailing) {
+                            RoundedRectangle(cornerRadius: shellCornerRadius, style: .continuous)
+                                .fill(isExpanded ? AppSemanticColors.morphComposerBackground : AppSemanticColors.morphFabBackground)
+                                .frame(width: shellWidth, height: shellHeight)
+                                .compositingGroup()
+                                .overlay(alignment: .top) {
+                                    if isExpanded, let presentation {
+                                        AddTodoView(
+                                            userID: userID,
+                                            initialTitle: presentation.title,
+                                            initialAction: presentation.action,
+                                            presentation: .morphShell,
+                                            onCancel: onDismiss,
+                                            onCreated: onCreated
+                                        )
+                                        .id(presentation.id)
+                                        .frame(width: panelWidth, alignment: .top)
+                                        .background {
+                                            GeometryReader { contentProxy in
+                                                Color.clear.preference(
+                                                    key: MorphComposerHeightKey.self,
+                                                    value: contentProxy.size.height
+                                                )
+                                            }
+                                        }
+                                        .opacity(isContentVisible ? 1 : 0)
+                                        .allowsHitTesting(isContentVisible)
+                                        .clipShape(
+                                            RoundedRectangle(
+                                                cornerRadius: shellCornerRadius,
+                                                style: .continuous
+                                            )
+                                        )
+                                        .animation(AddTodoComposerMotion.contentReveal, value: isContentVisible)
+                                    }
+                                }
+                                .clipShape(
+                                    RoundedRectangle(
+                                        cornerRadius: shellCornerRadius,
+                                        style: .continuous
+                                    )
+                                )
+                                .shadow(
+                                    color: .black.opacity(isExpanded ? 0.16 : 0.20),
+                                    radius: isExpanded ? 28 : 12,
+                                    y: isExpanded ? 18 : 4
+                                )
+                                .contentShape(
+                                    RoundedRectangle(
+                                        cornerRadius: shellCornerRadius,
+                                        style: .continuous
+                                    )
+                                )
+                                .onTapGesture {
+                                    guard !isExpanded else { return }
+                                    onExpand()
+                                }
+                                .accessibilityLabel("New Task")
+                                .accessibilityAddTraits(isExpanded ? [] : .isButton)
+
+                            if showsPlusIcon {
+                                Image(systemName: "plus")
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .frame(width: fabSize, height: fabSize)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .padding(.trailing, trailingInset)
+                    }
+                    .padding(.leading, isExpanded ? leadingInset : 0)
+                    .padding(.bottom, composerBottomPadding(expanded: isExpanded))
+                }
+            }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+        .animation(morphAnimation, value: isExpanded)
+        .animation(morphAnimation, value: expandedShellHeight)
+        .animation(AddTodoComposerMotion.backdrop, value: isExpanded)
+        .animation(.smooth(duration: 0.25), value: keyboardOverlap)
+        .onPreferenceChange(MorphComposerHeightKey.self) { height in
+            guard isExpanded, height > fabSize else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                measuredContentHeight = height
+            }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)
+        ) { note in
+            guard isExpanded else {
+                keyboardOverlap = 0
+                return
+            }
+            keyboardOverlap = visibleKeyboardOverlap(from: note)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+        ) { _ in
+            keyboardOverlap = 0
+        }
+        .onChange(of: isExpanded) { _, expanded in
+            if expanded {
+                showsPlusIcon = false
+            } else {
+                keyboardOverlap = 0
+                measuredContentHeight = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + AddTodoComposerMotion.plusIconRevealDelay) {
+                    if !isExpanded {
+                        showsPlusIcon = true
+                    }
+                }
+            }
+        }
+    }
+
+    private func visibleKeyboardOverlap(from note: Notification) -> CGFloat {
+        guard
+            let endFrame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        else { return 0 }
+        let screenHeight = UIScreen.main.bounds.height
+        let overlap = max(0, screenHeight - endFrame.origin.y)
+        guard overlap > 0 else { return 0 }
+        let bottomInset = SafeAreaInsetsKey.defaultValue.bottom
+        return max(0, overlap - bottomInset)
+    }
 }
 
 private struct CronHandoff: Equatable {

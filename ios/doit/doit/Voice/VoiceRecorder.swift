@@ -30,6 +30,13 @@ final class VoiceRecorder: NSObject {
     /// Number of metering samples we keep for the waveform UI.
     static let levelBufferSize = 36
 
+    private static let recordingSettings: [String: Any] = [
+        AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+        AVSampleRateKey: 16_000,
+        AVNumberOfChannelsKey: 1,
+        AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+    ]
+
     /// Most recent normalized (0...1) power levels, oldest first.
     private(set) var levels: [CGFloat] = Array(
         repeating: 0,
@@ -59,10 +66,29 @@ final class VoiceRecorder: NSObject {
 
     /// Begins a new recording. Throws if the session/recorder couldn't start.
     func start() async throws {
+        VoiceRecordingLog.event("ensure_permission_start")
         guard await ensurePermission() else {
+            VoiceRecordingLog.event("ensure_permission_denied")
             throw RecorderError.microphoneDenied
         }
+        VoiceRecordingLog.event("ensure_permission_granted")
 
+        isRecording = true
+        levels = Array(repeating: 0, count: VoiceRecorder.levelBufferSize)
+        VoiceRecordingLog.event("is_recording_true")
+
+        do {
+            try beginCapture()
+            VoiceRecordingLog.event("begin_capture_complete")
+        } catch {
+            VoiceRecordingLog.event("begin_capture_failed")
+            resetAfterFailedStart()
+            throw error
+        }
+    }
+
+    private func beginCapture() throws {
+        VoiceRecordingLog.event("audio_session_activate_start")
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(
@@ -74,32 +100,46 @@ final class VoiceRecorder: NSObject {
         } catch {
             throw RecorderError.sessionUnavailable
         }
+        VoiceRecordingLog.event("audio_session_active")
 
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             "doit-voice-\(UUID().uuidString).m4a"
         )
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 16_000,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-        ]
 
         do {
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
+            VoiceRecordingLog.event("recorder_create_start")
+            let recorder = try AVAudioRecorder(url: url, settings: Self.recordingSettings)
             recorder.isMeteringEnabled = true
+            VoiceRecordingLog.event("recorder_create_done")
+
+            guard recorder.prepareToRecord() else {
+                throw RecorderError.recorderUnavailable
+            }
+            VoiceRecordingLog.event("recorder_prepare_done")
+
             guard recorder.record() else {
                 throw RecorderError.recorderUnavailable
             }
+
             self.recorder = recorder
             self.fileURL = url
-            self.isRecording = true
-            self.levels = Array(repeating: 0, count: VoiceRecorder.levelBufferSize)
             startMetering()
+            VoiceRecordingLog.event("recorder_started")
         } catch {
             try? session.setActive(false, options: [.notifyOthersOnDeactivation])
             throw RecorderError.recorderUnavailable
         }
+    }
+
+    private func resetAfterFailedStart() {
+        meteringTask?.cancel()
+        meteringTask = nil
+        recorder?.stop()
+        recorder = nil
+        isRecording = false
+        fileURL = nil
+        levels = Array(repeating: 0, count: VoiceRecorder.levelBufferSize)
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     /// Stops recording and returns the resulting file URL, or `nil` if nothing
