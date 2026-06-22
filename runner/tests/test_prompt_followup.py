@@ -127,6 +127,7 @@ class BuildFollowupPromptTests(unittest.TestCase):
             },
         )
         self.assertIn("Previous context for this task:", prompt)
+        self.assertIn("Existing deliverables are live resources", prompt)
         self.assertIn("Artifacts already created:", prompt)
         self.assertIn("AI training-data job subreddits", prompt)
         self.assertIn("https://docs.google.com/spreadsheets/d/sheet-id", prompt)
@@ -138,6 +139,57 @@ class BuildFollowupPromptTests(unittest.TestCase):
             prompt.index("Previous context for this task:"),
             prompt.index("The user sent a follow-up message"),
         )
+
+    def test_followup_highlights_current_deliverables(self) -> None:
+        prompt = build_followup_prompt(
+            "Build Hello Gabe website",
+            "",
+            messages=["Make the site cleaner and keep the same URL"],
+            task_context={
+                "deliverables": [
+                    {
+                        "kind": "link",
+                        "key": "website",
+                        "title": "Hello Gabe website",
+                        "provider": "github",
+                        "url": "https://gabrielmitchell.github.io/hello-gabe-website/",
+                    }
+                ],
+                "artifacts": [],
+                "messages": [],
+                "steps": [],
+            },
+        )
+        self.assertIn("Current deliverables to continue from:", prompt)
+        self.assertIn("key=website", prompt)
+        self.assertIn("provider=github", prompt)
+        self.assertIn("https://gabrielmitchell.github.io/hello-gabe-website/", prompt)
+        self.assertIn("instead of starting over", prompt)
+
+    def test_context_without_messages_still_includes_deliverables(self) -> None:
+        prompt = build_followup_prompt(
+            "Update GitHub Pages site",
+            "",
+            messages=[],
+            task_context={
+                "deliverables": [
+                    {
+                        "kind": "link",
+                        "key": "github-repo",
+                        "title": "hello-gabe-website repo",
+                        "provider": "github",
+                        "url": "https://github.com/gabrielmitchell/hello-gabe-website",
+                    }
+                ],
+                "artifacts": [],
+                "messages": [],
+                "steps": [],
+            },
+        )
+        self.assertIn("Previous context for this task:", prompt)
+        self.assertIn("Current deliverables to continue from:", prompt)
+        self.assertIn("https://github.com/gabrielmitchell/hello-gabe-website", prompt)
+        self.assertNotIn("The user sent a follow-up message", prompt)
 
     def test_empty_context_block_is_omitted(self) -> None:
         prompt = build_followup_prompt(

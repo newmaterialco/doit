@@ -171,18 +171,20 @@ public struct VerticalSplit<
                 // snap logic and land on `.bottomMini`.
                 if value.translation.height < 2, initialMinimal {
                     let expandingFromCollapsedTop = initialTop
+                    let targetSplit = expandingFromCollapsedTop
+                        ? collapsedTopTapDetent
+                        : collapsedTapDetent
                     withTransaction(transaction) {
                         hideTop = false
                         hideBottom = false
                         overscroll = 0
                         translationBeforeOverscroll = 0
+                        didUpdateSplit(split: targetSplit)
                     }
                     initialPartition = nil
                     initialMinimal = false
                     initialTop = false
-                    detent = expandingFromCollapsedTop
-                        ? collapsedTopTapDetent
-                        : collapsedTapDetent
+                    detent = targetSplit
                     return
                 }
                 let translation = (initialPartition ?? 0) + value.translation.height
@@ -350,10 +352,7 @@ public struct VerticalSplit<
                         : AppSemanticColors.splitHandleTrackBackground
                 )
             )
-            .offset(
-                y: (hideTop ? -lil + 8 : hideBottom ? lil - 8 - bottomExtraOffset : 0)
-                + (partition + overscroll / (hideTop || hideBottom ? 1 : 5))
-            )
+            .offset(y: handleOffsetY)
             .zIndex(2)
 
 
@@ -506,10 +505,7 @@ public struct VerticalSplit<
                 .frame(maxWidth: min(.infinity, 400))
             }
             .contentShape(.rect)
-            .offset(
-                y: (hideTop ? -lil + 8 : hideBottom ? lil - 8 - bottomExtraOffset : 0)
-                + (partition + overscroll / (hideTop || hideBottom ? 1 : 5))
-            )
+            .offset(y: handleOffsetY)
             .gesture(currentSpacing == spacing ? bossGesture : nil)
             .zIndex(10)
 
@@ -542,10 +538,7 @@ public struct VerticalSplit<
             .scaleEffect(isAccessoriesPill ? 0.9 : 1)
             .blur(radius: isAccessoriesPill ? 12 : 0)
             .opacity(isAccessoriesPill ? 0 : 1)
-            .offset(
-                y: (hideTop ? -lil + 8 : hideBottom ? lil - 8 - bottomExtraOffset : 0)
-                + (partition + overscroll / (hideTop || hideBottom ? 1 : 5))
-            )
+            .offset(y: handleOffsetY)
             .zIndex(11)
             .allowsHitTesting(false)
 
@@ -568,6 +561,11 @@ public struct VerticalSplit<
     }
 
     // MARK: Functions
+
+    private var handleOffsetY: CGFloat {
+        (hideTop ? -lil + 8 : hideBottom ? lil - 8 - bottomExtraOffset : 0)
+            + (partition + overscroll / (hideTop || hideBottom ? 1 : 5))
+    }
 
     func didUpdateSplit(split: SplitDetent) {
         detentLogger.info("SplitDetent: \(split.description)")

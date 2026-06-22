@@ -25,6 +25,7 @@ from runner.events import (
     normalize_visible_reply,
     parse_artifacts,
     strip_artifacts,
+    strip_interaction,
     translate,
 )
 
@@ -263,6 +264,29 @@ class NormalizeVisibleReplyTests(unittest.TestCase):
         self.assertIn("Closing paragraph.", visible)
         self.assertIn("Google Sheet:", visible)
 
+    def test_strips_raw_tool_control_dump(self) -> None:
+        body = (
+            "NTS to add index.html\n"
+            "<ctrl42>call:default_api.read_file(path=\"index.html\")\n"
+            "GITHUB_CREATE_OR_UPDATE_FILE_CONTENTS\n"
+            "<!DOCTYPE html><html><body>Hello Gabe</body></html>"
+        )
+        visible = normalize_visible_reply(body)
+        self.assertEqual(visible, "")
+
+    def test_strip_interaction_removes_whole_block(self) -> None:
+        body = (
+            "Before\n"
+            f"{INTERACTION_OPEN}\n"
+            '{"kind":"question","prompt":"Continue?"}'
+            f"\n{INTERACTION_CLOSE}\n"
+            "After"
+        )
+        stripped = strip_interaction(body)
+        self.assertIn("Before", stripped)
+        self.assertIn("After", stripped)
+        self.assertNotIn("Continue?", stripped)
+
 
 class TranslateFinalArtifactTests(unittest.TestCase):
     """End-to-end: `translate` on a `response.completed` event should
@@ -332,6 +356,36 @@ class TranslateFinalArtifactTests(unittest.TestCase):
         assert effect is not None
         self.assertEqual(effect.new_status, "done")
         self.assertEqual(effect.artifacts, [])
+
+    def test_github_device_auth_final_becomes_needs_auth(self) -> None:
+        effect = translate(
+            "response.completed",
+            self._completed_event(
+                "Please authenticate your GitHub account by opening "
+                "https://github.com/login/device and entering one-time code ABCD-1234."
+            ),
+        )
+        self.assertIsNotNone(effect)
+        assert effect is not None
+        self.assertEqual(effect.new_status, "needs_auth")
+        self.assertEqual(effect.step_kind, "oauth_needed")
+        self.assertEqual(effect.url, "https://github.com/login/device")
+
+    def test_github_cli_auth_final_becomes_needs_auth(self) -> None:
+        effect = translate(
+            "response.completed",
+            self._completed_event(
+                "It seems I can't access your GitHub repositories because the "
+                "GitHub CLI is not authenticated. Please run \"gh auth login\" "
+                "in your terminal."
+            ),
+        )
+        self.assertIsNotNone(effect)
+        assert effect is not None
+        self.assertEqual(effect.new_status, "needs_auth")
+        self.assertEqual(effect.step_kind, "oauth_needed")
+        self.assertIsNone(effect.url)
+        self.assertNotIn("gh auth login", effect.text or "")
 
 
 class EmailArtifactStatusTests(unittest.TestCase):

@@ -31,8 +31,6 @@ struct TodoListView: View {
     @State private var settingsInitialRoute: SettingsRoute?
     @State private var settingsPresentationToken = 0
     @State private var selectedCompletedActivityFilter: CompletedActivityFilter = .allActivity
-    @State private var selectedCompletedActivityPageID: CompletedActivityFilter? = .allActivity
-    @State private var completedActivityPageHeights: [CompletedActivityFilter: CGFloat] = [:]
     @State private var selectedActivityGroup: ActivityGroupDescriptor?
     @State private var showActivityGroupDetail = false
     @State private var activityGroupDetailIsVisible = false
@@ -41,17 +39,10 @@ struct TodoListView: View {
     @State private var navigationPath = NavigationPath()
     @State private var deletingTodoIDs: Set<UUID> = []
     @State private var centeredSuggestedTaskID: String?
-    @State private var suggestedTasks: [SuggestedTask] = []
-    @State private var suggestionsLoading = false
-    @State private var suggestionsError: String?
-    @State private var suggestionsHasLoaded = false
-    @State private var showSuggestedInfo = false
     @State private var centeredSuggestedCronID: String?
-    @State private var suggestedCronTasks: [SuggestedTask] = []
-    @State private var cronSuggestionsLoading = false
-    @State private var cronSuggestionsError: String?
-    @State private var cronSuggestionsHasLoaded = false
-    @State private var showSuggestedCronInfo = false
+    @State private var selectedScheduledPromptCategoryID: String?
+    @State private var scheduledPromptPickerIsVisible = false
+    @State private var scheduledPromptPickerDragOffset: CGFloat = 0
     @State private var showPassbookMemoryDetail = false
     @State private var selectedPassbookMemory: AgentMemory?
     @State private var passbookMemoryIsEditing = false
@@ -115,7 +106,10 @@ struct TodoListView: View {
                 .navigationDestination(for: TodoListDestination.self) { destination in
                     switch destination {
                     case .todo(let id):
-                        TodoDetailView(todoID: id)
+                        TodoDetailView(
+                            todoID: id,
+                            initialChatExpanded: store.prefersChatExpanded(for: id)
+                        )
                     case .cronJob(let id):
                         CronJobDetailView(jobID: id)
                     }
@@ -191,26 +185,6 @@ struct TodoListView: View {
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
 
-            if showSuggestedInfo {
-                suggestedInfoBackdrop
-                    .transition(.opacity)
-                    .zIndex(6)
-
-                suggestedInfoPanel
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(7)
-            }
-
-            if showSuggestedCronInfo {
-                suggestedCronInfoBackdrop
-                    .transition(.opacity)
-                    .zIndex(6)
-
-                suggestedCronInfoPanel
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(7)
-            }
-
             if showPassbookMemoryDetail, let selectedPassbookMemory {
                 memoryDetailBackdrop
                     .transition(.opacity)
@@ -252,19 +226,36 @@ struct TodoListView: View {
                     .zIndex(9)
             }
 
-            AddTodoMorphOverlay(
-                isExpanded: isAddTodoComposerExpanded,
-                isContentVisible: isAddTodoComposerContentVisible,
-                presentation: addTodoComposer,
-                userID: userID,
-                onExpand: { openAddComposer() },
-                onDismiss: dismissAddComposer,
-                onCreated: { newTodo in
-                    store.insertOptimistic(newTodo)
-                    selectedSectionID = TodoListSection.todo.index
+            if let selectedScheduledPromptCategory {
+                GeometryReader { proxy in
+                    scheduledPromptPickerBackdrop
+                        .opacity(scheduledPromptPickerIsVisible ? 1 : 0)
+                        .animation(settingsPresentationAnimation, value: scheduledPromptPickerIsVisible)
+
+                    scheduledPromptPickerPanel(
+                        for: selectedScheduledPromptCategory,
+                        hiddenOffset: proxy.size.height
+                    )
                 }
-            )
-            .zIndex(7)
+                .ignoresSafeArea(.container, edges: .bottom)
+                .zIndex(10)
+            }
+
+            if shouldShowAddTodoOverlay {
+                AddTodoMorphOverlay(
+                    isExpanded: isAddTodoComposerExpanded,
+                    isContentVisible: isAddTodoComposerContentVisible,
+                    presentation: addTodoComposer,
+                    userID: userID,
+                    onExpand: { openAddComposer() },
+                    onDismiss: dismissAddComposer,
+                    onCreated: { newTodo in
+                        store.insertOptimistic(newTodo)
+                        selectedSectionID = TodoListSection.todo.index
+                    }
+                )
+                .zIndex(isAddTodoComposerExpanded ? 11 : 5)
+            }
         }
     }
 
@@ -320,6 +311,16 @@ struct TodoListView: View {
             ?? .todo
     }
 
+    private var shouldShowAddTodoOverlay: Bool {
+        guard
+            navigationPath.count == 0,
+            let selectedSectionID,
+            let section = TodoListSection.allCases.first(where: { $0.index == selectedSectionID })
+        else { return false }
+
+        return section.allowsAddTodoComposer
+    }
+
     @ViewBuilder
     private func sectionPage(_ section: TodoListSection) -> some View {
         if section == .todo {
@@ -334,7 +335,6 @@ struct TodoListView: View {
     private var tasksSectionPage: some View {
         let activeItems = activeTodos
         let completedItems = completedTodos
-        let suggestions = displayedSuggestedTasks
         return GeometryReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 10) {
@@ -348,24 +348,15 @@ struct TodoListView: View {
                         todoCard(for: todo)
                     }
 
-                    if !suggestions.isEmpty {
-                        TaskSectionHeader(
-                            title: "Suggested",
-                            trailingIconName: "info.circle.fill",
-                            trailingAction: presentSuggestedInfo,
-                            verticalPadding: 0
-                        )
-                            .padding(.top, 6)
+                    TaskSectionHeader(title: "Suggested", verticalPadding: 0)
+                        .padding(.top, 6)
 
-                        SuggestedTasksStrip(
-                            suggestions: suggestions,
-                            screenWidth: proxy.size.width,
-                            centeredSuggestionID: $centeredSuggestedTaskID,
-                            onLoadMore: triggerLoadMoreSuggestions,
-                            onSelect: selectSuggestion
-                        )
-                        .padding(.bottom, 2)
-                    }
+                    SuggestedCategoryStrip(
+                        categories: SuggestedCategoryCatalog.taskCategories,
+                        screenWidth: proxy.size.width,
+                        centeredCategoryID: $centeredSuggestedTaskID
+                    )
+                    .padding(.bottom, 2)
 
                     if shouldShowConnectionsPromo {
                         ExploreConnectionsPromoCard(
@@ -375,12 +366,12 @@ struct TodoListView: View {
                             },
                             onDismiss: dismissConnectionsPromo
                         )
-                        .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 10)
+                        .padding(.top, 10)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
                     completedTasksSection(completedItems)
-                        .padding(.top, suggestions.isEmpty ? (activeItems.isEmpty ? 8 : 14) : 2)
+                        .padding(.top, 2)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 116)
@@ -394,12 +385,9 @@ struct TodoListView: View {
             .onChange(of: store.todos.isEmpty) { wasEmpty, isEmpty in
                 guard isEmpty, !wasEmpty else { return }
                 centeredSuggestedTaskID = nil
-                completedActivityPageHeights.removeAll()
                 selectedCompletedActivityFilter = .allActivity
-                selectedCompletedActivityPageID = .allActivity
             }
             .task {
-                await loadInitialSuggestionsIfNeeded()
                 await loadExploreToolkits(showSpinner: false)
             }
         }
@@ -429,88 +417,49 @@ struct TodoListView: View {
 
     @ViewBuilder
     private func completedActivitySection(_ completedItems: [Todo]) -> some View {
-        CompletedActivityToggle(
-            selection: selectedCompletedActivityFilter,
-            allActivityCount: completedItems.count,
-            onSelect: setCompletedActivityFilter
-        )
-        .padding(.top, 4)
-        .padding(.bottom, 4)
+        let showingCategories = selectedCompletedActivityFilter == .topics
 
-        ScrollView(.horizontal) {
-            LazyHStack(alignment: .top, spacing: 0) {
-                ForEach(CompletedActivityFilter.allCases) { filter in
-                    completedActivityPage(filter, completedItems: completedItems)
-                        .containerRelativeFrame(.horizontal)
-                        .id(filter)
-                }
-            }
-            .scrollTargetLayout()
-        }
-        .scrollTargetBehavior(.paging)
-        .scrollIndicators(.hidden)
-        .scrollPosition(id: $selectedCompletedActivityPageID)
-        .padding(.horizontal, -16)
-        .frame(height: selectedCompletedActivityPageHeight)
-        .animation(.smooth(duration: 0.24), value: selectedCompletedActivityPageHeight)
-        .onPreferenceChange(CompletedActivityPageHeightPreferenceKey.self) { heights in
-            completedActivityPageHeights.merge(heights) { _, new in new }
-        }
-        .onChange(of: selectedCompletedActivityPageID) { _, newValue in
-            guard let newValue, newValue != selectedCompletedActivityFilter else { return }
-            selectedCompletedActivityFilter = newValue
-            playSectionHaptic()
-        }
-    }
-
-    private var selectedCompletedActivityPageHeight: CGFloat? {
-        guard let height = completedActivityPageHeights[selectedCompletedActivityFilter],
-              height > 0 else {
-            return nil
-        }
-        return height
-    }
-
-    @ViewBuilder
-    private func completedActivityPage(
-        _ filter: CompletedActivityFilter,
-        completedItems: [Todo]
-    ) -> some View {
         VStack(spacing: 10) {
-            switch filter {
-        case .allActivity:
-            ForEach(completedActivityDaySections(from: completedItems)) { section in
-                ActivityDateDivider(date: section.day)
-                ForEach(section.todos) { todo in
-                    todoCard(for: todo, identityScope: filter.rawValue)
+            TaskSectionHeader(
+                title: "Recent",
+                trailingIconName: showingCategories ? nil : "Category_Logo",
+                trailingLabel: showingCategories ? "Hide categories" : nil,
+                trailingAction: toggleCompletedActivityView,
+                trailingAccessibilityLabel: showingCategories ? "Hide categories" : "Show categories",
+                trailingIconCompact: true,
+                trailingSwapsInstantly: true,
+                verticalPadding: 0
+            )
+            .transaction { transaction in
+                transaction.disablesAnimations = true
+            }
+
+            Group {
+                switch selectedCompletedActivityFilter {
+                case .allActivity:
+                    ForEach(completedItems) { todo in
+                        todoCard(for: todo, identityScope: CompletedActivityFilter.allActivity.rawValue)
+                    }
+                case .topics:
+                    let summaries = activityGroupSummaries(from: completedItems)
+                    if summaries.isEmpty {
+                        ActivityEmptyCard(
+                            title: "No categories yet",
+                            message: "Recent tasks will appear here once doit assigns categories or collections.",
+                            systemImage: "square.grid.2x2.fill"
+                        )
+                    } else {
+                        ActivityGroupGrid(summaries: summaries) { descriptor in
+                            playLightHaptic()
+                            presentActivityGroup(descriptor)
+                        }
+                        .padding(.top, 2)
+                    }
                 }
             }
-        case .topics:
-            let summaries = activityGroupSummaries(from: completedItems)
-            if summaries.isEmpty {
-                ActivityEmptyCard(
-                    title: "No categories yet",
-                    message: "Completed tasks will appear here once doit assigns categories or collections.",
-                    systemImage: "square.grid.2x2.fill"
-                )
-            } else {
-                ActivityGroupGrid(summaries: summaries) { descriptor in
-                    playLightHaptic()
-                    presentActivityGroup(descriptor)
-                }
-                .padding(.top, 2)
-            }
-            }
+            .animation(.smooth(duration: 0.34), value: selectedCompletedActivityFilter)
         }
-        .padding(.horizontal, 16)
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: CompletedActivityPageHeightPreferenceKey.self,
-                    value: [filter: proxy.size.height]
-                )
-            }
-        }
+        .padding(.top, 6)
     }
 
     @ViewBuilder
@@ -528,9 +477,11 @@ struct TodoListView: View {
         let isDeleting = deletingTodoIDs.contains(liveTodo.id)
         let refreshID = cardRefreshID(for: liveTodo)
         let viewID = identityScope.map { "\($0):\(refreshID)" } ?? refreshID
+        let artifacts = store.artifactsByTodoID[liveTodo.id] ?? []
         TodoCard(
             todo: liveTodo,
             connectionSlugs: connectionSlugs(for: liveTodo),
+            artifacts: artifacts,
             interaction: interaction,
             activity: activity,
             isResponding: store.respondingInteractionID != nil
@@ -620,8 +571,7 @@ struct TodoListView: View {
     }
 
     private var scheduledSectionPage: some View {
-        let suggestions = displayedSuggestedCronTasks
-        return GeometryReader { proxy in
+        GeometryReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 10) {
                     if let loadError = store.loadError {
@@ -630,28 +580,20 @@ struct TodoListView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    if !suggestions.isEmpty {
-                        TaskSectionHeader(
-                            title: "Suggested",
-                            trailingIconName: "info.circle.fill",
-                            trailingAction: presentSuggestedCronInfo,
-                            verticalPadding: 0
-                        )
+                    TaskSectionHeader(title: "Suggested", verticalPadding: 0)
                         .padding(.top, 6)
 
-                        SuggestedTasksStrip(
-                            suggestions: suggestions,
-                            screenWidth: proxy.size.width,
-                            centeredSuggestionID: $centeredSuggestedCronID,
-                            onLoadMore: triggerLoadMoreCronSuggestions,
-                            onSelect: selectCronSuggestion
-                        )
-                        .padding(.bottom, 2)
-                    }
+                    SuggestedCategoryStrip(
+                        categories: SuggestedCategoryCatalog.scheduledCategories,
+                        screenWidth: proxy.size.width,
+                        onSelect: handleScheduledCategorySelection,
+                        centeredCategoryID: $centeredSuggestedCronID
+                    )
+                    .padding(.bottom, 2)
 
                     if store.cronJobs.isEmpty && store.loadError == nil {
                         EmptyState(section: .scheduled)
-                            .padding(.top, suggestions.isEmpty ? 0 : 8)
+                            .padding(.top, 8)
                     } else if !store.cronJobs.isEmpty {
                         LazyVGrid(
                             columns: [
@@ -691,7 +633,7 @@ struct TodoListView: View {
                                 }
                             }
                         }
-                        .padding(.top, suggestions.isEmpty ? 0 : 8)
+                        .padding(.top, 8)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -699,15 +641,12 @@ struct TodoListView: View {
                 .padding(.bottom, DockStyle.scrollBottomInset)
             }
             .refreshable { await store.loadAll() }
-            .task {
-                await loadInitialCronSuggestionsIfNeeded()
-            }
         }
     }
 
     private var bottomControls: some View {
         VStack(spacing: 0) {
-            if !isAddTodoComposerExpanded {
+            if shouldShowAddTodoOverlay && !isAddTodoComposerExpanded {
                 Color.clear
                     .frame(height: DockStyle.fabClearanceHeight)
             }
@@ -722,10 +661,14 @@ struct TodoListView: View {
         static let barTopPadding: CGFloat = 8
         static let barBottomPadding: CGFloat = 4
         static let topBorderHeight: CGFloat = 0.5
-        static let scrollBottomInset: CGFloat = 50
-        static var barHeight: CGFloat { barTopPadding + buttonHeight + barBottomPadding }
         static let fabGapAboveDock: CGFloat = 12
+        static let scrollBottomExtraPadding: CGFloat = 16
+        static var barHeight: CGFloat { barTopPadding + buttonHeight + barBottomPadding }
         static var fabClearanceHeight: CGFloat { barHeight + fabGapAboveDock }
+        /// Clears the floating add button, dock bar, and a little breathing room.
+        static var scrollBottomInset: CGFloat {
+            fabClearanceHeight + barHeight + scrollBottomExtraPadding
+        }
     }
 
     private var dockControls: some View {
@@ -808,13 +751,11 @@ struct TodoListView: View {
         }
     }
 
-    private func setCompletedActivityFilter(_ filter: CompletedActivityFilter) {
-        guard selectedCompletedActivityFilter != filter else { return }
+    private func toggleCompletedActivityView() {
         playSectionHaptic()
-        selectedCompletedActivityFilter = filter
-        withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
-            selectedCompletedActivityPageID = filter
-        }
+        selectedCompletedActivityFilter = selectedCompletedActivityFilter == .allActivity
+            ? .topics
+            : .allActivity
     }
 
     private func playLightHaptic() {
@@ -823,6 +764,106 @@ struct TodoListView: View {
 
     private func playFirmHaptic() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
+    }
+
+    private var selectedScheduledPromptCategory: ScheduledPromptCategory? {
+        guard let selectedScheduledPromptCategoryID else { return nil }
+        return SuggestedCategoryCatalog.scheduledPromptCategories.first { $0.id == selectedScheduledPromptCategoryID }
+    }
+
+    private var scheduledPromptPickerHorizontalInset: CGFloat {
+        14
+    }
+
+    private var scheduledPromptPickerBottomInset: CGFloat {
+        28
+    }
+
+    private var scheduledPromptPickerBackdrop: some View {
+        Color.black.opacity(0.16)
+            .ignoresSafeArea(.all)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                dismissScheduledPromptCategory()
+            }
+    }
+
+    private func scheduledPromptPickerPanel(for category: ScheduledPromptCategory, hiddenOffset: CGFloat) -> some View {
+        VStack {
+            Spacer()
+
+            ScheduledPromptPickerCard(
+                category: category,
+                onClose: dismissScheduledPromptCategory,
+                onHandleDragChanged: handleScheduledPromptPickerDragChanged,
+                onHandleDragEnded: handleScheduledPromptPickerDragEnded,
+                onSelect: handleScheduledPromptSelection
+            )
+            .padding(.horizontal, scheduledPromptPickerHorizontalInset)
+            .padding(.bottom, scheduledPromptPickerBottomInset)
+            .offset(y: (scheduledPromptPickerIsVisible ? 0 : hiddenOffset) + scheduledPromptPickerDragOffset)
+            .opacity(scheduledPromptPickerIsVisible ? 1 : 0)
+            .animation(settingsPresentationAnimation, value: scheduledPromptPickerIsVisible)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func handleScheduledCategorySelection(_ category: SuggestedCategory) {
+        playLightHaptic()
+        scheduledPromptPickerDragOffset = 0
+        if selectedScheduledPromptCategoryID == nil {
+            selectedScheduledPromptCategoryID = category.id
+            DispatchQueue.main.async {
+                withAnimation(settingsPresentationAnimation) {
+                    scheduledPromptPickerIsVisible = true
+                }
+            }
+        } else {
+            selectedScheduledPromptCategoryID = category.id
+            scheduledPromptPickerIsVisible = true
+        }
+    }
+
+    private func dismissScheduledPromptCategory() {
+        playLightHaptic()
+        withAnimation(settingsPresentationAnimation) {
+            scheduledPromptPickerDragOffset = 0
+            scheduledPromptPickerIsVisible = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            if !scheduledPromptPickerIsVisible {
+                selectedScheduledPromptCategoryID = nil
+            }
+        }
+    }
+
+    private func handleScheduledPromptSelection(_ prompt: ScheduledPromptSuggestion) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        withAnimation(settingsPresentationAnimation) {
+            scheduledPromptPickerDragOffset = 0
+            scheduledPromptPickerIsVisible = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            if !scheduledPromptPickerIsVisible {
+                selectedScheduledPromptCategoryID = nil
+                openAddComposer(title: prompt.composerPrompt, action: .note)
+            }
+        }
+    }
+
+    private func handleScheduledPromptPickerDragChanged(_ value: DragGesture.Value) {
+        scheduledPromptPickerDragOffset = max(0, value.translation.height)
+    }
+
+    private func handleScheduledPromptPickerDragEnded(_ value: DragGesture.Value) {
+        let shouldDismiss = value.translation.height > 70 || value.predictedEndTranslation.height > 140
+        if shouldDismiss {
+            dismissScheduledPromptCategory()
+        } else {
+            withAnimation(settingsPresentationAnimation) {
+                scheduledPromptPickerDragOffset = 0
+            }
+        }
     }
 
     private var addTodoComposerAnimation: Animation {
@@ -917,60 +958,6 @@ struct TodoListView: View {
         await loadExploreToolkits(showSpinner: false, force: true)
     }
 
-    private var suggestedInfoBackdrop: some View {
-        Color.black.opacity(0.16)
-            .ignoresSafeArea(.all)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                playLightHaptic()
-                dismissSuggestedInfo()
-            }
-    }
-
-    private var suggestedInfoPanel: some View {
-        VStack {
-            Spacer()
-            SuggestedInfoCard(
-                title: "Smart suggestions",
-                message: "doit learns from the tasks you create, complete, and schedule, then suggests useful next actions that fit your patterns.",
-                onClose: {
-                    playLightHaptic()
-                    dismissSuggestedInfo()
-                }
-            )
-            .padding(.horizontal, 18)
-            .padding(.bottom, 20)
-        }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-    }
-
-    private var suggestedCronInfoBackdrop: some View {
-        Color.black.opacity(0.16)
-            .ignoresSafeArea(.all)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                playLightHaptic()
-                dismissSuggestedCronInfo()
-            }
-    }
-
-    private var suggestedCronInfoPanel: some View {
-        VStack {
-            Spacer()
-            SuggestedInfoCard(
-                title: "Scheduled suggestions",
-                message: "doit learns from your tasks, memories, and existing schedules, then suggests recurring automations like weekly digests and daily check-ins.",
-                onClose: {
-                    playLightHaptic()
-                    dismissSuggestedCronInfo()
-                }
-            )
-            .padding(.horizontal, 18)
-            .padding(.bottom, 20)
-        }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-    }
-
     private var memoryDetailBackdrop: some View {
         Color.black.opacity(0.16)
             .ignoresSafeArea(.all)
@@ -1043,32 +1030,6 @@ struct TodoListView: View {
         .background(AppSemanticColors.surface)
     }
 
-    private func presentSuggestedInfo() {
-        playLightHaptic()
-        withAnimation(settingsPresentationAnimation) {
-            showSuggestedInfo = true
-        }
-    }
-
-    private func dismissSuggestedInfo() {
-        withAnimation(settingsPresentationAnimation) {
-            showSuggestedInfo = false
-        }
-    }
-
-    private func presentSuggestedCronInfo() {
-        playLightHaptic()
-        withAnimation(settingsPresentationAnimation) {
-            showSuggestedCronInfo = true
-        }
-    }
-
-    private func dismissSuggestedCronInfo() {
-        withAnimation(settingsPresentationAnimation) {
-            showSuggestedCronInfo = false
-        }
-    }
-
     private func presentMemoryDetail(_ memory: AgentMemory) {
         print("[passbook][memory] presenting detail id=\(memory.id) title=\(memory.title)")
         playLightHaptic()
@@ -1109,11 +1070,11 @@ struct TodoListView: View {
     }
 
     private var activeTodos: [Todo] {
-        store.todos.filter { $0.status != .done }
+        store.todos.filter { $0.status != .done && $0.status != .cancelled }
     }
 
     private var completedTodos: [Todo] {
-        store.todos.filter { $0.status == .done }.sorted { lhs, rhs in
+        store.todos.filter { $0.status == .done || $0.status == .cancelled }.sorted { lhs, rhs in
             let lhsDate = completedActivityDate(for: lhs)
             let rhsDate = completedActivityDate(for: rhs)
             if lhsDate == rhsDate {
@@ -1125,32 +1086,6 @@ struct TodoListView: View {
 
     private func completedActivityDate(for todo: Todo) -> Date {
         todo.completed_at ?? todo.updated_at
-    }
-
-    private func completedActivityDaySections(from items: [Todo]) -> [CompletedActivityDaySection] {
-        let calendar = Calendar.current
-        var sections: [CompletedActivityDaySection] = []
-        var currentDay: Date?
-        var currentTodos: [Todo] = []
-
-        for todo in items {
-            let day = calendar.startOfDay(for: completedActivityDate(for: todo))
-            if day != currentDay {
-                if let currentDay, !currentTodos.isEmpty {
-                    sections.append(CompletedActivityDaySection(day: currentDay, todos: currentTodos))
-                }
-                currentDay = day
-                currentTodos = [todo]
-            } else {
-                currentTodos.append(todo)
-            }
-        }
-
-        if let currentDay, !currentTodos.isEmpty {
-            sections.append(CompletedActivityDaySection(day: currentDay, todos: currentTodos))
-        }
-
-        return sections
     }
 
     private func activityGroupSummaries(from completedItems: [Todo]) -> [ActivityGroupSummary] {
@@ -1227,102 +1162,6 @@ struct TodoListView: View {
         ].joined(separator: "|")
     }
 
-    private var displayedSuggestedTasks: [SuggestedTask] {
-        if suggestedTasks.isEmpty && !suggestionsLoading && suggestionsHasLoaded {
-            return fallbackSuggestedTasks()
-        }
-        if suggestionsLoading {
-            return suggestedTasks.isEmpty ? [.loader] : suggestedTasks + [.loader]
-        }
-        if suggestionsHasLoaded {
-            return suggestedTasks.isEmpty ? [] : suggestedTasks + [.loader]
-        }
-        return [.loader]
-    }
-
-    private func fallbackSuggestedTasks() -> [SuggestedTask] {
-        guard store.todos.isEmpty else { return [] }
-
-        let genericStarters: [(title: String, theme: String, connectionSlug: String?)] = [
-            ("Draft a reply to an email I have been putting off", "Email", "gmail"),
-            ("Plan my week around the most important tasks", "Plan", "googlecalendar"),
-            ("Research options for a decision I need to make", "Research", nil),
-            ("Create a reminder for something I keep forgetting", "Remind", nil),
-            ("Turn messy notes into a clear action plan", "Write", "googledocs"),
-            ("Find and summarize a document from my workspace", "Docs", "googledrive"),
-            ("Prepare a short status update I can send", "Update", "slack"),
-            ("Organize follow-ups from recent conversations", "Follow-up", "gmail"),
-        ]
-
-        var seenTitles: Set<String> = []
-        var results: [SuggestedTask] = []
-
-        for starter in genericStarters {
-            guard results.count < 5 else { break }
-            let key = starter.title.lowercased()
-            guard seenTitles.insert(key).inserted else { continue }
-            results.append(
-                SuggestedTask(
-                    id: "fallback-\(key)",
-                    title: starter.title,
-                    theme: starter.theme,
-                    connectionSlug: starter.connectionSlug,
-                    kind: .suggestion
-                )
-            )
-        }
-
-        return results
-    }
-
-    private var displayedSuggestedCronTasks: [SuggestedTask] {
-        if suggestedCronTasks.isEmpty && !cronSuggestionsLoading && cronSuggestionsHasLoaded {
-            return fallbackSuggestedCronTasks()
-        }
-        if cronSuggestionsLoading || cronSuggestionsHasLoaded {
-            return suggestedCronTasks + [.loader]
-        }
-        return [.loader]
-    }
-
-    private func fallbackSuggestedCronTasks() -> [SuggestedTask] {
-        guard store.cronJobs.isEmpty else { return [] }
-
-        let genericStarters: [(title: String, theme: String, connectionSlug: String?)] = [
-            ("Every weekday morning, make me a short plan for the day", "Plan", "googlecalendar"),
-            ("Monitor my inbox every day for important follow-ups", "Monitor", "gmail"),
-            ("Every Friday, summarize what I got done this week", "Recap", nil),
-            ("Check every day whether ", "Check", nil),
-            ("Every Monday, review my calendar and flag conflicts", "Plan", "googlecalendar"),
-            ("Weekly digest of unread emails that need a reply", "Digest", "gmail"),
-        ]
-
-        var seenTitles: Set<String> = []
-        var results: [SuggestedTask] = []
-
-        for starter in genericStarters {
-            guard results.count < 5 else { break }
-            let key = starter.title.lowercased()
-            guard seenTitles.insert(key).inserted else { continue }
-            results.append(
-                SuggestedTask(
-                    id: "cron-fallback-\(key)",
-                    title: starter.title,
-                    theme: starter.theme,
-                    connectionSlug: starter.connectionSlug,
-                    kind: .suggestion
-                )
-            )
-        }
-
-        return results
-    }
-
-    private func selectSuggestion(_ suggestion: SuggestedTask) {
-        guard suggestion.kind == .suggestion else { return }
-        openSuggestedTask(suggestion)
-    }
-
     private func openAddComposer(title: String = "", action: AddTodoLaunchAction = .note) {
         playLightHaptic()
         isAddTodoComposerContentVisible = false
@@ -1348,19 +1187,6 @@ struct TodoListView: View {
                 addTodoComposer = nil
             }
         }
-    }
-
-    private func openSuggestedTask(_ suggestion: SuggestedTask) {
-        openAddComposer(title: suggestion.title)
-    }
-
-    private func selectCronSuggestion(_ suggestion: SuggestedTask) {
-        guard suggestion.kind == .suggestion else { return }
-        openSuggestedCronTask(suggestion)
-    }
-
-    private func openSuggestedCronTask(_ suggestion: SuggestedTask) {
-        openAddComposer(title: suggestion.title)
     }
 
     private var locationActions: [ExploreActionItem] {
@@ -1578,120 +1404,6 @@ struct TodoListView: View {
         }
     }
 
-    private func loadInitialSuggestionsIfNeeded() async {
-        guard !suggestionsHasLoaded, !suggestionsLoading else { return }
-        await loadMoreSuggestions()
-    }
-
-    private func loadInitialCronSuggestionsIfNeeded() async {
-        guard !cronSuggestionsHasLoaded, !cronSuggestionsLoading else { return }
-        await loadMoreCronSuggestions()
-    }
-
-    private func triggerLoadMoreSuggestions() {
-        Task { await loadMoreSuggestions() }
-    }
-
-    private func triggerLoadMoreCronSuggestions() {
-        Task { await loadMoreCronSuggestions() }
-    }
-
-    private func loadMoreSuggestions() async {
-        guard !suggestionsLoading else { return }
-        suggestionsLoading = true
-        suggestionsError = nil
-        defer {
-            suggestionsLoading = false
-            suggestionsHasLoaded = true
-        }
-
-        do {
-            var response = try await SuggestionsAPI.fetch(
-                count: 5,
-                excludeTitles: suggestedTasks.map(\.title)
-            )
-            if response.degraded == true,
-               suggestedTasks.isEmpty,
-               response.suggestions.isEmpty {
-                response = try await SuggestionsAPI.fetch(
-                    count: 5,
-                    excludeTitles: suggestedTasks.map(\.title)
-                )
-            }
-            let newSuggestions = response.suggestions
-                .map(makeSuggestedTask(from:))
-                .filter { candidate in
-                    !suggestedTasks.contains { existing in
-                        existing.title.caseInsensitiveCompare(candidate.title) == .orderedSame
-                    }
-                }
-            suggestedTasks.append(contentsOf: newSuggestions)
-            if centeredSuggestedTaskID == SuggestedTask.loaderID, let first = newSuggestions.first {
-                centeredSuggestedTaskID = first.id
-            }
-        } catch {
-            suggestionsError = error.localizedDescription
-            if suggestedTasks.isEmpty {
-                suggestedTasks = fallbackSuggestedTasks()
-            }
-        }
-    }
-
-    private func loadMoreCronSuggestions() async {
-        guard !cronSuggestionsLoading else { return }
-        cronSuggestionsLoading = true
-        cronSuggestionsError = nil
-        defer {
-            cronSuggestionsLoading = false
-            cronSuggestionsHasLoaded = true
-        }
-
-        do {
-            var response = try await SuggestionsAPI.fetchCron(
-                count: 5,
-                excludeTitles: suggestedCronTasks.map(\.title)
-            )
-            if response.degraded == true,
-               suggestedCronTasks.isEmpty,
-               response.suggestions.isEmpty {
-                response = try await SuggestionsAPI.fetchCron(
-                    count: 5,
-                    excludeTitles: suggestedCronTasks.map(\.title)
-                )
-            }
-            let newSuggestions = response.suggestions
-                .map(makeSuggestedTask(from:))
-                .filter { candidate in
-                    !suggestedCronTasks.contains { existing in
-                        existing.title.caseInsensitiveCompare(candidate.title) == .orderedSame
-                    }
-                }
-            suggestedCronTasks.append(contentsOf: newSuggestions)
-            if centeredSuggestedCronID == SuggestedTask.loaderID, let first = newSuggestions.first {
-                centeredSuggestedCronID = first.id
-            }
-        } catch {
-            cronSuggestionsError = error.localizedDescription
-            if suggestedCronTasks.isEmpty {
-                suggestedCronTasks = fallbackSuggestedCronTasks()
-            }
-        }
-    }
-
-    private func makeSuggestedTask(from generated: GeneratedSuggestion) -> SuggestedTask {
-        let title = generated.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let theme = generated.theme.trimmingCharacters(in: .whitespacesAndNewlines)
-        let connectionSlug = generated.connection_slug?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return SuggestedTask(
-            id: "generated-\(UUID().uuidString)",
-            title: title.isEmpty ? "Create a helpful new task" : title,
-            theme: theme.isEmpty ? "Idea" : theme,
-            connectionSlug: connectionSlug?.isEmpty == false ? connectionSlug : nil,
-            kind: .suggestion
-        )
-    }
-
     private func connectionSlugs(for todo: Todo) -> [String] {
         TodoArtifact.connectionSlugs(
             todoSlug: todo.connection_slug,
@@ -1825,11 +1537,175 @@ private struct DockButtonStyle: ButtonStyle {
     }
 }
 
+private struct ScheduledPromptPickerCard: View {
+    let category: ScheduledPromptCategory
+    let onClose: () -> Void
+    let onHandleDragChanged: (DragGesture.Value) -> Void
+    let onHandleDragEnded: (DragGesture.Value) -> Void
+    let onSelect: (ScheduledPromptSuggestion) -> Void
+
+    private let cornerRadius: CGFloat = 26
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            VStack(spacing: 5) {
+                ForEach(category.prompts) { prompt in
+                    ScheduledPromptOptionRow(
+                        prompt: prompt,
+                        accentColor: category.promptAccentColor,
+                        onSelect: { onSelect(prompt) }
+                    )
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
+        }
+        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .shadow(color: Color.black.opacity(0.16), radius: 28, y: 18)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var header: some View {
+        ZStack(alignment: .topTrailing) {
+            LinearGradient(
+                colors: [
+                    category.promptAccentColor,
+                    category.promptAccentColor.opacity(0.76)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            HStack(alignment: .bottom, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(category.name)
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .padding(.leading, 28)
+            .padding(.trailing, 28)
+            .padding(.top, 28)
+            .padding(.bottom, 26)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged(onHandleDragChanged)
+                    .onEnded(onHandleDragEnded)
+            )
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 36, height: 36)
+                    .background(.white.opacity(0.16), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 22)
+            .padding(.trailing, 22)
+            .accessibilityLabel("Dismiss \(category.name) prompts")
+        }
+        .frame(height: 132)
+    }
+}
+
+private struct ScheduledPromptOptionRow: View {
+    let prompt: ScheduledPromptSuggestion
+    let accentColor: Color
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(accentColor)
+                    Image(systemName: prompt.symbolName)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(prompt.title)
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(prompt.description)
+                        .font(.system(size: 16, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(prompt.title), \(prompt.description)")
+    }
+}
+
+private extension ScheduledPromptCategory {
+    var promptAccentColor: Color {
+        switch id {
+        case "inbox":
+            return Color(red: 0.19, green: 0.47, blue: 0.95)
+        case "digests":
+            return Color(red: 0.43, green: 0.32, blue: 0.92)
+        case "project-management":
+            return Color(red: 0.04, green: 0.58, blue: 0.46)
+        case "coding":
+            return Color(red: 0.12, green: 0.48, blue: 0.68)
+        case "chief-of-staff":
+            return Color(red: 0.94, green: 0.42, blue: 0.22)
+        case "finance":
+            return Color(red: 0.06, green: 0.56, blue: 0.28)
+        case "personal-ops":
+            return Color(red: 0.84, green: 0.23, blue: 0.42)
+        case "growth-content":
+            return Color(red: 0.90, green: 0.42, blue: 0.10)
+        default:
+            return TodoCardStyle.primaryBlue
+        }
+    }
+}
+
 private struct TaskSectionHeader: View {
     let title: String
     var trailingIconName: String? = nil
+    var trailingLabel: String? = nil
     var trailingAction: (() -> Void)? = nil
+    var trailingAccessibilityLabel: String? = nil
+    var trailingIconCompact: Bool = false
+    var trailingSwapsInstantly: Bool = false
     var verticalPadding: CGFloat = 3
+
+    private var trailingIconSize: CGFloat {
+        trailingIconCompact ? 16 : 18
+    }
+
+    private var trailingAssetIconSize: CGFloat {
+        trailingIconCompact ? 20 : 22
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1839,253 +1715,88 @@ private struct TaskSectionHeader: View {
 
             Spacer(minLength: 0)
 
-            if let trailingIconName {
-                if let trailingAction {
+            if trailingIconName != nil || trailingLabel != nil {
+                if trailingSwapsInstantly, let trailingAction {
+                    instantTrailingButton(action: trailingAction)
+                } else if let trailingAction {
                     Button(action: trailingAction) {
-                        Image(systemName: trailingIconName)
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 30)
-                            .contentShape(Rectangle())
+                        trailingControl
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("About suggested tasks")
+                    .accessibilityLabel(trailingAccessibilityLabel ?? trailingLabel ?? title)
                 } else {
-                    Image(systemName: trailingIconName)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                    trailingControl
                         .accessibilityHidden(true)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 6)
         .padding(.vertical, verticalPadding)
         .accessibilityAddTraits(.isHeader)
     }
-}
 
-private struct SuggestedInfoCard: View {
-    let title: String
-    let message: String
-    let onClose: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ZStack(alignment: .bottomLeading) {
-                TodoCardStyle.primaryBlue
-
-                Image(systemName: "sparkles")
-                    .font(.system(size: 42, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .padding(24)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 180)
-
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(title)
-                        .font(.system(size: 24, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.primary)
-
-                    Text(message)
-                        .font(.system(size: 20, weight: .regular, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Button(action: onClose) {
-                    Text("Got it")
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                        .background(TodoCardStyle.primaryBlue, in: Capsule())
+    @ViewBuilder
+    private func instantTrailingButton(action: @escaping () -> Void) -> some View {
+        ZStack(alignment: .trailing) {
+            if let trailingIconName {
+                Button(action: action) {
+                    trailingIcon(trailingIconName)
+                        .frame(minHeight: 30)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(trailingAccessibilityLabel ?? "Show categories")
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 22)
-            .padding(.bottom, 24)
-        }
-        .background(AppSemanticColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
-        .shadow(color: .black.opacity(0.16), radius: 28, y: 18)
-    }
-}
 
-private struct SuggestedTask: Identifiable, Hashable {
-    enum Kind: Hashable {
-        case suggestion
-        case loader
-    }
-
-    static let loaderID = "suggestion-loader"
-
-    let id: String
-    let title: String
-    let theme: String
-    let connectionSlug: String?
-    let kind: Kind
-
-    static var loader: SuggestedTask {
-        SuggestedTask(
-            id: loaderID,
-            title: "",
-            theme: "",
-            connectionSlug: nil,
-            kind: .loader
-        )
-    }
-}
-
-private struct SuggestedTasksStrip: View {
-    let suggestions: [SuggestedTask]
-    let screenWidth: CGFloat
-    @Binding var centeredSuggestionID: String?
-    let onLoadMore: () -> Void
-    let onSelect: (SuggestedTask) -> Void
-
-    private let spacing: CGFloat = 8
-    private let horizontalContentInset: CGFloat = 16
-
-    private var tileSize: CGFloat {
-        max(58, (viewportWidth - spacing * 4) / 5)
-    }
-
-    private var viewportWidth: CGFloat {
-        max(0, screenWidth - horizontalContentInset * 2)
-    }
-
-    private var tileWidth: CGFloat {
-        tileSize * 4.8
-    }
-
-    private var tileHeight: CGFloat {
-        tileSize * 2.35
-    }
-
-    private var leftSnapMargin: CGFloat {
-        max(0, min(2, viewportWidth - tileWidth))
-    }
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: spacing) {
-                ForEach(suggestions) { suggestion in
-                    SuggestedTaskTile(suggestion: suggestion) {
-                        onSelect(suggestion)
-                    }
-                    .frame(width: tileWidth, height: tileHeight)
-                    .id(suggestion.id)
+            if let trailingLabel {
+                Button(action: action) {
+                    Text(trailingLabel)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .frame(minHeight: 30)
+                        .contentShape(Rectangle())
                 }
-            }
-            .scrollTargetLayout()
-        }
-        .contentMargins(.leading, leftSnapMargin, for: .scrollContent)
-        .contentMargins(.trailing, max(0, viewportWidth - tileWidth - leftSnapMargin), for: .scrollContent)
-        .scrollClipDisabled()
-        .scrollPosition(id: $centeredSuggestionID)
-        .scrollTargetBehavior(.viewAligned)
-        .onAppear {
-            if centeredSuggestionID == nil || !suggestions.contains(where: { $0.id == centeredSuggestionID }) {
-                centeredSuggestionID = suggestions.first?.id
+                .buttonStyle(.plain)
+                .accessibilityLabel(trailingAccessibilityLabel ?? trailingLabel)
             }
         }
-        .onChange(of: suggestions.map(\.id)) { _, ids in
-            if centeredSuggestionID == nil || !ids.contains(centeredSuggestionID ?? "") {
-                centeredSuggestionID = ids.first
-            }
-        }
-        .onChange(of: centeredSuggestionID) { oldValue, newValue in
-            guard oldValue != nil, newValue != nil, oldValue != newValue else { return }
-            UISelectionFeedbackGenerator().selectionChanged()
-            guard newValue == SuggestedTask.loaderID,
-                  suggestions.contains(where: { $0.id == SuggestedTask.loaderID }) else {
-                return
-            }
-            onLoadMore()
+        .transaction { transaction in
+            transaction.disablesAnimations = true
         }
     }
-}
 
-private struct SuggestedTaskTile: View {
-    let suggestion: SuggestedTask
-    let onTap: () -> Void
-    @State private var skeletonIsAnimating = false
+    @ViewBuilder
+    private var trailingControl: some View {
+        HStack(spacing: 4) {
+            if let trailingIconName {
+                trailingIcon(trailingIconName)
+            }
 
-    var body: some View {
-        Button(action: onTap) {
-            Group {
-                if suggestion.kind == .loader {
-                    skeletonContent
-                } else {
-                    suggestionContent
-                }
+            if let trailingLabel {
+                Text(trailingLabel)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 30, style: .continuous)
-                    .stroke(AppSemanticColors.separator, lineWidth: 1)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
         }
-        .buttonStyle(.plain)
-        .disabled(suggestion.kind == .loader)
-        .accessibilityLabel(
-            suggestion.kind == .loader
-                ? "Loading more suggestions"
-                : "Suggested task: \(suggestion.title)"
-        )
-        .onAppear { skeletonIsAnimating = true }
-        .onDisappear { skeletonIsAnimating = false }
+        .foregroundStyle(.secondary)
+        .frame(minHeight: 30)
+        .contentShape(Rectangle())
     }
 
-    private var suggestionContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(suggestion.theme)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+    @ViewBuilder
+    private func trailingIcon(_ name: String) -> some View {
+        if UIImage(named: name) != nil {
+            Image(name)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: trailingAssetIconSize, height: trailingAssetIconSize)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(AppSemanticColors.neutralFill, in: Capsule())
-
-            Spacer(minLength: 0)
-
-            Text(suggestion.title)
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-                .lineLimit(3)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Image(systemName: name)
+                .font(.system(size: trailingIconSize, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
-    }
-
-    private var skeletonContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Capsule()
-                .fill(skeletonFill)
-                .frame(width: 72, height: 26)
-
-            Spacer(minLength: 0)
-
-            VStack(alignment: .leading, spacing: 8) {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(skeletonFill)
-                    .frame(width: 190, height: 18)
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(skeletonFill)
-                    .frame(width: 140, height: 18)
-            }
-        }
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: skeletonIsAnimating)
-    }
-
-    private var skeletonFill: Color {
-        AppSemanticColors.neutralFill.opacity(skeletonIsAnimating ? 1.0 : 0.5)
     }
 }
 
@@ -2105,7 +1816,7 @@ private struct ExploreSectionHeader: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, 6)
         .padding(.top, 8)
     }
 }
@@ -3249,76 +2960,6 @@ private enum CompletedActivityFilter: String, CaseIterable, Identifiable {
     case topics
 
     var id: String { rawValue }
-
-    var index: Int {
-        switch self {
-        case .allActivity: return 0
-        case .topics: return 1
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .allActivity: return "All Activity"
-        case .topics: return "Categories"
-        }
-    }
-}
-
-private struct CompletedActivityDaySection: Identifiable {
-    let day: Date
-    let todos: [Todo]
-
-    var id: Date { day }
-}
-
-private struct ActivityDateDivider: View {
-    let date: Date
-
-    var body: some View {
-        Text(Self.label(for: date))
-            .font(.system(size: 12, weight: .medium, design: .rounded))
-            .foregroundStyle(Color.secondary)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, 4)
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    /// Day-only labels for the All Activity list: anchored to today /
-    /// yesterday while fresh, then "Mon June, 15" style dates (with a
-    /// year suffix when the day falls in a different calendar year).
-    private static func label(for date: Date) -> String {
-        let calendar = Calendar.current
-        let now = Date()
-
-        if calendar.isDateInToday(date) {
-            return "today"
-        }
-        if calendar.isDateInYesterday(date) {
-            return "yesterday"
-        }
-
-        let weekday = date.formatted(.dateTime.weekday(.abbreviated))
-        let month = date.formatted(.dateTime.month(.wide))
-        let day = date.formatted(.dateTime.day())
-        var label = "\(weekday) \(month), \(day)"
-        if !calendar.isDate(date, equalTo: now, toGranularity: .year) {
-            let year = date.formatted(.dateTime.year())
-            label += ", \(year)"
-        }
-        return label
-    }
-}
-
-private struct CompletedActivityPageHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: [CompletedActivityFilter: CGFloat] = [:]
-
-    static func reduce(
-        value: inout [CompletedActivityFilter: CGFloat],
-        nextValue: () -> [CompletedActivityFilter: CGFloat]
-    ) {
-        value.merge(nextValue()) { _, new in new }
-    }
 }
 
 private struct ActivityGroupDescriptor: Identifiable, Hashable {
@@ -3411,66 +3052,6 @@ private struct ActivityGroupSummary: Identifiable, Hashable {
     var tintColor: Color { descriptor.tintColor }
 }
 
-private struct CompletedActivityToggle: View {
-    let selection: CompletedActivityFilter
-    let allActivityCount: Int
-    let onSelect: (CompletedActivityFilter) -> Void
-
-    var body: some View {
-        GeometryReader { proxy in
-            let inset: CGFloat = 4
-            let pillHeight: CGFloat = 38
-            let segmentWidth = (proxy.size.width - inset * 2) / CGFloat(CompletedActivityFilter.allCases.count)
-            let pillY = (proxy.size.height - pillHeight) / 2
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(AppSemanticColors.elevatedSurface.opacity(0.86))
-                    .frame(width: segmentWidth, height: pillHeight)
-                    .offset(
-                        x: inset + segmentWidth * CGFloat(selection.index),
-                        y: pillY
-                    )
-                    .animation(.interactiveSpring(response: 0.24, dampingFraction: 0.88), value: selection)
-
-                HStack(spacing: 0) {
-                    ForEach(CompletedActivityFilter.allCases) { filter in
-                        Button {
-                            onSelect(filter)
-                        } label: {
-                            segmentLabel(for: filter)
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundStyle(selection == filter ? Color.primary : Color.secondary)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: pillHeight)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selection == filter ? AccessibilityTraits.isSelected : AccessibilityTraits())
-                    }
-                }
-                .padding(.horizontal, inset)
-                .offset(y: pillY)
-            }
-        }
-        .frame(height: 46)
-        .background(AppSemanticColors.neutralFill, in: Capsule())
-    }
-
-    @ViewBuilder
-    private func segmentLabel(for filter: CompletedActivityFilter) -> some View {
-        if filter == .allActivity {
-            HStack(spacing: 6) {
-                Text(filter.title)
-                Text("\(allActivityCount)")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(selection == filter ? Color.secondary : Color(.tertiaryLabel))
-            }
-        } else {
-            Text(filter.title)
-        }
-    }
-}
-
 private struct ActivityGroupGrid: View {
     let summaries: [ActivityGroupSummary]
     let onSelect: (ActivityGroupDescriptor) -> Void
@@ -3525,7 +3106,7 @@ private struct ActivityGroupTile: View {
             .background(summary.tintColor, in: RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(summary.title), \(summary.count) completed tasks")
+        .accessibilityLabel("\(summary.title), \(summary.count) recent tasks")
     }
 }
 
@@ -3579,7 +3160,7 @@ private struct ActivityGroupDetailHeader: View {
                         .foregroundStyle(Color.primary)
                         .lineLimit(2)
 
-                    Text("\(count) completed task\(count == 1 ? "" : "s")")
+                    Text("\(count) recent task\(count == 1 ? "" : "s")")
                         .font(.system(size: 15, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -3635,12 +3216,21 @@ private enum TodoListSection: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    var allowsAddTodoComposer: Bool {
+        switch self {
+        case .todo, .scheduled:
+            return true
+        case .done:
+            return false
+        }
+    }
+
     func contains(_ status: TodoStatus) -> Bool {
         switch self {
         case .todo:
-            // All non-done tasks live in one list — preparing, ready, in-flight,
-            // waiting on the user, failed, and cancelled.
-            return status != .done
+            // Done and cancelled tasks move into the Recent section; the task
+            // list keeps current, blocked, and retryable work at the top.
+            return status != .done && status != .cancelled
         case .scheduled:
             return false
         case .done:
@@ -4071,13 +3661,15 @@ private struct CronJobCard: View {
 
 /// Task card.
 ///
-///   Row 1: stroked todo circle + "Task" label + (connection icon | spinner)
+///   Row 1: state icon + state label, updated date + chevron
 ///   Row 2: task title in SF Pro Rounded 20
-///   Row 3: status text + primary action, or input prompt + option pills
+///   Row 3: live activity or latest artifact pill, plus any primary action
 private struct TodoCard: View {
     let todo: Todo
-    /// Toolkit logos for the top row (prep slug + artifact providers).
+    /// Toolkit logos for the pill fallback while the agent is still working.
     let connectionSlugs: [String]
+    /// Agent-returned deliverables for the latest-artifact pill.
+    let artifacts: [TodoArtifact]
     /// Open interaction for this todo, if the agent is waiting on a reply.
     /// Loaded by the parent in a single batched query so the card stays
     /// pure-presentational.
@@ -4094,20 +3686,6 @@ private struct TodoCard: View {
     let onRespond: (_ interaction: TodoInteraction, _ optionID: String?, _ text: String?) -> Void
 
     var body: some View {
-        if usesActiveFooterTreatment {
-            activeBody
-        } else {
-            standardBody
-        }
-    }
-
-    // MARK: Rows
-
-    private var usesActiveFooterTreatment: Bool {
-        todo.status.isActive && interaction == nil
-    }
-
-    private var standardBody: some View {
         VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
             topRow
             titleRow
@@ -4125,42 +3703,7 @@ private struct TodoCard: View {
         }
     }
 
-    private var activeBody: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: TodoCardStyle.rowSpacing) {
-                topRow
-                titleRow
-            }
-            .padding(TodoCardStyle.cardPadding)
-            .background {
-                UnevenRoundedRectangle(
-                    cornerRadii: .init(
-                        topLeading: TodoCardStyle.cardCornerRadius,
-                        bottomLeading: TodoCardStyle.cardCornerRadius,
-                        bottomTrailing: TodoCardStyle.cardCornerRadius,
-                        topTrailing: TodoCardStyle.cardCornerRadius
-                    ),
-                    style: .continuous
-                )
-                .fill(AppSemanticColors.elevatedSurface)
-            }
-
-            bottomRow
-                .padding(.horizontal, TodoCardStyle.cardPadding)
-                .padding(.vertical, 12)
-                .background(TodoCardStyle.footerBackground)
-        }
-        .frame(maxWidth: .infinity)
-        .clipShape(RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous))
-        .background {
-            RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
-                .fill(TodoCardStyle.footerBackground)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: TodoCardStyle.cardCornerRadius, style: .continuous)
-                .stroke(AppSemanticColors.separator, lineWidth: 1)
-        }
-    }
+    // MARK: Rows
 
     private var titleRow: some View {
         Button(action: onOpen) {
@@ -4177,35 +3720,28 @@ private struct TodoCard: View {
     }
 
     private var topRow: some View {
-        HStack(spacing: 8) {
-            TodoToggle(status: todo.status, action: onToggleComplete)
+        HStack(alignment: .center, spacing: 10) {
+            TodoStateLabel(status: todo.status, action: onToggleComplete)
+
+            Spacer(minLength: 8)
+
             Button(action: onOpen) {
-                HStack(spacing: 8) {
-                    Text("Task")
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundStyle(TodoCardStyle.muted)
-                    Spacer(minLength: 8)
-                    topRowTrailing
+                HStack(spacing: 0) {
+                    Text(lastUpdatedText)
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(TodoCardStyle.headerChrome)
+                        .lineLimit(1)
+
+                    Image("Cheveron_Icon")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 9, height: 9)
+                        .foregroundStyle(TodoCardStyle.headerChrome)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    private var topRowTrailing: some View {
-        Group {
-            if connectionSlugs.isEmpty {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(.tertiaryLabel))
-                    .frame(width: 20, height: 20)
-            } else {
-                ConnectionLogosRow(
-                    slugs: connectionSlugs,
-                    chipSize: TodoCardStyle.connectionLogoChipSize
-                )
-            }
         }
     }
 
@@ -4241,22 +3777,13 @@ private struct TodoCard: View {
                     }
                 }
             }
-        } else if todo.status == .done {
-            EmptyView()
         } else {
-            HStack(alignment: .center, spacing: 10) {
-                HStack(alignment: .center, spacing: 8) {
-                    if usesActiveFooterTreatment {
-                        ActivityLoadingDots()
-                    }
-                    Text(statusText)
-                        .font(.system(size: 14, weight: .regular, design: .rounded))
-                        .foregroundStyle(TodoCardStyle.muted)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 10) {
+                if let pillContent {
+                    TodoCardInfoPill(content: pillContent)
+                        .padding(.horizontal, -TodoCardStyle.artifactPillEdgeOutset)
+                        .padding(.bottom, -TodoCardStyle.artifactPillBottomOutset)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 primaryAction
             }
         }
@@ -4303,6 +3830,42 @@ private struct TodoCard: View {
         }
     }
 
+    private var lastUpdatedText: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(todo.updated_at) { return "Today" }
+        if calendar.isDateInYesterday(todo.updated_at) { return "Yesterday" }
+        return todo.updated_at.formatted(.dateTime.month(.wide).day())
+    }
+
+    private var pillContent: TodoCardInfoPill.Content? {
+        if todo.status.isActive {
+            let slug = connectionSlugs.first ?? todo.connection_slug
+            return .activity(statusText, providerSlug: slug)
+        }
+        if let latestArtifactSummary {
+            return .artifact(latestArtifactSummary)
+        }
+        switch todo.status {
+        case .needs_auth, .needs_input, .failed:
+            return .activity(statusText, providerSlug: connectionSlugs.first ?? todo.connection_slug)
+        case .preparing, .requested, .running, .todo, .done, .cancelled:
+            return nil
+        }
+    }
+
+    private var latestArtifactSummary: TodoCardArtifactSummary? {
+        let grouped = TodoArtifact.groupedForDisplay(artifacts)
+        let candidates = (grouped.primary + grouped.emailDrafts)
+            .filter(\.hasContent)
+        let latest = candidates.max {
+            if $0.updated_at != $1.updated_at {
+                return $0.updated_at < $1.updated_at
+            }
+            return $0.created_at < $1.created_at
+        }
+        return latest.flatMap { TodoCardArtifactSummary(artifact: $0) }
+    }
+
     @ViewBuilder
     private var primaryAction: some View {
         switch todo.status {
@@ -4311,6 +3874,13 @@ private struct TodoCard: View {
                 label: "Do it",
                 style: .primary,
                 icon: "play.fill",
+                action: onDoIt
+            )
+        case .failed:
+            PillButton(
+                label: "Try again",
+                style: .primary,
+                icon: "arrow.clockwise",
                 action: onDoIt
             )
         default:
@@ -4327,11 +3897,201 @@ private struct TodoCard: View {
     }
 }
 
+private struct TodoStateLabel: View {
+    let status: TodoStatus
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                icon
+                Text(label)
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(TodoCardStyle.headerChrome)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch status {
+        case .done:
+            Image("Completed_Icon")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 12, height: 12)
+                .foregroundStyle(TodoCardStyle.headerChrome)
+        case .cancelled:
+            Image("Canceled_Icon")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+                .foregroundStyle(TodoCardStyle.headerChrome)
+        case .preparing, .requested, .running:
+            ProgressView()
+                .controlSize(.small)
+                .tint(TodoCardStyle.headerChrome)
+                .frame(width: 20, height: 20)
+        case .needs_auth, .needs_input:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(TodoCardStyle.headerChrome)
+                .frame(width: 20, height: 20)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(TodoCardStyle.headerChrome)
+                .frame(width: 20, height: 20)
+        case .todo:
+            Circle()
+                .strokeBorder(TodoCardStyle.muted, lineWidth: 2)
+                .frame(width: 20, height: 20)
+        }
+    }
+
+    private var label: String {
+        switch status {
+        case .done: return "Completed"
+        case .cancelled: return "Cancelled"
+        case .preparing, .requested, .running: return "In Progress"
+        case .needs_auth, .needs_input: return "Waiting"
+        case .failed: return "Failed"
+        case .todo: return "Todo"
+        }
+    }
+
+    private var accessibilityLabel: String {
+        switch status {
+        case .done: return "Completed. Mark as not done"
+        case .preparing, .requested, .running: return "In progress"
+        case .todo: return "Todo. Mark as done"
+        default: return label
+        }
+    }
+}
+
+private struct TodoCardArtifactSummary: Equatable {
+    let title: String
+    let providerSlug: String?
+    let fallbackSystemImage: String
+
+    init?(artifact: TodoArtifact) {
+        switch artifact.kind {
+        case .link:
+            let title = artifact.title ?? artifact.url?.host ?? "Open link"
+            self.init(title: title, providerSlug: artifact.provider, fallbackSystemImage: "link")
+        case .email:
+            let draft = artifact.emailDraft
+            let title = artifact.title ?? draft?.subject ?? artifact.emailFallbackTitle
+            self.init(title: title, providerSlug: artifact.emailProvider, fallbackSystemImage: "envelope.fill")
+        case .calendar:
+            let event = artifact.calendarEvent
+            let title = event?.title ?? artifact.title ?? "Calendar event"
+            self.init(title: title, providerSlug: "googlecalendar", fallbackSystemImage: "calendar")
+        case .text:
+            self.init(title: artifact.title ?? "Result", providerSlug: nil, fallbackSystemImage: "doc.text.fill")
+        case .audio:
+            let clip = artifact.audio
+            self.init(
+                title: artifact.title ?? "Spoken summary",
+                providerSlug: clip?.provider,
+                fallbackSystemImage: "waveform"
+            )
+        case .image:
+            guard let ref = artifact.image else { return nil }
+            let title = artifact.title ?? ref.prompt ?? Self.defaultImageTitle(provider: ref.provider)
+            self.init(title: title, providerSlug: ref.provider, fallbackSystemImage: "photo")
+        case .options:
+            guard let payload = artifact.optionsPayload else { return nil }
+            let title = artifact.title ?? payload.summary ?? payload.categoryDisplayName
+            self.init(title: title, providerSlug: payload.provider, fallbackSystemImage: "list.bullet.rectangle")
+        }
+    }
+
+    private init(title: String, providerSlug: String?, fallbackSystemImage: String) {
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Result" : title
+        self.providerSlug = providerSlug?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.fallbackSystemImage = fallbackSystemImage
+    }
+
+    private static func defaultImageTitle(provider: String?) -> String {
+        switch provider?.lowercased() {
+        case "figma": return "Figma export"
+        case "browser": return "Screenshot"
+        default: return "Image"
+        }
+    }
+}
+
+private struct TodoCardInfoPill: View {
+    enum Content: Equatable {
+        case activity(String, providerSlug: String?)
+        case artifact(TodoCardArtifactSummary)
+    }
+
+    let content: Content
+
+    var body: some View {
+        HStack(spacing: 10) {
+            icon
+                .frame(width: TodoCardStyle.artifactPillIconSize, height: TodoCardStyle.artifactPillIconSize)
+                .frame(width: TodoCardStyle.artifactPillIconCircleSize, height: TodoCardStyle.artifactPillIconCircleSize)
+                .background(Color.white, in: Circle())
+
+            Text(title)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Capsule().fill(TodoCardStyle.artifactPillBackground))
+        .accessibilityLabel(title)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch content {
+        case let .activity(_, providerSlug):
+            if let providerSlug, !providerSlug.isEmpty {
+                ConnectionLogo(slug: providerSlug)
+            } else {
+                ActivityLoadingDots()
+            }
+        case let .artifact(summary):
+            if let slug = summary.providerSlug, !slug.isEmpty {
+                ConnectionLogo(slug: slug)
+            } else {
+                Image(systemName: summary.fallbackSystemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(TodoCardStyle.muted)
+            }
+        }
+    }
+
+    private var title: String {
+        switch content {
+        case let .activity(text, _): return text
+        case let .artifact(summary): return summary.title
+        }
+    }
+}
+
 /// Shared style tokens for the redesigned todo card. Mirrors the design
 /// spec: muted #B6B6B6 for chrome text/strokes, iOS system blue tint for
 /// the primary action.
 private enum TodoCardStyle {
     static let muted = AppSemanticColors.mutedChrome
+    static let headerChrome = AppSemanticColors.mutedChrome
     static let primaryBlue = Color(red: 0, green: 122 / 255, blue: 1)
     static let primaryBlueTint = Color(red: 0, green: 122 / 255, blue: 1).opacity(0.15)
     static let footerBackground = AppSemanticColors.footerSurface
@@ -4343,6 +4103,15 @@ private enum TodoCardStyle {
     /// Vertical gap between the three rows; keep equal so the card feels balanced.
     static let rowSpacing: CGFloat = 14
     static let connectionLogoChipSize: CGFloat = 28
+    static let artifactPillBackground = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(white: 0.18, alpha: 1)
+            : UIColor(red: 244 / 255, green: 244 / 255, blue: 244 / 255, alpha: 1)
+    })
+    static let artifactPillIconSize: CGFloat = 20
+    static let artifactPillIconCircleSize: CGFloat = 38
+    static let artifactPillEdgeOutset: CGFloat = 14
+    static let artifactPillBottomOutset: CGFloat = 12
 }
 
 private struct ActivityLoadingDots: View {
@@ -4633,7 +4402,7 @@ private struct EmptyState: View {
     private var subtitle: String {
         switch section {
         case .todo:
-            return "Tap the + to create a task for your agent. Once it's done - you'll see completed tasks here."
+            return "Tap the + to create a task for your agent. Once it's done or cancelled, you'll see recent tasks here."
         case .scheduled:
             return "Recurring automations like daily email checks will appear here when the agent sets them up."
         case .done:

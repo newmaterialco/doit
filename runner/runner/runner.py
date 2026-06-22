@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ import httpx
 from .artifact_guard import RunUrlTracker, maybe_upsert_artifact
 from .browse_skill import maybe_prefetch_browse_skill
 from .config import Config, load
+from .composio_sync import ComposioPreflightResult, ensure_composio_connection
 from .db import AgentModelSetting, DB
 from .activity import (
     AgentActivityService,
@@ -87,6 +88,66 @@ from .cron import configure_one_cron_job, run_one_cron_job
 from .schedule import compute_next_run
 
 log = logging.getLogger(__name__)
+
+UTC = timezone.utc
+
+
+_BROWSER_SESSION_FAILURE_PATTERNS = (
+    re.compile(r"\bCDP\s+WebSocket\s+connect\s+failed\b", re.IGNORECASE),
+    re.compile(r"\bWebSocket\s+connect\s+failed\b", re.IGNORECASE),
+    re.compile(r"\bHTTP\s+error:\s*410\s+Gone\b", re.IGNORECASE),
+    re.compile(r"\bbrowser\s+session\b.*\b(closed|disconnected|expired|stale)\b", re.IGNORECASE),
+    re.compile(r"\b(session|target|page)\s+(closed|disconnected|expired)\b", re.IGNORECASE),
+)
+
+_BROWSER_SESSION_USER_MESSAGE = (
+    "The browser session disconnected while working on this task. This is "
+    "usually temporary. Try again and I'll reopen the browser session."
+)
+
+_TIMEOUT_USER_MESSAGE = (
+    "The agent stopped because it went too long without finishing. "
+    "Try again and Doit will continue from the task history and any artifacts "
+    "already saved."
+)
+
+_TIMEOUT_AUTH_USER_MESSAGE_TEMPLATE = (
+    "The agent stopped because it went too long without finishing. {toolkit} "
+    "may be connected in Settings, but the agent session did not pick it up "
+    "in time. Try again and Doit will refresh the connection before running."
+)
+
+_GITHUB_REPO_URL_RE = re.compile(
+    r"^https?://(?:www\.)?github\.com/([^/\s?#]+)/([^/\s?#]+?)(?:\.git)?/?$",
+    re.IGNORECASE,
+)
+_GITHUB_PAGES_URL_RE = re.compile(
+    r"^https?://([a-z0-9-]+)\.github\.io/([^/\s?#]+)/?",
+    re.IGNORECASE,
+)
+_DEPLOY_URL_RE = re.compile(
+    r"^https?://[^/\s?#]+\.(?:vercel\.app|netlify\.app)(?:/.*)?$",
+    re.IGNORECASE,
+)
+
+
+def _browser_session_failure_message(raw: object) -> tuple[str, str] | None:
+    """Return (user-facing message, diagnostic detail) for browser session drops."""
+    detail = str(raw or "").strip()
+    if not detail:
+        return None
+    if any(pattern.search(detail) for pattern in _BROWSER_SESSION_FAILURE_PATTERNS):
+        return _BROWSER_SESSION_USER_MESSAGE, detail
+    return None
+
+
+def _timeout_user_message(todo: dict) -> str:
+    slug = str(todo.get("connection_slug") or "").strip().lower()
+    if slug:
+        return _TIMEOUT_AUTH_USER_MESSAGE_TEMPLATE.format(
+            toolkit=_toolkit_display_name(slug)
+        )
+    return _TIMEOUT_USER_MESSAGE
 
 
 def _hermes_http_failure_message(error: httpx.HTTPError) -> tuple[str, str]:
@@ -221,6 +282,78 @@ def _model_setting_label(setting: AgentModelSetting | None) -> str:
         return "profile-default"
     status = f" status={setting.apply_status}" if setting.apply_status else ""
     return f"{setting.provider}/{setting.model}{status}"
+
+
+async def _pause_for_composio_auth(
+    db: DB,
+    pusher: Pusher,
+    *,
+    todo: dict,
+    toolkit: str,
+    redirect_url: str | None,
+) -> None:
+    """Pause before Hermes when a required Composio toolkit is disconnected."""
+    todo_id = str(todo["id"])
+    user_id = str(todo["user_id"])
+    slug = toolkit.strip().lower()
+    label = _toolkit_display_name(slug)
+    url = redirect_url or f"doit://connect/{slug}"
+    prompt = f"Connect {label} to continue this task."
+    db.update_todo(
+        todo_id,
+        {
+            "status": "needs_auth",
+            "connection_slug": slug,
+            "error_message": None,
+        },
+    )
+    db.insert_step(
+        todo_id=todo_id,
+        user_id=user_id,
+        kind="oauth_needed",
+        text=prompt,
+        url=url,
+        tool_name=f"composio_{slug}_connect",
+    )
+    _write_activity(
+        db,
+        todo_id=todo_id,
+        user_id=user_id,
+        snapshot=AgentActivityService().mark_terminal(
+            state="paused",
+            phase="needs_auth",
+            title="Connect an account to continue",
+            detail=prompt,
+        ),
+        hermes_run_id=None,
+    )
+    await pusher.send(
+        db.list_apns_tokens(user_id),
+        PushPayload(
+            title=f"Connect {label}",
+            body="Tap to authorize so the agent can finish.",
+            todo_id=todo_id,
+            kind="oauth_needed",
+        ),
+    )
+
+
+def _toolkit_display_name(slug: str) -> str:
+    names = {
+        "github": "GitHub",
+        "gmail": "Gmail",
+        "googlecalendar": "Google Calendar",
+        "googledrive": "Google Drive",
+        "googledocs": "Google Docs",
+        "googlesheets": "Google Sheets",
+        "linkedin": "LinkedIn",
+        "reddit": "Reddit",
+        "figma": "Figma",
+        "slack": "Slack",
+        "notion": "Notion",
+        "linear": "Linear",
+    }
+    return names.get(slug, slug.replace("_", " ").replace("-", " ").title())
 
 
 async def run_one_todo(
@@ -430,6 +563,23 @@ async def run_one_todo(
     memory_store = _memory_store(cfg, endpoint.profile_name)
     async with staging_lock:
         staged_memories = sync_active_memories_to_hermes(db, memory_store, user_id)
+    composio_preflight: ComposioPreflightResult | None = None
+    if connection_slug:
+        composio_preflight = await ensure_composio_connection(
+            cfg,
+            profile_name=endpoint.profile_name,
+            user_id=str(user_id),
+            toolkit=connection_slug,
+        )
+        if composio_preflight.checked and not composio_preflight.connected:
+            await _pause_for_composio_auth(
+                db,
+                pusher,
+                todo=todo,
+                toolkit=connection_slug,
+                redirect_url=composio_preflight.redirect_url,
+            )
+            return
     # Image-only follow-up: the task already completed at least once
     # (processed attachments exist) and the user attached something new
     # without typing a message. Route it through the follow-up prompt so
@@ -438,11 +588,12 @@ async def run_one_todo(
     image_only_followup = bool(
         processed_attachment_urls and attachment_urls and not pending_bodies
     )
-    task_context = (
-        _task_context_for_prompt(db, todo_id)
-        if resume is not None or pending_bodies or image_only_followup
-        else None
-    )
+    # Always ground executions in the app-visible task state. The context
+    # helper returns empty lists on first runs, and the prompt builder omits
+    # empty context blocks. This matters for OAuth resumes and manual retries:
+    # they often have no new chat message but still need the repo/doc/link
+    # cards the user already sees in iOS.
+    task_context = _task_context_for_prompt(db, todo_id)
 
     if resume is not None:
         prompt = _build_resume_prompt(
@@ -502,6 +653,15 @@ async def run_one_todo(
 
     if gate is not None and gate.active_exec > 1:
         prompt = f"{prompt}{concurrent_isolation_nudge()}"
+    if composio_preflight is not None and composio_preflight.connected:
+        prompt = (
+            f"{prompt}\n\n"
+            "Verified connection state before this run:\n"
+            f"- {connection_slug} is ACTIVE for this user and was synced into "
+            "the Hermes Composio tool-router session. Do not ask the user to "
+            "authenticate this toolkit again unless a tool call still fails "
+            "with an explicit auth error."
+        )
 
     async with staging_lock:
         browse_skill = await maybe_prefetch_browse_skill(
@@ -611,15 +771,16 @@ async def run_one_todo(
             with suppress(Exception):
                 await hermes.stop_run(run_id)
             terminal_status = "failed"
+            timeout_message = _timeout_user_message(todo)
             db.update_todo(
                 todo_id,
-                {"status": "failed", "error_message": "Timed out."},
+                {"status": "failed", "error_message": timeout_message},
             )
             db.insert_step(
                 todo_id=todo_id,
                 user_id=user_id,
                 kind="error",
-                text="The agent took too long and was stopped.",
+                text=timeout_message,
             )
             _write_activity(
                 db,
@@ -629,7 +790,7 @@ async def run_one_todo(
                     state="failed",
                     phase="failed",
                     title="Timed out",
-                    detail="The agent took too long and was stopped.",
+                    detail=timeout_message,
                 ),
                 hermes_run_id=run_id,
             )
@@ -671,9 +832,19 @@ async def run_one_todo(
     except Exception as e:
         log.exception("unexpected failure processing todo %s", todo_id)
         terminal_status = "failed"
+        raw_error = str(e)
+        browser_failure = _browser_session_failure_message(raw_error)
+        failure_message = browser_failure[0] if browser_failure else raw_error
+        failure_detail = browser_failure[1] if browser_failure else raw_error
         db.update_todo(
             todo_id,
-            {"status": "failed", "error_message": str(e)},
+            {"status": "failed", "error_message": failure_message},
+        )
+        db.insert_step(
+            todo_id=todo_id,
+            user_id=user_id,
+            kind="error",
+            text=failure_detail,
         )
         _write_activity(
             db,
@@ -682,8 +853,8 @@ async def run_one_todo(
             snapshot=AgentActivityService().mark_terminal(
                 state="failed",
                 phase="failed",
-                title="Unexpected error",
-                detail=str(e),
+                title="Browser disconnected" if browser_failure else "Unexpected error",
+                detail=failure_detail,
             ),
             hermes_run_id=run_id,
         )
@@ -759,8 +930,6 @@ async def _convert_prep_todo_to_cron(
     off) and ``False`` when the insert failed and the caller should leave
     the row as a normal task.
     """
-    from datetime import UTC, datetime
-
     todo_id = todo["id"]
     user_id = todo["user_id"]
     client_timezone = todo.get("client_timezone") or None
@@ -1308,7 +1477,8 @@ def _structured_repair_enabled() -> bool:
 # the model did the work but dropped the contract blocks.
 _STRUCTURED_OUTPUT_HINT = re.compile(
     r"\b(email|e-?mail|gmail|inbox|send|sent|reply|forward|draft|"
-    r"schedule|calendar|invite|meeting|event|appointment|book|rsvp)\b",
+    r"schedule|calendar|invite|meeting|event|appointment|book|rsvp|"
+    r"github|repo|repository|website|web\s*site|deploy|pages|vercel|netlify|html)\b",
     re.IGNORECASE,
 )
 
@@ -1318,6 +1488,80 @@ def _expects_structured_output(todo: dict) -> bool:
         str(todo.get(k) or "") for k in ("title", "detail", "topic")
     )
     return bool(_STRUCTURED_OUTPUT_HINT.search(text))
+
+
+def _maybe_promote_link_artifacts_from_urls(
+    db: DB,
+    *,
+    todo: dict,
+    user_id: str,
+    run_id: str,
+    urls: set[str] | frozenset[str],
+) -> bool:
+    """Persist high-confidence repo/site URLs as link artifacts.
+
+    This is a safety net for code/deploy tasks where the tool output contains
+    the real deliverable URL but the model forgets the artifact block.
+    """
+    promoted = False
+    existing_urls = {
+        str((row.get("payload") or {}).get("url") or "").strip().rstrip("/")
+        for row in db.list_todo_artifacts_for_context(str(todo["id"]))
+        if isinstance(row.get("payload"), dict)
+    }
+    for url in sorted(urls):
+        candidate = _link_artifact_for_url(url)
+        if candidate is None:
+            continue
+        normalized = str(candidate.payload.get("url") or "").strip().rstrip("/")
+        if normalized in existing_urls:
+            continue
+        if maybe_upsert_artifact(
+            db,
+            todo=todo,
+            artifact=candidate,
+            user_id=user_id,
+            run_id=run_id,
+            url_tracker=None,
+        ):
+            promoted = True
+            existing_urls.add(normalized)
+    return promoted
+
+
+def _link_artifact_for_url(url: str) -> ArtifactRequest | None:
+    cleaned = (url or "").strip().rstrip(".,;)}]")
+    if not cleaned:
+        return None
+    pages_match = _GITHUB_PAGES_URL_RE.match(cleaned)
+    if pages_match:
+        owner, repo = pages_match.groups()
+        return ArtifactRequest(
+            key="website",
+            kind="link",
+            title=f"{repo} website",
+            payload={"url": cleaned, "provider": "github"},
+        )
+    repo_match = _GITHUB_REPO_URL_RE.match(cleaned)
+    if repo_match:
+        owner, repo = repo_match.groups()
+        repo = repo.removesuffix(".git")
+        return ArtifactRequest(
+            key="github-repo",
+            kind="link",
+            title=f"{owner}/{repo}",
+            payload={"url": cleaned.removesuffix(".git"), "provider": "github"},
+        )
+    if _DEPLOY_URL_RE.match(cleaned):
+        host = cleaned.split("/", 3)[2]
+        provider = "vercel" if host.endswith("vercel.app") else "netlify"
+        return ArtifactRequest(
+            key="website",
+            kind="link",
+            title=f"{provider.title()} deployment",
+            payload={"url": cleaned, "provider": provider},
+        )
+    return None
 
 
 _REPAIR_PROMPT_TEMPLATE = (
@@ -1594,6 +1838,44 @@ async def _consume_run(
     activity = AgentActivityService()
     latest_activity: ActivitySnapshot | None = None
     heartbeat_task: asyncio.Task | None = None
+    activity_closed = False
+
+    def write_run_activity(snapshot: ActivitySnapshot | None) -> bool:
+        """Persist a live snapshot unless this run already reached terminal.
+
+        Hermes can still stream late tool/thought events after the runner has
+        accepted a terminal result. Once that happens, never let a running
+        snapshot for this run overwrite the completed/paused/failed row.
+        """
+        if snapshot is None:
+            return False
+        if activity_closed and snapshot.state == "running":
+            log.info(
+                "activity_latch_skip_running todo=%s run=%s phase=%s title=%r",
+                todo_id,
+                run_id,
+                snapshot.phase,
+                snapshot.title,
+            )
+            return False
+        _write_activity(
+            db,
+            todo_id=todo_id,
+            user_id=user_id,
+            snapshot=snapshot,
+            hermes_run_id=run_id,
+        )
+        return True
+
+    def write_terminal_activity(snapshot: ActivitySnapshot | None) -> bool:
+        nonlocal activity_closed, latest_activity
+        if snapshot is None:
+            return False
+        wrote = write_run_activity(snapshot)
+        if snapshot.state != "running":
+            activity_closed = True
+            latest_activity = snapshot
+        return wrote
 
     # Progress watchdog (Phase 3a): wall-clock of the last meaningful SSE
     # event. When the gap exceeds the stall timeout the heartbeat below
@@ -1625,40 +1907,28 @@ async def _consume_run(
                 snapshot = activity.stalled(latest_activity)
             else:
                 snapshot = activity.heartbeat(latest_activity)
-            _write_activity(
-                db,
-                todo_id=todo_id,
-                user_id=user_id,
-                snapshot=snapshot,
-                hermes_run_id=run_id,
-            )
-            await _notify_live_activity_sync(
-                pusher,
-                db,
-                user_id=user_id,
-                todo_id=todo_id,
-                snapshot=snapshot,
-            )
+            if write_run_activity(snapshot):
+                await _notify_live_activity_sync(
+                    pusher,
+                    db,
+                    user_id=user_id,
+                    todo_id=todo_id,
+                    snapshot=snapshot,
+                )
 
     start_snapshot = AgentActivityService().initial(
         phase="starting",
         title="Connecting…",
         detail=None,
     )
-    _write_activity(
-        db,
-        todo_id=todo_id,
-        user_id=user_id,
-        snapshot=start_snapshot,
-        hermes_run_id=run_id,
-    )
-    await _notify_live_activity_sync(
-        pusher,
-        db,
-        user_id=user_id,
-        todo_id=todo_id,
-        snapshot=start_snapshot,
-    )
+    if write_run_activity(start_snapshot):
+        await _notify_live_activity_sync(
+            pusher,
+            db,
+            user_id=user_id,
+            todo_id=todo_id,
+            snapshot=start_snapshot,
+        )
     heartbeat_task = asyncio.create_task(activity_heartbeat())
 
     try:
@@ -1708,22 +1978,16 @@ async def _consume_run(
             # recognized. Terminal events also write a closing snapshot below
             # so the UI doesn't sit on stale "Working on..." copy.
             snap = activity.observe(effect, event_name=ev.event, raw_data=ev.data)
-            if snap is not None:
+            if snap is not None and effect.new_status is None:
                 latest_activity = snap
-                _write_activity(
-                    db,
-                    todo_id=todo_id,
-                    user_id=user_id,
-                    snapshot=snap,
-                    hermes_run_id=run_id,
-                )
-                await _notify_live_activity_sync(
-                    pusher,
-                    db,
-                    user_id=user_id,
-                    todo_id=todo_id,
-                    snapshot=snap,
-                )
+                if write_run_activity(snap):
+                    await _notify_live_activity_sync(
+                        pusher,
+                        db,
+                        user_id=user_id,
+                        todo_id=todo_id,
+                        snapshot=snap,
+                    )
             if effect.step_kind == "tool_result":
                 url_tracker.observe_tool_result(ev.data)
 
@@ -1913,17 +2177,13 @@ async def _consume_run(
                             kind="needs_input",
                         ),
                     )
-                    _write_activity(
-                        db,
-                        todo_id=todo_id,
-                        user_id=user_id,
-                        snapshot=activity.mark_terminal(
+                    write_terminal_activity(
+                        activity.mark_terminal(
                             state="paused",
                             phase="needs_input",
                             title="Needs your input",
                             detail=_PLACEHOLDER_NEEDS_INPUT_PROMPT,
-                        ),
-                        hermes_run_id=run_id,
+                        )
                     )
                     await _reconcile_run_tokens(
                         db, hermes, todo_id, run_id, live_total
@@ -1939,7 +2199,11 @@ async def _consume_run(
                 if effect.new_status == "done":
                     fields["completed_at"] = "now()"
                 elif effect.new_status == "failed":
-                    fields["error_message"] = effect.text or "Agent reported a failure."
+                    failure_detail = effect.text or "Agent reported a failure."
+                    browser_failure = _browser_session_failure_message(failure_detail)
+                    fields["error_message"] = (
+                        browser_failure[0] if browser_failure else failure_detail
+                    )
                 # Supabase REST can't take SQL like "now()" — drop it and let the
                 # trigger keep updated_at fresh; we don't strictly need completed_at
                 # to be wall-clock-accurate for the prototype.
@@ -1956,17 +2220,13 @@ async def _consume_run(
                             kind="oauth_needed",
                         ),
                     )
-                    _write_activity(
-                        db,
-                        todo_id=todo_id,
-                        user_id=user_id,
-                        snapshot=activity.mark_terminal(
+                    write_terminal_activity(
+                        activity.mark_terminal(
                             state="paused",
                             phase="needs_auth",
                             title="Connect an account to continue",
                             detail=effect.text,
-                        ),
-                        hermes_run_id=run_id,
+                        )
                     )
                     # The run usually pauses here in practice; we stop consuming
                     # so the next "Do it" can resume cleanly with fresh creds.
@@ -2007,39 +2267,35 @@ async def _consume_run(
                             kind="needs_input",
                         ),
                     )
-                    _write_activity(
-                        db,
-                        todo_id=todo_id,
-                        user_id=user_id,
-                        snapshot=activity.mark_terminal(
+                    write_terminal_activity(
+                        activity.mark_terminal(
                             state="paused",
                             phase="needs_input",
                             title="Needs your input",
                             detail=effect.interaction.prompt,
-                        ),
-                        hermes_run_id=run_id,
+                        )
                     )
                     await _reconcile_run_tokens(db, hermes, todo_id, run_id, live_total)
                     return "needs_input"
 
                 if effect.new_status in ("done", "failed"):
                     terminal = effect.new_status
+                    if effect.new_status == "done":
+                        activity_closed = True
                     if effect.new_status == "done" and effect.step_kind == "final":
                         pending_final = merge_terminal_translated(
                             pending_final, effect
                         )
                     elif effect.new_status == "failed":
-                        _write_activity(
-                            db,
-                            todo_id=todo_id,
-                            user_id=user_id,
-                            snapshot=activity.mark_terminal(
+                        failure_detail = effect.text or "Agent reported a failure."
+                        browser_failure = _browser_session_failure_message(failure_detail)
+                        write_terminal_activity(
+                            activity.mark_terminal(
                                 state="failed",
                                 phase="failed",
-                                title="Failed",
-                                detail=effect.text,
-                            ),
-                            hermes_run_id=run_id,
+                                title="Browser disconnected" if browser_failure else "Failed",
+                                detail=failure_detail,
+                            )
                         )
                         break
                     # Keep draining so a later ``run.completed`` / duplicate
@@ -2050,6 +2306,18 @@ async def _consume_run(
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
+
+    if (
+        terminal == "done"
+        and _maybe_promote_link_artifacts_from_urls(
+            db,
+            todo=todo,
+            user_id=user_id,
+            run_id=run_id,
+            urls=url_tracker.urls,
+        )
+    ):
+        artifacts_persisted = True
 
     if (
         terminal == "done"
@@ -2092,17 +2360,13 @@ async def _consume_run(
             kind="final",
             text=pending_final.text,
         )
-        _write_activity(
-            db,
-            todo_id=todo_id,
-            user_id=user_id,
-            snapshot=activity.mark_terminal(
+        write_terminal_activity(
+            activity.mark_terminal(
                 state="completed",
                 phase="done",
                 title="Done",
                 detail=pending_final.text,
-            ),
-            hermes_run_id=run_id,
+            )
         )
     elif terminal == "done":
         db.insert_step(
@@ -2111,17 +2375,13 @@ async def _consume_run(
             kind="final",
             text="Done.",
         )
-        _write_activity(
-            db,
-            todo_id=todo_id,
-            user_id=user_id,
-            snapshot=activity.mark_terminal(
+        write_terminal_activity(
+            activity.mark_terminal(
                 state="completed",
                 phase="done",
                 title="Done",
                 detail="Done.",
-            ),
-            hermes_run_id=run_id,
+            )
         )
     if terminal is None:
         if tools_called and not artifacts_persisted:
@@ -2150,17 +2410,13 @@ async def _consume_run(
                 todo_id,
                 {"status": "failed", "error_message": failure_text},
             )
-            _write_activity(
-                db,
-                todo_id=todo_id,
-                user_id=user_id,
-                snapshot=activity.mark_terminal(
+            write_terminal_activity(
+                activity.mark_terminal(
                     state="failed",
                     phase="failed",
                     title="Stopped early",
                     detail=failure_text,
-                ),
-                hermes_run_id=run_id,
+                )
             )
             terminal = "failed"
         else:
@@ -2174,17 +2430,13 @@ async def _consume_run(
                 text="Done.",
             )
             db.update_todo(todo_id, {"status": "done"})
-            _write_activity(
-                db,
-                todo_id=todo_id,
-                user_id=user_id,
-                snapshot=activity.mark_terminal(
+            write_terminal_activity(
+                activity.mark_terminal(
                     state="completed",
                     phase="done",
                     title="Done",
                     detail="Done.",
-                ),
-                hermes_run_id=run_id,
+                )
             )
             terminal = "done"
     if terminal in ("done", "failed"):
@@ -3015,11 +3267,44 @@ def _task_context_for_prompt(db: DB, todo_id: str) -> dict[str, list[dict]]:
     snapshot in follow-up prompts keeps the agent grounded when the user says
     "that doc" or "the first sheet" after a completed run.
     """
+    artifacts = db.list_todo_artifacts_for_context(todo_id)
     return {
-        "artifacts": db.list_todo_artifacts_for_context(todo_id),
+        "artifacts": artifacts,
+        "deliverables": _deliverables_for_context(artifacts),
         "messages": db.list_todo_messages_for_context(todo_id),
         "steps": db.list_todo_steps_for_context(todo_id),
     }
+
+
+def _deliverables_for_context(artifacts: list[dict]) -> list[dict]:
+    """Compact current-deliverable summary for follow-up prompts.
+
+    `todo_artifacts` remains the full source of truth. This derived list puts
+    the stable keys and URLs up front so continuation turns are less likely to
+    recreate a repo/site/doc or claim they cannot see it.
+    """
+    deliverables: list[dict] = []
+    for row in artifacts:
+        kind = str(row.get("kind") or "").strip()
+        key = str(row.get("artifact_key") or "").strip()
+        title = str(row.get("title") or key or kind).strip()
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        item: dict[str, Any] = {"kind": kind, "key": key, "title": title}
+        provider = str(payload.get("provider") or "").strip()
+        url = str(payload.get("url") or "").strip()
+        if provider:
+            item["provider"] = provider
+        if url:
+            item["url"] = url
+        if kind == "email":
+            subject = str(payload.get("subject") or "").strip()
+            status = str(payload.get("status") or "").strip()
+            if subject:
+                item["subject"] = subject
+            if status:
+                item["status"] = status
+        deliverables.append(item)
+    return deliverables
 
 
 # How often a running todo's execution lease is refreshed. Must be well

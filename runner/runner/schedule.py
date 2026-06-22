@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 log = logging.getLogger(__name__)
+
+UTC = timezone.utc
 
 ScheduleKind = Literal["delay", "interval", "cron", "once"]
 

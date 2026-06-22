@@ -196,6 +196,15 @@ final class TodoStore {
         agentActivityByTodoID[todoID]
     }
 
+    /// Whether the task detail chat pane should open expanded. Uses stable
+    /// list-scoped input signals so stale agent activity cannot force a
+    /// completed/cancelled task open.
+    func prefersChatExpanded(for todoID: UUID) -> Bool {
+        if openInteractions[todoID]?.status == .open { return true }
+        if todo(id: todoID)?.status == .needs_input { return true }
+        return false
+    }
+
     /// The likely scheduled row produced by the runner converting the current
     /// pending todo, if one has landed through realtime or a refresh.
     func pendingNewTodoCronCandidateID() -> UUID? {
@@ -564,7 +573,12 @@ final class TodoStore {
     }
 
     func setStatus(_ id: UUID, _ status: TodoStatus) async {
-        patchTodoLocal(id: id) { $0.status = status }
+        patchTodoLocal(id: id) {
+            $0.status = status
+            if status != .failed {
+                $0.error_message = nil
+            }
+        }
         do {
             try await TodosAPI.setStatus(id, status)
         } catch {
@@ -958,10 +972,14 @@ final class TodoStore {
                 guard let self else { return }
                 if let realtimeActivity {
                     print("[store] realtime activity todo=\(todoID) phase=\(realtimeActivity.phase) state=\(realtimeActivity.state) title=\(realtimeActivity.title)")
-                    self.agentActivityByTodoID[todoID] = self.mergeRealtimeActivity(
-                        realtimeActivity,
-                        existing: self.agentActivityByTodoID[todoID]
-                    )
+                    if self.shouldIgnoreRealtimeActivity(realtimeActivity) {
+                        print("[store] realtime activity skip stale-running todo=\(todoID)")
+                    } else {
+                        self.agentActivityByTodoID[todoID] = self.mergeRealtimeActivity(
+                            realtimeActivity,
+                            existing: self.agentActivityByTodoID[todoID]
+                        )
+                    }
                 } else {
                     print("[store] realtime activity todo=\(todoID) missing payload; fetching")
                 }
@@ -1001,6 +1019,13 @@ final class TodoStore {
         _ realtime: AgentActivity,
         existing: AgentActivity?
     ) -> AgentActivity {
+        if let existing,
+           existing.isTerminal,
+           realtime.isRunning,
+           realtime.updated_at <= existing.updated_at {
+            return existing
+        }
+
         // Full realtime rows (including `payload.steps`) are authoritative.
         if !realtime.recentSteps.isEmpty {
             return realtime
@@ -1028,5 +1053,18 @@ final class TodoStore {
             updated_at: realtime.updated_at,
             completed_at: realtime.completed_at
         )
+    }
+
+    private func shouldIgnoreRealtimeActivity(_ realtime: AgentActivity) -> Bool {
+        guard realtime.isRunning else { return false }
+        if let todo = todo(id: realtime.todo_id), !todo.status.isActive {
+            return true
+        }
+        if let existing = agentActivityByTodoID[realtime.todo_id],
+           existing.isTerminal,
+           realtime.updated_at <= existing.updated_at {
+            return true
+        }
+        return false
     }
 }

@@ -87,6 +87,21 @@ def _friendly_tool_result_label(name: str | None, is_error: bool) -> str | None:
 # Composio surfaces these via its connection meta-tools; the exact host varies
 # by upstream provider, so we accept any HTTPS URL emitted by a connection tool.
 _OAUTH_URL_RE = re.compile(r"https://[^\s'\"<>]+")
+_GITHUB_DEVICE_AUTH_RE = re.compile(
+    r"github\.com/login/device|one[-\s]*time\s+code|device\s+code",
+    re.IGNORECASE,
+)
+_LOCAL_CLI_AUTH_RE = re.compile(
+    r"\b(gh|github)\s+(?:cli\s+)?(?:is\s+)?not\s+authenticated\b|"
+    r"\bgh\s+auth\s+login\b|"
+    r"\blogin\s+with\s+gh\b",
+    re.IGNORECASE,
+)
+_RAW_FINAL_NOISE_RE = re.compile(
+    r"(^\s*NTS\s+to\b|<ctrl\d+>call:|GITHUB_[A-Z0-9_]+|COMPOSIO_[A-Z0-9_]+|"
+    r"default_api\.|<!DOCTYPE\s+html|<html[\s>])",
+    re.IGNORECASE,
+)
 
 _INTERACTION_RE = re.compile(
     re.escape(INTERACTION_OPEN) + r"\s*(\{.*?\})\s*" + re.escape(INTERACTION_CLOSE),
@@ -257,15 +272,25 @@ def _looks_like_oauth_url(text: str, tool_name: str | None) -> str | None:
     lower = text.lower()
     signals = (
         "authorize",
+        "authenticate",
+        "authentication",
         "authorization url",
         "connect your",
         "please visit",
         "click the following link",
+        "open the provided url",
+        "one-time code",
+        "device code",
+        "login/device",
     )
-    if not (is_connection_tool or any(s in lower for s in signals)):
+    if not (is_connection_tool or any(s in lower for s in signals) or _GITHUB_DEVICE_AUTH_RE.search(text)):
         return None
     m = _OAUTH_URL_RE.search(text)
     return m.group(0) if m else None
+
+
+def _looks_like_local_cli_auth_failure(text: str) -> bool:
+    return bool(text and _LOCAL_CLI_AUTH_RE.search(text))
 
 
 def extract_terminal_text(event_name: str, data: dict) -> str | None:
@@ -472,6 +497,25 @@ def translate(event_name: str, data: dict) -> Translated | None:
 def _final_or_interaction(text: str) -> Translated:
     """Decide whether a model "final" reply is actually an ask-the-user pause."""
     text = (text or "").strip()
+    oauth_url = _looks_like_oauth_url(text, None)
+    if oauth_url:
+        return Translated(
+            step_kind="oauth_needed",
+            text="Connect an account to continue.",
+            url=oauth_url,
+            new_status="needs_auth",
+            final_text=text,
+        )
+    if _looks_like_local_cli_auth_failure(text):
+        return Translated(
+            step_kind="oauth_needed",
+            text=(
+                "GitHub needs to be refreshed in Doit before the agent can "
+                "continue. Do not run terminal auth commands."
+            ),
+            new_status="needs_auth",
+            final_text=text,
+        )
     interaction = parse_interaction(text)
     if interaction is not None:
         # Interaction takes precedence: the agent is pausing, not delivering.
@@ -486,19 +530,12 @@ def _final_or_interaction(text: str) -> Translated:
             final_text=text,
             interaction=interaction,
         )
-    oauth_url = _looks_like_oauth_url(text, None)
-    if oauth_url:
-        return Translated(
-            step_kind="oauth_needed",
-            text="Connect an account to continue.",
-            url=oauth_url,
-            new_status="needs_auth",
-            final_text=text,
-        )
     # Real final: parse artifacts and spawn-task blocks out of the reply.
     artifacts = parse_artifacts(text)
     spawned_tasks = parse_spawned_tasks(text)
-    visible = normalize_visible_reply(strip_activity(strip_tasks(strip_artifacts(text))))
+    visible = normalize_visible_reply(
+        strip_activity(strip_interaction(strip_tasks(strip_artifacts(text))))
+    )
     return Translated(
         step_kind="final",
         text=_truncate(visible, 2000) if visible else "Done.",
@@ -760,6 +797,9 @@ def parse_artifacts(text: str) -> list[ArtifactRequest]:
         payload_raw = data.get("payload")
         payload = payload_raw if isinstance(payload_raw, dict) else {}
         if kind == "email":
+            if _looks_like_auth_payload(payload):
+                log.warning("email artifact looked like auth request; skipping")
+                continue
             payload = normalize_email_artifact_payload(payload)
         # Deduplicate within one reply on the same key: the agent gets one
         # row per key per turn; later blocks win, matching the upsert
@@ -789,6 +829,13 @@ def strip_artifacts(text: str) -> str:
     if not text:
         return text
     return _ARTIFACT_RE.sub("", text)
+
+
+def strip_interaction(text: str) -> str:
+    """Remove every ``[[DOIT_INTERACTION]]`` block from visible text."""
+    if not text:
+        return text
+    return _INTERACTION_RE.sub("", text)
 
 
 def parse_spawned_tasks(text: str) -> list[SpawnedTaskRequest]:
@@ -894,7 +941,7 @@ def normalize_visible_reply(text: str) -> str:
     """
     if not text:
         return ""
-    cleaned = text
+    cleaned = _strip_raw_final_noise(text)
     for marker in (
         ARTIFACT_OPEN,
         ARTIFACT_CLOSE,
@@ -911,6 +958,60 @@ def normalize_visible_reply(text: str) -> str:
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = collapse_done_leadins(cleaned.strip())
     return cleaned.strip()
+
+
+def _strip_raw_final_noise(text: str) -> str:
+    """Drop obvious tool/control/code dumps from chat-visible final text."""
+    if not text:
+        return ""
+    if not _RAW_FINAL_NOISE_RE.search(text):
+        return text
+    kept: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        if _RAW_FINAL_NOISE_RE.search(line):
+            continue
+        if line.startswith(("{", "}", "[", "]", "<", ">")):
+            continue
+        if len(line) > 240 and any(token in line for token in ("\\n", "{", "}", "<", ">")):
+            continue
+        kept.append(raw_line)
+    cleaned = "\n".join(kept).strip()
+    return cleaned if cleaned != text.strip() else ""
+
+
+def _looks_like_auth_payload(value: Any) -> bool:
+    text = _flatten_payload_text(value).lower()
+    if not text:
+        return False
+    return bool(
+        _GITHUB_DEVICE_AUTH_RE.search(text)
+        or (
+            any(word in text for word in ("authenticate", "authorize", "connect"))
+            and bool(_OAUTH_URL_RE.search(text))
+        )
+    )
+
+
+def _flatten_payload_text(value: Any) -> str:
+    parts: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, str):
+            parts.append(node)
+        elif isinstance(node, dict):
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return " ".join(parts)
 
 
 def merge_terminal_translated(
@@ -937,7 +1038,9 @@ def merge_terminal_translated(
         combined_raw = f"{prior_raw}\n\n{new_raw}"
     artifacts = parse_artifacts(combined_raw)
     spawned_tasks = parse_spawned_tasks(combined_raw)
-    visible = normalize_visible_reply(strip_tasks(strip_artifacts(combined_raw)))
+    visible = normalize_visible_reply(
+        strip_activity(strip_interaction(strip_tasks(strip_artifacts(combined_raw))))
+    )
     return Translated(
         step_kind="final",
         text=_truncate(visible, 2000) if visible else "Done.",

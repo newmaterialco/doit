@@ -87,7 +87,9 @@ enum AppSemanticColors {
     })
 
     /// Inset panel behind grouped stacks (e.g. animated activity cards).
-    static let insetPanelBackground = footerSurface
+    static let insetPanelBackground = Color(uiColor: UIColor { trait in
+        trait.userInterfaceStyle == .dark ? .black : .systemGray6
+    })
 
     /// Confirm control while voice recording — white checkmark on black (matches mic).
     static let recordingConfirmBackground = Color.black

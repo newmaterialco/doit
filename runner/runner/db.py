@@ -160,6 +160,7 @@ class DB:
                 {
                     "status": "running",
                     "run_claimed_at": _iso_z(datetime.now(UTC)),
+                    "error_message": None,
                 }
             )
             .eq("id", candidate["id"])

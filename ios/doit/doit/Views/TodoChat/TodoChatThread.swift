@@ -51,6 +51,9 @@ struct TodoChatThread: View {
     /// preparation pass. Routed to `TodosAPI.setStatus(.requested)` so
     /// the runner picks the todo back up.
     let onConfirmRun: () -> Void
+    /// Optional retry for terminal task errors. Cron chat leaves this nil;
+    /// todo detail supplies it only when the row is actually failed.
+    let onRetry: (() -> Void)?
     /// When the agent has an open interaction expecting a typed reply,
     /// this is the placeholder hint the composer should show (e.g.
     /// `"Example: Wednesday at 3pm for 30 minutes…"`). The parent
@@ -86,6 +89,7 @@ struct TodoChatThread: View {
         onSend: @escaping (String) -> Void,
         onFocusChange: @escaping (Bool) -> Void,
         onConfirmRun: @escaping () -> Void,
+        onRetry: (() -> Void)? = nil,
         composerReplyHint: String?,
         availableReferences: [ArtifactReference] = [],
         pendingArtifactInsertion: Binding<ArtifactInsertionRequest?> = .constant(nil)
@@ -108,6 +112,7 @@ struct TodoChatThread: View {
         self.onSend = onSend
         self.onFocusChange = onFocusChange
         self.onConfirmRun = onConfirmRun
+        self.onRetry = onRetry
         self.composerReplyHint = composerReplyHint
         self.availableReferences = availableReferences
         self._pendingArtifactInsertion = pendingArtifactInsertion
@@ -251,9 +256,12 @@ struct TodoChatThread: View {
                 }
             )
         case .agentError(let text):
-            AgentErrorMessage(text: text)
+            AgentErrorMessage(text: text, onRetry: onRetry)
         case .agentReadyToRun(let summary):
             AgentReadyToRunMessage(summary: summary, onConfirm: onConfirmRun)
+        case .agentArtifact(let artifact):
+            TaskArtifactView(artifact: artifact)
+                .frame(maxWidth: 320, alignment: .leading)
         }
     }
 }
@@ -408,67 +416,31 @@ private struct AgentStepMessage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let toolName, !toolName.isEmpty {
-                Text(prettify(toolName))
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.secondary)
-            }
-            if !bodyText.isEmpty {
-                MarkdownMessageText(text: bodyText)
-            }
-            if let url = oauthURL {
-                oauthButton(url: url)
-            }
-            Text(timestamp.formatted(date: .omitted, time: .shortened))
-                .font(.system(size: 11, weight: .regular, design: .rounded))
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private func oauthButton(url: URL) -> some View {
-        if let slug = authToolkitSlug, !slug.isEmpty {
-            Button {
-                onConnectToolkit(slug)
-            } label: {
-                HStack(spacing: 8) {
-                    if isConnectingToolkit {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(slug)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 16, height: 16)
-                    }
-                    Text("Connect \(authToolkitName ?? prettify(slug))")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                }
-                .foregroundStyle(Color.orange)
-                .padding(.vertical, 9)
-                .padding(.horizontal, 13)
-                .background(Color.orange.opacity(0.12), in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(isConnectingToolkit)
+        if let url = oauthURL {
+            AuthRequiredCard(
+                bodyText: bodyText,
+                toolkitSlug: authToolkitSlug,
+                toolkitName: authToolkitName,
+                isConnecting: isConnectingToolkit,
+                timestamp: timestamp,
+                onConnect: { slug in onConnectToolkit(slug) },
+                onOpenOAuth: { onOpenOAuth(url) }
+            )
         } else {
-            Button {
-                onOpenOAuth(url)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "key.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                    Text("Open authorization link")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+            VStack(alignment: .leading, spacing: 4) {
+                if let toolName, !toolName.isEmpty {
+                    Text(prettify(toolName))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.secondary)
                 }
-                .foregroundStyle(Color.orange)
-                .padding(.vertical, 8)
-                .padding(.horizontal, 12)
-                .background(Color.orange.opacity(0.12), in: Capsule())
+                if !bodyText.isEmpty {
+                    MarkdownMessageText(text: bodyText)
+                }
+                Text(timestamp.formatted(date: .omitted, time: .shortened))
+                    .font(.system(size: 11, weight: .regular, design: .rounded))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -476,6 +448,107 @@ private struct AgentStepMessage: View {
         name
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "mcp ", with: "")
+            .capitalized
+    }
+}
+
+private struct AuthRequiredCard: View {
+    let bodyText: String
+    let toolkitSlug: String?
+    let toolkitName: String?
+    let isConnecting: Bool
+    let timestamp: Date
+    let onConnect: (String) -> Void
+    let onOpenOAuth: () -> Void
+
+    private var displayName: String {
+        if let toolkitName, !toolkitName.isEmpty { return toolkitName }
+        if let toolkitSlug, !toolkitSlug.isEmpty { return prettify(toolkitSlug) }
+        return "account"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Color.orange.opacity(0.12))
+                    if let slug = toolkitSlug, !slug.isEmpty, !isConnecting {
+                        ConnectionLogo(slug: slug)
+                            .frame(width: 20, height: 20)
+                    } else if isConnecting {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.orange)
+                    }
+                }
+                .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connect \(displayName)")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                    Text("Doit needs access before the agent can continue.")
+                        .font(.system(size: 13, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if !bodyText.isEmpty {
+                MarkdownMessageText(text: bodyText)
+                    .font(.system(size: 15, weight: .regular, design: .rounded))
+            }
+
+            Button {
+                if let slug = toolkitSlug, !slug.isEmpty {
+                    onConnect(slug)
+                } else {
+                    onOpenOAuth()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if isConnecting {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    Text(isConnecting ? "Connecting…" : "Connect and retry")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(Color.orange)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .background(Color.orange.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isConnecting)
+
+            Text(timestamp.formatted(date: .omitted, time: .shortened))
+                .font(.system(size: 11, weight: .regular, design: .rounded))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(16)
+        .frame(maxWidth: 340, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(AppSemanticColors.elevatedSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 3)
+    }
+
+    private func prettify(_ name: String) -> String {
+        name
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
             .capitalized
     }
 }
@@ -880,10 +953,63 @@ private struct JSONPreview: View {
 
 private struct AgentErrorMessage: View {
     let text: String
+    let onRetry: (() -> Void)?
+
+    private var isTimeout: Bool {
+        text.localizedCaseInsensitiveContains("went too long")
+            || text.localizedCaseInsensitiveContains("timed out")
+    }
 
     var body: some View {
-        MarkdownMessageText(text: text, foregroundColor: .red)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: isTimeout ? "clock.badge.exclamationmark" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(isTimeout ? Color.orange : Color.red)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(isTimeout ? "The agent stopped early" : "Something went wrong")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                    MarkdownMessageText(
+                        text: text,
+                        foregroundColor: isTimeout ? .secondary : .red
+                    )
+                    if isTimeout, text.localizedCaseInsensitiveContains("connected in Settings") {
+                        Text("Check the connection in Settings if retrying does not work.")
+                            .font(.system(size: 13, weight: .regular, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let onRetry {
+                Button(action: onRetry) {
+                    Label("Try again", systemImage: "arrow.clockwise")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        .background(Capsule().fill((isTimeout ? Color.orange : Color.red).opacity(0.12)))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isTimeout ? Color.orange : Color.red)
+            }
+        }
+        .padding(isTimeout ? 16 : 0)
+        .background {
+            if isTimeout {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(AppSemanticColors.elevatedSurface)
+            }
+        }
+        .overlay {
+            if isTimeout {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.24), lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

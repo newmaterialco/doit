@@ -139,7 +139,15 @@ def build_prompt(
     if preparation_summary:
         lines += ["", "Preparation summary:", preparation_summary.strip()]
     if connection_slug:
-        lines += ["", "Expected connection/toolkit:", connection_slug.strip()]
+        lines += [
+            "",
+            "Expected connection/toolkit:",
+            connection_slug.strip(),
+            "Use Doit's managed integration tools for this toolkit. Do not ask "
+            "the user to run local terminal authentication commands such as "
+            "`gh auth login`; if the managed connection is unavailable, say the "
+            "connection needs to be refreshed in Doit.",
+        ]
     base = "\n".join(lines)
     base = _append_pinned_memory_block(base, pinned_memories)
     task_text = "\n".join(x for x in (original_title, title, detail) if x)
@@ -168,7 +176,7 @@ def build_resume_prompt(
     connection_slug: str | None = None,
     attachment_urls: list[str] | None = None,
     pinned_memories: list[dict] | None = None,
-    task_context: dict[str, list[dict]] | None = None,
+    task_context: dict[str, Any] | None = None,
     topic: str | None = None,
     processed_attachment_urls: list[str] | None = None,
 ) -> str:
@@ -254,7 +262,7 @@ Format (one JSON object per block, wrapped exactly like this):
 [[/DOIT_ARTIFACT]]
 
 Payload shapes by type:
-- link:     {"url":"https://...","provider":"googlesheets|googledocs|gmail|..."}
+- link:     {"url":"https://...","provider":"googlesheets|googledocs|github|..."}
 - email:    {"to":["a@b.com"],"subject":"...","body":"...",
              "provider":"gmail",
              "status":"drafted|sent|scheduled",
@@ -297,6 +305,9 @@ Rules:
   under the task title).
 - Do not emit artifacts in the same reply as a [[DOIT_INTERACTION]] block;
   re-emit them once the user answers and the task actually finishes.
+- For created repositories, websites, deployments, or GitHub Pages updates,
+  emit link artifacts for the repo and/or public site. Do not paste full HTML,
+  repository contents, or tool JSON into the chat when a URL exists.
 """
 
 
@@ -316,6 +327,11 @@ Examples (copy these shapes exactly):
 [[DOIT_ARTIFACT]]
 {"key":"sheet","type":"link","title":"Vendor comparison sheet",
  "payload":{"url":"https://docs.google.com/spreadsheets/d/...","provider":"googlesheets"}}
+[[/DOIT_ARTIFACT]]
+
+[[DOIT_ARTIFACT]]
+{"key":"website","type":"link","title":"GitHub Pages site",
+ "payload":{"url":"https://username.github.io/repo-name/","provider":"github"}}
 [[/DOIT_ARTIFACT]]
 
 [[DOIT_ARTIFACT]]
@@ -354,6 +370,9 @@ Rules:
 - Never emit artifacts in the same reply as a [[DOIT_INTERACTION]] block;
   re-emit them after the user answers.
 - Use exactly one "Done —" lead-in per final reply.
+- For created repositories, websites, deployments, or GitHub Pages updates,
+  emit link artifacts for the repo and/or public site. Do not paste full HTML,
+  repository contents, or tool JSON into the chat when a URL exists.
 """
 
 
@@ -816,7 +835,7 @@ def build_followup_prompt(
     connection_slug: str | None = None,
     attachment_urls: list[str] | None = None,
     pinned_memories: list[dict] | None = None,
-    task_context: dict[str, list[dict]] | None = None,
+    task_context: dict[str, Any] | None = None,
     topic: str | None = None,
     processed_attachment_urls: list[str] | None = None,
 ) -> str:
@@ -883,7 +902,7 @@ def build_followup_prompt(
 
 def _append_task_context_block(
     base: str,
-    context: dict[str, list[dict]] | None,
+    context: dict[str, Any] | None,
 ) -> str:
     """Append explicit same-task history for follow-up turns.
 
@@ -897,10 +916,11 @@ def _append_task_context_block(
     if not context:
         return base
 
+    deliverables = context.get("deliverables") or []
     artifacts = context.get("artifacts") or []
     messages = context.get("messages") or []
     steps = context.get("steps") or []
-    if not (artifacts or messages or steps):
+    if not (deliverables or artifacts or messages or steps):
         return base
 
     lines = [
@@ -911,12 +931,23 @@ def _append_task_context_block(
         "to artifacts below as \"the doc\", \"the sheet\", \"the links\", "
         "\"the first one\", etc. Continue from this state; do not pretend you "
         "cannot see prior task outputs.",
+        "Existing deliverables are live resources already shown to the user. "
+        "When the user asks for an iteration, update or build on these keys / "
+        "URLs instead of starting over, recreating a duplicate, or asking the "
+        "user to provide a link that is listed here.",
     ]
 
     # Artifacts are the user's durable reality ("the doc", "that sheet") so
     # they keep the largest cap. Messages and raw steps are trimmed harder —
     # a wall of old tool steps dilutes the structured-contract instructions,
     # especially for smaller models on turn 2+.
+    if deliverables:
+        lines += ["", "Current deliverables to continue from:"]
+        for row in deliverables[-20:]:
+            formatted = _format_deliverable_context(row)
+            if formatted:
+                lines.append(formatted)
+
     if artifacts:
         lines += ["", "Artifacts already created:"]
         for row in artifacts[-20:]:
@@ -937,6 +968,30 @@ def _append_task_context_block(
                 lines.append(formatted)
 
     return base + "\n".join(lines)
+
+
+def _format_deliverable_context(row: dict) -> str:
+    kind = str(row.get("kind") or "artifact").strip()
+    key = str(row.get("key") or "").strip()
+    title = str(row.get("title") or key or kind).strip()
+    provider = str(row.get("provider") or "").strip()
+    url = str(row.get("url") or "").strip()
+    subject = str(row.get("subject") or "").strip()
+    status = str(row.get("status") or "").strip()
+    label = f"- [{kind}] {title}"
+    if key:
+        label += f" (key={key})"
+    details = "; ".join(
+        part
+        for part in (
+            f"provider={provider}" if provider else "",
+            f"url={url}" if url else "",
+            f"subject={subject}" if subject else "",
+            f"status={status}" if status else "",
+        )
+        if part
+    )
+    return f"{label}: {details}" if details else label
 
 
 def _format_artifact_context(row: dict) -> str:

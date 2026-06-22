@@ -19,6 +19,9 @@ enum ConversationItem: Identifiable, Hashable {
     /// describe what's about to happen ("I'll create a calendar invite…")
     /// before the user taps the inline "Do it" button.
     case agentReadyToRun(summary: String?)
+    /// Agent-produced deliverable anchored below the final reply for
+    /// the turn that emitted it. Header cards use the same artifact rows.
+    case agentArtifact(TodoArtifact)
 
     var id: String {
         switch self {
@@ -45,6 +48,8 @@ enum ConversationItem: Identifiable, Hashable {
             // of summary changes, and a stable id lets SwiftUI animate
             // the button state without rebuilding the row.
             return "agent-ready-to-run"
+        case .agentArtifact(let artifact):
+            return "artifact-\(artifact.id.uuidString)"
         }
     }
 }
@@ -66,6 +71,7 @@ enum ConversationBuilder {
         interactions: [TodoInteraction],
         attachments: [TodoAttachment],
         messages: [TodoMessage],
+        artifacts: [TodoArtifact] = [],
         error: String?,
         agentActivity: AgentActivity? = nil
     ) -> [ConversationItem] {
@@ -90,14 +96,6 @@ enum ConversationBuilder {
             }
         }
 
-        struct Dated {
-            let item: ConversationItem
-            let ts: Date
-            /// Sub-order on tie: lower sorts earlier. Used so a closed
-            /// interaction (the question) sits immediately above the
-            /// synthesised reply bubble that shares its `responded_at`.
-            let tiebreaker: Int
-        }
         var dated: [Dated] = visibleSteps.map {
             Dated(item: .agentStep($0), ts: $0.ts, tiebreaker: 1)
         }
@@ -125,9 +123,13 @@ enum ConversationBuilder {
                 ))
             }
         }
+        dated.append(contentsOf: artifactTimelineEntries(artifacts: artifacts, steps: steps))
         dated.sort { lhs, rhs in
             if lhs.ts != rhs.ts { return lhs.ts < rhs.ts }
             if lhs.tiebreaker != rhs.tiebreaker { return lhs.tiebreaker < rhs.tiebreaker }
+            let lhsKey = lhs.item.artifactSortKey
+            let rhsKey = rhs.item.artifactSortKey
+            if lhsKey != rhsKey { return lhsKey < rhsKey }
             return lhs.item.userTurnPriority < rhs.item.userTurnPriority
         }
         items.append(contentsOf: dated.map(\.item))
@@ -179,6 +181,60 @@ enum ConversationBuilder {
 
         return items
     }
+
+    /// Places deduplicated artifact cards immediately after the agent
+    /// final reply for the turn that produced them. Artifacts are
+    /// persisted shortly before or after the deferred final step insert,
+    /// but unmatched artifacts stay header-only until a final arrives so
+    /// the chat never looks done while the runner is still active.
+    private static func artifactTimelineEntries(
+        artifacts: [TodoArtifact],
+        steps: [TodoStep]
+    ) -> [Dated] {
+        let grouped = TodoArtifact.groupedForDisplay(artifacts)
+        let deduped = grouped.primary + grouped.emailDrafts
+        guard !deduped.isEmpty else { return [] }
+
+        let finalSteps = steps
+            .filter { !$0.containsInteractionMarker && $0.kind == .final }
+            .sorted { $0.ts < $1.ts }
+
+        let finalSlack: TimeInterval = 30
+
+        func windowStart(for index: Int) -> Date {
+            if index == 0 { return .distantPast }
+            return finalSteps[index - 1].ts.addingTimeInterval(finalSlack)
+        }
+
+        var dated: [Dated] = []
+        for artifact in deduped {
+            var matchedFinal: TodoStep?
+            for (index, final) in finalSteps.enumerated() {
+                let start = windowStart(for: index)
+                let end = final.ts.addingTimeInterval(finalSlack)
+                if artifact.updated_at >= start && artifact.updated_at <= end {
+                    matchedFinal = final
+                }
+            }
+            if let final = matchedFinal {
+                dated.append(Dated(
+                    item: .agentArtifact(artifact),
+                    ts: final.ts,
+                    tiebreaker: 2
+                ))
+            }
+        }
+        return dated
+    }
+
+    private struct Dated {
+        let item: ConversationItem
+        let ts: Date
+        /// Sub-order on tie: lower sorts earlier. Used so a closed
+        /// interaction (the question) sits immediately above the
+        /// synthesised reply bubble that shares its `responded_at`.
+        let tiebreaker: Int
+    }
 }
 
 private extension ConversationItem {
@@ -189,9 +245,18 @@ private extension ConversationItem {
         switch self {
         case .userRequest, .userAttachments, .userMessage:
             return 0
-        case .agentStep, .agentThinking, .agentConfirmation, .agentInteraction, .agentError, .agentReadyToRun:
+        case .agentStep, .agentThinking, .agentConfirmation, .agentInteraction,
+             .agentError, .agentReadyToRun, .agentArtifact:
             return 1
         }
+    }
+
+    /// Stable sub-order for multiple artifact cards on the same turn.
+    var artifactSortKey: String {
+        if case .agentArtifact(let artifact) = self {
+            return artifact.artifact_key
+        }
+        return ""
     }
 }
 
@@ -211,11 +276,34 @@ enum AgentReplyText {
         for marker in markers {
             cleaned = cleaned.replacingOccurrences(of: marker, with: "")
         }
+        cleaned = stripRawToolNoise(cleaned)
         while cleaned.contains("\n\n\n") {
             cleaned = cleaned.replacingOccurrences(of: "\n\n\n", with: "\n\n")
         }
         cleaned = collapseDoneLeadins(cleaned)
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func stripRawToolNoise(_ text: String) -> String {
+        let lower = text.lowercased()
+        let noisyNeedles = [
+            "nts to ", "<ctrl", "github_create_or_update_file_contents",
+            "composio_", "default_api.", "<!doctype html", "<html"
+        ]
+        guard noisyNeedles.contains(where: { lower.contains($0) }) else {
+            return text
+        }
+        let kept = text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { rawLine in
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                let l = line.lowercased()
+                if line.isEmpty { return true }
+                if noisyNeedles.contains(where: { l.contains($0) }) { return false }
+                if line.hasPrefix("{") || line.hasPrefix("}") || line.hasPrefix("<") { return false }
+                return true
+            }
+        return kept.joined(separator: "\n")
     }
 
     /// Fold repeated ``Done —`` openings into one paragraph (matches runner).

@@ -50,7 +50,7 @@ struct TodoDetailView: View {
     /// Split between the task header and chat thread. Usually opens with chat
     /// collapsed (`.topFull`); when the agent has an open follow-up we start at
     /// `chatExpandedDetent` so the question and composer are visible.
-    @State private var splitDetent: SplitDetent = .topFull
+    @State private var splitDetent: SplitDetent
     /// Set while the user confirms delete so we don't call `dismiss()`
     /// twice when the store removes the row before the pop finishes.
     @State private var isDeletingTask = false
@@ -68,8 +68,11 @@ struct TodoDetailView: View {
     /// requests.
     @State private var pendingArtifactInsertion: ArtifactInsertionRequest?
 
-    init(todoID: UUID) {
+    init(todoID: UUID, initialChatExpanded: Bool = false) {
         self.todoID = todoID
+        _splitDetent = State(
+            initialValue: initialChatExpanded ? Self.chatExpandedDetent : .topFull
+        )
     }
 
     /// Current task row from the store. Until the first refresh lands we
@@ -123,17 +126,17 @@ struct TodoDetailView: View {
         // since that one only exists on the concrete split type and
         // erasing to `some View` first would hide it.
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .onChange(of: openInteractionAwaitingReplyID) { _, interactionID in
-            // Agent posted a follow-up (quick-reply buttons or a freeform
-            // question) while we were collapsed — expand chat so it's in view.
-            guard interactionID != nil, splitDetent == .topFull else { return }
+        .onChange(of: shouldAutoExpandChat) { _, shouldExpand in
+            // Agent posted a follow-up while we were collapsed — expand chat
+            // so the question and composer are in view. Only auto-expand; never
+            // snap back to collapsed when the signal clears.
+            guard shouldExpand, splitDetent == .topFull else { return }
             withAnimation(.smooth(duration: 0.4)) {
                 splitDetent = Self.chatExpandedDetent
             }
         }
         .toolbar(.hidden, for: .navigationBar)
         .task(id: todoID) {
-            applyInitialSplitDetent()
             detentBeforeFocus = nil
             // Realtime for the task row, interactions, and artifacts flows
             // through the app-scoped user feed → `TodoStore`. The hub's
@@ -234,7 +237,6 @@ struct TodoDetailView: View {
         max(1, TodoDetailView.maxAttachments - attachments.count)
     }
 
-    @ViewBuilder
     private var chatContent: some View {
         TodoChatThread(
             items: conversationItems,
@@ -255,10 +257,16 @@ struct TodoDetailView: View {
             onSend: handleChatSend,
             onFocusChange: handleComposerFocusChange,
             onConfirmRun: confirmRun,
+            onRetry: failedTaskRetryAction,
             composerReplyHint: openInteractionReplyHint,
             availableReferences: artifactReferences,
             pendingArtifactInsertion: $pendingArtifactInsertion
         )
+    }
+
+    private var failedTaskRetryAction: (() -> Void)? {
+        guard current?.status == .failed else { return nil }
+        return retryRun
     }
 
     private func previewAttachment(_ attachment: TodoAttachment) {
@@ -290,13 +298,15 @@ struct TodoDetailView: View {
 
     private var conversationItems: [ConversationItem] {
         guard let current else { return [] }
+        let visibleError = current.status == .failed ? (current.error_message ?? error) : nil
         return ConversationBuilder.build(
             todo: current,
             steps: steps,
             interactions: interactions,
             attachments: attachments,
             messages: messages,
-            error: current.error_message ?? error,
+            artifacts: artifacts,
+            error: visibleError,
             agentActivity: store.agentActivity(for: todoID)
         )
     }
@@ -326,8 +336,12 @@ struct TodoDetailView: View {
         return nil
     }
 
-    private var openInteractionAwaitingReplyID: UUID? {
-        interactionAwaitingUserReply?.id
+    /// Whether the chat pane should be expanded on open or when a follow-up
+    /// arrives mid-session. Mirrors `TodoStore.prefersChatExpanded` but also
+    /// consults the full interaction history once `refreshInteractions` lands.
+    private var shouldAutoExpandChat: Bool {
+        interactionAwaitingUserReply != nil
+            || current?.status == .needs_input
     }
 
     /// Summary blurb from the agent's currently-open interaction, shown
@@ -372,12 +386,6 @@ struct TodoDetailView: View {
     }
 
     // MARK: - Actions
-
-    private func applyInitialSplitDetent() {
-        splitDetent = interactionAwaitingUserReply != nil
-            ? Self.chatExpandedDetent
-            : .topFull
-    }
 
     private func openChat() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -524,11 +532,41 @@ struct TodoDetailView: View {
         Task { await store.setStatus(todoID, .requested) }
     }
 
+    private func retryRun() {
+        guard let current else { return }
+        Task { await store.request(current) }
+    }
+
     private var authToolkitSlug: String? {
         guard current?.status == .needs_auth else { return nil }
         let slug = current?.connection_slug?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (slug?.isEmpty == false) ? slug : nil
+        if slug?.isEmpty == false {
+            return slug
+        }
+        return latestOAuthToolkitSlug
+    }
+
+    private var latestOAuthToolkitSlug: String? {
+        steps
+            .reversed()
+            .lazy
+            .compactMap { step -> String? in
+                guard step.kind == .oauth_needed else { return nil }
+                return toolkitSlug(fromToolName: step.tool_name)
+            }
+            .first
+    }
+
+    private func toolkitSlug(fromToolName raw: String?) -> String? {
+        guard let raw else { return nil }
+        let lower = raw.lowercased()
+        let known = [
+            "github", "gmail", "googlecalendar", "googledrive",
+            "googledocs", "googlesheets", "slack", "notion",
+            "linear", "reddit", "linkedin", "figma"
+        ]
+        return known.first { lower.contains($0) }
     }
 
     private func startOAuth(url: URL) {

@@ -46,12 +46,26 @@ class _FakeRunnerDB:
     def upsert_artifact(self, **kwargs):
         self.artifacts.append(kwargs)
 
+    def list_todo_artifacts_for_context(self, todo_id):
+        return [
+            {
+                "artifact_key": row.get("key"),
+                "kind": row.get("kind"),
+                "title": row.get("title"),
+                "payload": row.get("payload") or {},
+            }
+            for row in self.artifacts
+        ]
+
     def list_apns_tokens(self, user_id):
         return []
 
 
 class _FakePusher:
     async def send(self, tokens, payload):
+        return None
+
+    async def send_activity_sync(self, tokens, *, todo_id):
         return None
 
 
@@ -93,8 +107,11 @@ def _tool_started(name: str = "GMAIL_FETCH_EMAILS", preview: str | None = None) 
     return ("tool.started", data)
 
 
-def _tool_completed(name: str = "GMAIL_FETCH_EMAILS") -> tuple[str, dict]:
-    return ("tool.completed", {"event": "tool.completed", "tool": name})
+def _tool_completed(name: str = "GMAIL_FETCH_EMAILS", output: Any | None = None) -> tuple[str, dict]:
+    data = {"event": "tool.completed", "tool": name}
+    if output is not None:
+        data["output"] = output
+    return ("tool.completed", data)
 
 
 def _final_response(text: str) -> tuple[str, dict]:
@@ -184,6 +201,33 @@ class SilentDoneFixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(final_steps), 1)
         self.assertIn("sent the email", final_steps[0]["text"])
 
+    async def test_late_tool_events_after_done_do_not_reopen_activity(self) -> None:
+        db = _FakeRunnerDB()
+        terminal = await _run(
+            [
+                _tool_started(),
+                _tool_completed(),
+                _final_response("Done — created the page."),
+                _tool_started("MCP_SEARCH"),
+                _tool_completed("MCP_SEARCH"),
+            ],
+            db,
+        )
+
+        self.assertEqual(terminal, "done")
+        terminal_indices = [
+            i for i, row in enumerate(db.activity)
+            if row.get("state") in {"completed", "failed", "paused"}
+        ]
+        self.assertTrue(terminal_indices)
+        first_terminal = terminal_indices[0]
+        late_running = [
+            row for row in db.activity[first_terminal + 1:]
+            if row.get("state") == "running"
+        ]
+        self.assertEqual(late_running, [])
+        self.assertEqual(db.activity[first_terminal]["state"], "completed")
+
     async def test_tool_run_with_artifact_but_no_terminal_completes(self) -> None:
         # Deliverables landed mid-stream; a missing terminal event should
         # not erase a successful run.
@@ -204,12 +248,76 @@ class SilentDoneFixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(db.artifacts), 1)
         self.assertEqual(db.artifacts[0]["kind"], "link")
 
+    async def test_github_url_tool_output_promotes_link_artifact(self) -> None:
+        db = _FakeRunnerDB()
+        terminal = await _run(
+            [
+                _tool_started("COMPOSIO_GITHUB_CREATE_REPOSITORY"),
+                _tool_completed(
+                    "COMPOSIO_GITHUB_CREATE_REPOSITORY",
+                    '{"html_url":"https://github.com/gabrielmitchell/hello-gabe-website"}',
+                ),
+                _final_response("Done — created the repository."),
+            ],
+            db,
+            todo={
+                "id": "todo-1",
+                "user_id": "user-1",
+                "title": "Create a GitHub Pages website",
+                "detail": "",
+            },
+        )
+
+        self.assertEqual(terminal, "done")
+        promoted = [a for a in db.artifacts if a["key"] == "github-repo"]
+        self.assertEqual(len(promoted), 1)
+        self.assertEqual(
+            promoted[0]["payload"]["url"],
+            "https://github.com/gabrielmitchell/hello-gabe-website",
+        )
+
+
+class BrowserFailureMessageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_failure_stores_friendly_browser_message(self) -> None:
+        raw = "CDP WebSocket connect failed: HTTP error: 410 Gone"
+        db = _FakeRunnerDB()
+        terminal = await _run([("error", {"event": "error", "message": raw})], db)
+
+        self.assertEqual(terminal, "failed")
+        failed_updates = [u for u in db.todo_updates if u.get("status") == "failed"]
+        self.assertEqual(len(failed_updates), 1)
+        message = failed_updates[0]["error_message"]
+        self.assertIn("browser session disconnected", message)
+        self.assertIn("Try again", message)
+        self.assertNotIn("CDP", message)
+        self.assertEqual(db.steps[-1]["text"], raw)
+        terminal_activity = db.activity[-1]
+        self.assertEqual(terminal_activity["title"], "Browser disconnected")
+        self.assertEqual(terminal_activity["detail"], raw)
+
+
+class TimeoutMessageTests(unittest.TestCase):
+    def test_timeout_message_is_actionable(self) -> None:
+        from runner.runner import _timeout_user_message
+
+        message = _timeout_user_message({"connection_slug": ""})
+        self.assertIn("went too long", message)
+        self.assertIn("Try again", message)
+        self.assertNotEqual(message, "Timed out.")
+
+    def test_timeout_message_mentions_connection_when_known(self) -> None:
+        from runner.runner import _timeout_user_message
+
+        message = _timeout_user_message({"connection_slug": "github"})
+        self.assertIn("GitHub", message)
+        self.assertIn("connected in Settings", message)
+
 
 def _email_artifact_reply(to: str, body: str) -> str:
     return (
         "Sent the email.\n"
         "[[DOIT_ARTIFACT]]\n"
-        '{"key":"email-1","type":"email","title":"Email sent",'
+        '{"key":"email-1","type":"email","title":"Email to Sam",'
         f'"payload":{{"to":"{to}","subject":"Intro","body":"{body}"}}}}\n'
         "[[/DOIT_ARTIFACT]]"
     )

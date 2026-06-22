@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -26,6 +26,8 @@ from .push import Pusher, PushPayload
 from .schedule import advance_next_run, compute_next_run
 
 log = logging.getLogger(__name__)
+
+UTC = timezone.utc
 
 _CRON_INSTRUCTIONS = (
     "You are running a scheduled automation for the user. This is a fresh "

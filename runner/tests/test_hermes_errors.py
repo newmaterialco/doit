@@ -40,5 +40,27 @@ class HermesHttpFailureMessageTests(unittest.TestCase):
         self.assertIn("could not connect", detail)
 
 
+class BrowserSessionFailureMessageTests(unittest.TestCase):
+    def test_cdp_websocket_failure_uses_retryable_browser_message(self) -> None:
+        from runner.runner import _browser_session_failure_message
+
+        raw = "CDP WebSocket connect failed: HTTP error: 410 Gone"
+        result = _browser_session_failure_message(raw)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        message, detail = result
+        self.assertIn("browser session disconnected", message)
+        self.assertIn("Try again", message)
+        self.assertEqual(detail, raw)
+        self.assertNotIn("CDP", message)
+        self.assertNotIn("410 Gone", message)
+
+    def test_non_browser_failure_is_not_classified(self) -> None:
+        from runner.runner import _browser_session_failure_message
+
+        self.assertIsNone(_browser_session_failure_message("model provider overloaded"))
+
+
 if __name__ == "__main__":
     unittest.main()
