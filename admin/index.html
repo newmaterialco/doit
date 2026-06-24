@@ -73,6 +73,25 @@
       background: var(--bg);
       font-weight: 600;
     }
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 0.75rem 1.25rem 0;
+      flex-shrink: 0;
+    }
+    .sidebar-sign-out {
+      display: block;
+      width: 100%;
+      padding: 0.45rem 0.6rem;
+      font-size: 0.85rem;
+      text-align: left;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .sidebar-sign-out:hover {
+      color: var(--text);
+      background: var(--bg);
+    }
     .sidebar-nav-badge {
       display: inline-block;
       min-width: 1.25rem;
@@ -421,6 +440,9 @@
       <a href="#feedback" data-page="feedback">Feedback</a>
       <a href="#invites" data-page="invites">Invites</a>
       <a href="#tasks" data-page="tasks">Tasks</a>
+      <div class="sidebar-footer">
+        <button type="button" id="sign-out-btn" class="sidebar-sign-out">Sign out</button>
+      </div>
     </nav>
     <main class="content">
         <div id="page-overview" class="page page-scroll">
@@ -839,7 +861,11 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || data.detail || `HTTP ${res.status}`);
+        const errMsg = data.error || data.detail || `HTTP ${res.status}`;
+        if (res.status === 401 || errMsg === "unauthorized") {
+          showLogin("Invalid or outdated secret. Sign in again.");
+        }
+        throw new Error(errMsg);
       }
       return data;
     }
@@ -1483,6 +1509,20 @@
       loadCurrentPage(force);
     }
 
+    function showLogin(message) {
+      sessionStorage.removeItem(SECRET_KEY);
+      $("app").classList.add("hidden");
+      $("login-panel").classList.remove("hidden");
+      $("secret-input").value = "";
+      if (message) {
+        $("login-error").textContent = message;
+        $("login-error").classList.remove("hidden");
+      } else {
+        $("login-error").classList.add("hidden");
+      }
+      $("secret-input").focus();
+    }
+
     function showApp() {
       $("login-panel").classList.add("hidden");
       $("app").classList.remove("hidden");
@@ -1510,6 +1550,10 @@
       sessionStorage.setItem(URL_KEY, url);
       $("login-error").classList.add("hidden");
       showApp();
+    });
+
+    $("sign-out-btn").addEventListener("click", () => {
+      showLogin();
     });
 
     document.querySelectorAll(".sidebar a[data-page]").forEach(link => {

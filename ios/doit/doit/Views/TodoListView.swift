@@ -14,6 +14,20 @@ enum TodoListDestination: Hashable {
     case cronJob(UUID)
 }
 
+private enum TopicSurfaceSelection: Identifiable, Hashable {
+    case task(SuggestedCategory)
+    case scheduled(ScheduledPromptCategory)
+
+    var id: String {
+        switch self {
+        case .task(let category):
+            return "task-\(category.id)"
+        case .scheduled(let category):
+            return "scheduled-\(category.id)"
+        }
+    }
+}
+
 struct TodoListView: View {
     let userID: UUID
 
@@ -26,6 +40,8 @@ struct TodoListView: View {
     @State private var addTodoComposer: AddTodoSheetPresentation?
     @State private var isAddTodoComposerExpanded = false
     @State private var isAddTodoComposerContentVisible = false
+    @State private var rendersAddTodoOverlay = true
+    @State private var isAddTodoOverlayVisible = true
     @State private var showSettings = false
     @State private var settingsSheetIsVisible = false
     @State private var settingsInitialRoute: SettingsRoute?
@@ -34,13 +50,13 @@ struct TodoListView: View {
     @State private var selectedActivityGroup: ActivityGroupDescriptor?
     @State private var showActivityGroupDetail = false
     @State private var activityGroupDetailIsVisible = false
+    @State private var selectedTopicSurface: TopicSurfaceSelection?
+    @State private var taskTopicSurfaceIsVisible = false
+    @State private var taskTopicHomeIsScaled = false
     @State private var selectedSectionID: Int? = TodoListSection.todo.index
     @State private var scrubbedSectionID: Int?
     @State private var navigationPath = NavigationPath()
     @State private var deletingTodoIDs: Set<UUID> = []
-    @State private var selectedScheduledPromptCategoryID: String?
-    @State private var scheduledPromptPickerIsVisible = false
-    @State private var scheduledPromptPickerDragOffset: CGFloat = 0
     @State private var showPassbookMemoryDetail = false
     @State private var selectedPassbookMemory: AgentMemory?
     @State private var passbookMemoryIsEditing = false
@@ -88,6 +104,7 @@ struct TodoListView: View {
                             .scrollTargetBehavior(.paging)
                             .scrollIndicators(.hidden)
                             .scrollPosition(id: $selectedSectionID)
+                            .scrollDisabled(taskTopicSurfaceIsVisible)
                             .ignoresSafeArea(.container, edges: [.top, .bottom])
                         }
                         .ignoresSafeArea(.container, edges: [.top, .bottom])
@@ -99,6 +116,8 @@ struct TodoListView: View {
                         }
                     }
                     .offset(y: presentationHomeOffset)
+                    .animation(settingsPresentationAnimation, value: settingsSheetIsVisible)
+                    .animation(settingsPresentationAnimation, value: activityGroupDetailIsVisible)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationBarTitleDisplayMode(.inline)
@@ -114,12 +133,18 @@ struct TodoListView: View {
                     }
                 }
                 .toolbar(.hidden, for: .navigationBar)
+                .onAppear {
+                    updateAddTodoOverlayVisibility(shouldShowAddTodoOverlay, animated: false)
+                }
                 .onChange(of: selectedSectionID) { _, newValue in
                     guard newValue != nil else { return }
                     playSectionHaptic()
                     if newValue == TodoListSection.done.index {
                         Task { await prepareExploreIfNeeded() }
                     }
+                }
+                .onChange(of: shouldShowAddTodoOverlay) { _, visible in
+                    updateAddTodoOverlayVisibility(visible)
                 }
                 .sheet(item: $exploreApiKeyToolkit) { toolkit in
                     ExploreApiKeySheet(
@@ -183,6 +208,19 @@ struct TodoListView: View {
                 }
             }
             .ignoresSafeArea(.keyboard, edges: .bottom)
+            .scaleEffect(taskTopicHomeIsScaled ? 0.97 : 1, anchor: .top)
+            .opacity(taskTopicSurfaceIsVisible ? 0 : 1)
+            .allowsHitTesting(!taskTopicSurfaceIsVisible)
+            .animation(taskTopicTransitionAnimation, value: taskTopicSurfaceIsVisible)
+
+            if let selectedTopicSurface {
+                topicSurface(for: selectedTopicSurface)
+                    .scaleEffect(taskTopicSurfaceIsVisible ? 1 : 1.02)
+                    .opacity(taskTopicSurfaceIsVisible ? 1 : 0)
+                    .allowsHitTesting(taskTopicSurfaceIsVisible)
+                    .animation(taskTopicTransitionAnimation, value: taskTopicSurfaceIsVisible)
+                    .zIndex(6)
+            }
 
             if showPassbookMemoryDetail, let selectedPassbookMemory {
                 memoryDetailBackdrop
@@ -225,25 +263,11 @@ struct TodoListView: View {
                     .zIndex(9)
             }
 
-            if let selectedScheduledPromptCategory {
-                GeometryReader { proxy in
-                    scheduledPromptPickerBackdrop
-                        .opacity(scheduledPromptPickerIsVisible ? 1 : 0)
-                        .animation(settingsPresentationAnimation, value: scheduledPromptPickerIsVisible)
-
-                    scheduledPromptPickerPanel(
-                        for: selectedScheduledPromptCategory,
-                        hiddenOffset: proxy.size.height
-                    )
-                }
-                .ignoresSafeArea(.container, edges: .bottom)
-                .zIndex(10)
-            }
-
-            if shouldShowAddTodoOverlay {
+            if rendersAddTodoOverlay {
                 AddTodoMorphOverlay(
                     isExpanded: isAddTodoComposerExpanded,
                     isContentVisible: isAddTodoComposerContentVisible,
+                    isVisible: isAddTodoOverlayVisible,
                     presentation: addTodoComposer,
                     userID: userID,
                     onExpand: { openAddComposer() },
@@ -253,6 +277,13 @@ struct TodoListView: View {
                         selectedSectionID = TodoListSection.todo.index
                     }
                 )
+                .scaleEffect(taskTopicHomeIsScaled ? 0.97 : 1, anchor: .bottom)
+                .opacity(taskTopicSurfaceIsVisible ? 0 : 1)
+                .allowsHitTesting(!taskTopicSurfaceIsVisible)
+                .animation(taskTopicTransitionAnimation, value: taskTopicSurfaceIsVisible)
+                .offset(y: presentationHomeOffset)
+                .animation(settingsPresentationAnimation, value: settingsSheetIsVisible)
+                .animation(settingsPresentationAnimation, value: activityGroupDetailIsVisible)
                 .zIndex(isAddTodoComposerExpanded ? 11 : 5)
             }
         }
@@ -320,6 +351,38 @@ struct TodoListView: View {
         return section.allowsAddTodoComposer
     }
 
+    private var fabPresenceAnimation: Animation {
+        shouldShowAddTodoOverlay
+            ? AddTodoComposerMotion.fabAppear
+            : AddTodoComposerMotion.fabDisappear
+    }
+
+    private func updateAddTodoOverlayVisibility(_ visible: Bool, animated: Bool = true) {
+        if visible {
+            rendersAddTodoOverlay = true
+            let show = { isAddTodoOverlayVisible = true }
+            if animated {
+                DispatchQueue.main.async {
+                    withAnimation(AddTodoComposerMotion.fabAppear, show)
+                }
+            } else {
+                show()
+            }
+        } else {
+            let hide = { isAddTodoOverlayVisible = false }
+            if animated {
+                withAnimation(AddTodoComposerMotion.fabDisappear, hide)
+            } else {
+                hide()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + AddTodoComposerMotion.fabDisappearDuration) {
+                if !shouldShowAddTodoOverlay {
+                    rendersAddTodoOverlay = false
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func sectionPage(_ section: TodoListSection) -> some View {
         if section == .todo {
@@ -353,13 +416,14 @@ struct TodoListView: View {
 
                             VStack(spacing: 10) {
                                 TaskSectionHeader(
-                                    title: "Suggested Topics",
+                                    title: "Topics",
                                     titleSuffix: "Coming soon",
                                     verticalPadding: 0
                                 )
 
                                 SuggestedCategoryStrip(
-                                    categories: SuggestedCategoryCatalog.taskCategories
+                                    categories: SuggestedCategoryCatalog.taskCategories,
+                                    onSelect: handleTaskCategorySelection
                                 )
                             }
                             .padding(.top, 6)
@@ -685,6 +749,7 @@ struct TodoListView: View {
             }
             dockControls
         }
+        .animation(fabPresenceAnimation, value: shouldShowAddTodoOverlay)
     }
 
     private enum DockStyle {
@@ -801,102 +866,150 @@ struct TodoListView: View {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.9)
     }
 
-    private var selectedScheduledPromptCategory: ScheduledPromptCategory? {
-        guard let selectedScheduledPromptCategoryID else { return nil }
-        return SuggestedCategoryCatalog.scheduledPromptCategories.first { $0.id == selectedScheduledPromptCategoryID }
+    private var taskTopicTransitionAnimation: Animation {
+        .easeInOut(duration: 0.18)
     }
 
-    private var scheduledPromptPickerHorizontalInset: CGFloat {
-        14
+    private func handleTaskCategorySelection(_ category: SuggestedCategory) {
+        presentTopicSurface(.task(category))
     }
 
-    private var scheduledPromptPickerBottomInset: CGFloat {
-        28
-    }
-
-    private var scheduledPromptPickerBackdrop: some View {
-        Color.black.opacity(0.16)
-            .ignoresSafeArea(.all)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                dismissScheduledPromptCategory()
+    private func presentTopicSurface(_ selection: TopicSurfaceSelection) {
+        playFirmHaptic()
+        selectedTopicSurface = selection
+        DispatchQueue.main.async {
+            withAnimation(taskTopicTransitionAnimation) {
+                taskTopicHomeIsScaled = true
+                taskTopicSurfaceIsVisible = true
             }
+        }
     }
 
-    private func scheduledPromptPickerPanel(for category: ScheduledPromptCategory, hiddenOffset: CGFloat) -> some View {
-        VStack {
-            Spacer()
-
-            ScheduledPromptPickerCard(
-                category: category,
-                onClose: dismissScheduledPromptCategory,
-                onHandleDragChanged: handleScheduledPromptPickerDragChanged,
-                onHandleDragEnded: handleScheduledPromptPickerDragEnded,
-                onSelect: handleScheduledPromptSelection
-            )
-            .padding(.horizontal, scheduledPromptPickerHorizontalInset)
-            .padding(.bottom, scheduledPromptPickerBottomInset)
-            .offset(y: (scheduledPromptPickerIsVisible ? 0 : hiddenOffset) + scheduledPromptPickerDragOffset)
-            .opacity(scheduledPromptPickerIsVisible ? 1 : 0)
-            .animation(settingsPresentationAnimation, value: scheduledPromptPickerIsVisible)
+    private func dismissTopicSurface() {
+        playFirmHaptic()
+        taskTopicHomeIsScaled = false
+        withAnimation(taskTopicTransitionAnimation) {
+            taskTopicSurfaceIsVisible = false
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            if !taskTopicSurfaceIsVisible {
+                selectedTopicSurface = nil
+            }
+        }
+    }
+
+    private func topicSurface(for selection: TopicSurfaceSelection) -> some View {
+        GeometryReader { _ in
+            ZStack {
+                topicSurfaceBackgroundColor
+                    .ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    topicSurfaceHeader(for: selection)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 16)
+                        .padding(.bottom, 12)
+
+                    ZStack {
+                        if case .task = selection {
+                            Text("Coming soon")
+                                .font(.system(size: 15, weight: .medium, design: .rounded))
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 24) {
+                                topicSurfaceContent(for: selection)
+
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.top, 8)
+                            .padding(.bottom, DockStyle.scrollBottomInset)
+                        }
+                        .scrollIndicators(.hidden)
+                    }
+                }
+            }
+        }
+    }
+
+    private var topicSurfaceBackgroundColor: Color {
+        Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: 0.07, green: 0.07, blue: 0.08, alpha: 1)
+                : UIColor(red: 0.95, green: 0.95, blue: 0.96, alpha: 1)
+        })
+    }
+
+    private func topicSurfaceHeader(for selection: TopicSurfaceSelection) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            Text(topicSurfaceTitle(for: selection))
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: dismissTopicSurface) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.primary.opacity(0.9))
+                    .frame(width: 36, height: 36)
+                    .background(Color.primary.opacity(0.08), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close \(topicSurfaceTitle(for: selection))")
+        }
+    }
+
+    @ViewBuilder
+    private func topicSurfaceContent(for selection: TopicSurfaceSelection) -> some View {
+        switch selection {
+        case .task(let category):
+            TaskTopicIntroCard(category: category)
+        case .scheduled(let category):
+            LazyVStack(spacing: 10) {
+                ForEach(category.prompts) { prompt in
+                    ScheduledPromptOptionRow(
+                        prompt: prompt,
+                        accentColor: category.promptAccentColor,
+                        onSelect: { handleScheduledPromptSelection(prompt) }
+                    )
+                }
+            }
+        }
+    }
+
+    private func topicSurfaceTitle(for selection: TopicSurfaceSelection) -> String {
+        switch selection {
+        case .task(let category):
+            return category.title
+        case .scheduled(let category):
+            return category.name
+        }
     }
 
     private func handleScheduledCategorySelection(_ category: SuggestedCategory) {
-        playLightHaptic()
-        scheduledPromptPickerDragOffset = 0
-        if selectedScheduledPromptCategoryID == nil {
-            selectedScheduledPromptCategoryID = category.id
-            DispatchQueue.main.async {
-                withAnimation(settingsPresentationAnimation) {
-                    scheduledPromptPickerIsVisible = true
-                }
-            }
-        } else {
-            selectedScheduledPromptCategoryID = category.id
-            scheduledPromptPickerIsVisible = true
+        guard let scheduledCategory = SuggestedCategoryCatalog.scheduledPromptCategories.first(where: { $0.id == category.id }) else {
+            return
         }
-    }
-
-    private func dismissScheduledPromptCategory() {
-        playLightHaptic()
-        withAnimation(settingsPresentationAnimation) {
-            scheduledPromptPickerDragOffset = 0
-            scheduledPromptPickerIsVisible = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
-            if !scheduledPromptPickerIsVisible {
-                selectedScheduledPromptCategoryID = nil
-            }
-        }
+        presentTopicSurface(.scheduled(scheduledCategory))
     }
 
     private func handleScheduledPromptSelection(_ prompt: ScheduledPromptSuggestion) {
         UISelectionFeedbackGenerator().selectionChanged()
-        withAnimation(settingsPresentationAnimation) {
-            scheduledPromptPickerDragOffset = 0
-            scheduledPromptPickerIsVisible = false
+        taskTopicHomeIsScaled = false
+        withAnimation(taskTopicTransitionAnimation) {
+            taskTopicSurfaceIsVisible = false
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-            if !scheduledPromptPickerIsVisible {
-                selectedScheduledPromptCategoryID = nil
+            if !taskTopicSurfaceIsVisible {
+                selectedTopicSurface = nil
                 openAddComposer(title: prompt.composerPrompt, action: .note)
-            }
-        }
-    }
-
-    private func handleScheduledPromptPickerDragChanged(_ value: DragGesture.Value) {
-        scheduledPromptPickerDragOffset = max(0, value.translation.height)
-    }
-
-    private func handleScheduledPromptPickerDragEnded(_ value: DragGesture.Value) {
-        let shouldDismiss = value.translation.height > 70 || value.predictedEndTranslation.height > 140
-        if shouldDismiss {
-            dismissScheduledPromptCategory()
-        } else {
-            withAnimation(settingsPresentationAnimation) {
-                scheduledPromptPickerDragOffset = 0
             }
         }
     }
@@ -906,7 +1019,7 @@ struct TodoListView: View {
     }
 
     private var settingsPresentationAnimation: Animation {
-        .spring(response: 0.36, dampingFraction: 0.78)
+        .easeInOut(duration: 0.28)
     }
 
     private var settingsSheetOffset: CGFloat {
@@ -1596,87 +1709,6 @@ private struct DockButtonStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? Self.pressedScale : 1)
             .animation(.spring(response: 0.2, dampingFraction: 0.82), value: configuration.isPressed)
-    }
-}
-
-private struct ScheduledPromptPickerCard: View {
-    let category: ScheduledPromptCategory
-    let onClose: () -> Void
-    let onHandleDragChanged: (DragGesture.Value) -> Void
-    let onHandleDragEnded: (DragGesture.Value) -> Void
-    let onSelect: (ScheduledPromptSuggestion) -> Void
-
-    private let cornerRadius: CGFloat = 26
-
-    var body: some View {
-        VStack(spacing: 0) {
-            header
-
-            VStack(spacing: 5) {
-                ForEach(category.prompts) { prompt in
-                    ScheduledPromptOptionRow(
-                        prompt: prompt,
-                        accentColor: category.promptAccentColor,
-                        onSelect: { onSelect(prompt) }
-                    )
-                }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 8)
-        }
-        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .shadow(color: Color.black.opacity(0.16), radius: 28, y: 18)
-        .accessibilityElement(children: .contain)
-    }
-
-    private var header: some View {
-        ZStack(alignment: .topTrailing) {
-            LinearGradient(
-                colors: [
-                    category.promptAccentColor,
-                    category.promptAccentColor.opacity(0.76)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            HStack(alignment: .bottom, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(category.name)
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.82)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            .padding(.leading, 28)
-            .padding(.trailing, 28)
-            .padding(.top, 28)
-            .padding(.bottom, 26)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 8)
-                    .onChanged(onHandleDragChanged)
-                    .onEnded(onHandleDragEnded)
-            )
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .frame(width: 36, height: 36)
-                    .background(.white.opacity(0.16), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 22)
-            .padding(.trailing, 22)
-            .accessibilityLabel("Dismiss \(category.name) prompts")
-        }
-        .frame(height: 132)
     }
 }
 
@@ -3318,6 +3350,10 @@ private enum AddTodoComposerMotion {
     static let dismissCleanupDelay: TimeInterval = 0.30
     /// Show the FAB "+" before collapse cleanup finishes; shell is ~circle-sized by then.
     static let plusIconRevealDelay: TimeInterval = 0.17
+    static let fabAppear = Animation.spring(response: 0.36, dampingFraction: 0.62)
+    static let fabDisappearDuration: TimeInterval = 0.12
+    static let fabDisappear = Animation.easeOut(duration: fabDisappearDuration)
+    static let fabHiddenScale: CGFloat = 0.82
 }
 
 private struct AddTodoSheetPresentation: Identifiable {
@@ -3337,6 +3373,7 @@ private struct MorphComposerHeightKey: PreferenceKey {
 private struct AddTodoMorphOverlay: View {
     let isExpanded: Bool
     let isContentVisible: Bool
+    let isVisible: Bool
     let presentation: AddTodoSheetPresentation?
     let userID: UUID
     let onExpand: () -> Void
@@ -3487,6 +3524,9 @@ private struct AddTodoMorphOverlay: View {
                                     .allowsHitTesting(false)
                             }
                         }
+                        .scaleEffect(isVisible ? 1 : AddTodoComposerMotion.fabHiddenScale, anchor: .center)
+                        .opacity(isVisible ? 1 : 0)
+                        .allowsHitTesting(isVisible)
                         .padding(.trailing, trailingInset)
                     }
                     .padding(.leading, isExpanded ? leadingInset : 0)
@@ -3643,8 +3683,8 @@ private struct CronJobCard: View {
                 Text(job.scheduleLabel)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(TodoCardStyle.muted)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button(action: onOpen) {

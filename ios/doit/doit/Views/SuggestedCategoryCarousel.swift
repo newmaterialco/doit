@@ -186,6 +186,29 @@ struct ScheduledPromptCategory: Identifiable, Hashable {
     let prompts: [ScheduledPromptSuggestion]
 }
 
+extension SuggestedCategory {
+    var topicIntroDescription: String {
+        switch id {
+        case "travel-bookings":
+            return "Tasks here will send your agent to search flights, stays, and transport across the web — using saved preferences and connected accounts — and finish bookings only after you approve."
+        case "coding-development":
+            return "Tasks here will have your agent work in connected GitHub repos: triage issues, update PRs, investigate CI failures, and carry context forward from earlier dev work."
+        case "admin":
+            return "Tasks here will run life admin through connected email, calendar, and docs — plus browser workflows for portals and forms — pausing for your approval before anything irreversible."
+        case "research":
+            return "Tasks here will have your agent search the web, compare sources, and return clear summaries and next steps — remembering findings so follow-up tasks start with context."
+        case "lead-generation":
+            return "Tasks here will have your agent scout prospects, draft outreach in your voice, and stage LinkedIn or email follow-ups — nothing sends until you approve it."
+        case "content-creation":
+            return "Tasks here will have your agent draft and refine posts or copy for your channels, matched to your voice, with an approval step before anything goes live."
+        case "home-automation":
+            return "Tasks here will have your agent compare devices and routines, check smart-home dashboards in the browser, and reuse saved setup notes across follow-up tasks."
+        default:
+            return "Suggested tasks and workflows for this topic will appear here soon — each one your agent can pick up and run in the background."
+        }
+    }
+}
+
 enum SuggestedCategoryCatalog {
     static let taskCategories: [SuggestedCategory] = [
         SuggestedCategory(id: "travel-bookings", title: "Travel & Bookings", imageName: "TravelBookings"),
@@ -606,10 +629,67 @@ struct SuggestedCategoryStrip: View {
             } label: {
                 SuggestedCategoryTile(category: category)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SuggestedCategoryPillButtonStyle())
         } else {
             SuggestedCategoryTile(category: category)
         }
+    }
+}
+
+struct TaskTopicIntroCard: View {
+    let category: SuggestedCategory
+
+    private let imageSize: CGFloat = 58
+    private var imageCornerRadius: CGFloat { imageSize * 0.28 }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            categoryVisual
+                .frame(width: imageSize, height: imageSize)
+                .clipShape(RoundedRectangle(cornerRadius: imageCornerRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: imageCornerRadius, style: .continuous)
+                        .stroke(AppSemanticColors.separator, lineWidth: 1)
+                }
+
+            Text(category.topicIntroDescription)
+                .font(.system(size: 16, weight: .regular, design: .rounded))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(category.title). \(category.topicIntroDescription)")
+    }
+
+    @ViewBuilder
+    private var categoryVisual: some View {
+        if let imageName = category.imageName {
+            Image(imageName)
+                .resizable()
+                .scaledToFill()
+        } else if let symbolName = category.symbolName {
+            ZStack {
+                RoundedRectangle(cornerRadius: imageCornerRadius, style: .continuous)
+                    .fill(AppSemanticColors.neutralFill)
+                Image(systemName: symbolName)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct SuggestedCategoryPillButtonStyle: ButtonStyle {
+    private static let pressedScale: CGFloat = 0.94
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? Self.pressedScale : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.82), value: configuration.isPressed)
     }
 }
 
@@ -655,7 +735,7 @@ private struct SuggestedCategoryTile: View {
                 Circle()
                     .fill(AppSemanticColors.neutralFill)
                 Image(systemName: symbolName)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
         }
