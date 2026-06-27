@@ -134,8 +134,8 @@ Supabase, APNs, and secret-handling details.
 
 Report vulnerabilities privately; see [`SECURITY.md`](SECURITY.md).
 
-Before contributing, read [`CONTRIBUTING.md`](CONTRIBUTING.md). A license has
-not been selected yet; add one before publishing broadly.
+Before contributing, read [`CONTRIBUTING.md`](CONTRIBUTING.md). This project is
+licensed under the MIT License; see [`LICENSE`](LICENSE).
 
 ## Realtime contract (READ THIS BEFORE TOUCHING THE iOS LIST OR DETAIL VIEW)
 
