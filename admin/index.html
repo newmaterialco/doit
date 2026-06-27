@@ -510,7 +510,7 @@
                     <th>When</th>
                     <th>Severity</th>
                     <th>Kind</th>
-                    <th>User</th>
+                    <th>User label</th>
                     <th>Summary</th>
                     <th>Detail</th>
                     <th>Reference</th>
@@ -673,12 +673,7 @@
             <h2>Tasks</h2>
             <form id="tasks-toolbar" class="toolbar tasks-toolbar">
               <label style="flex:1">Search
-                <input id="tasks-search" type="search" placeholder="prompt or summary" autocomplete="off" />
-              </label>
-              <label>User
-                <select id="tasks-user">
-                  <option value="">All users</option>
-                </select>
+                <input id="tasks-search" type="search" placeholder="task id, anonymized user, or integration" autocomplete="off" />
               </label>
               <label>Status
                 <select id="tasks-status">
@@ -707,11 +702,12 @@
                 <thead>
                   <tr>
                     <th>Created</th>
-                    <th>User</th>
-                    <th>Request</th>
+                    <th>User label</th>
+                    <th>Task</th>
                     <th>Status</th>
                     <th>Integration</th>
                     <th>Tokens</th>
+                    <th>Error</th>
                   </tr>
                 </thead>
                 <tbody></tbody>
@@ -737,7 +733,6 @@
 
     let currentPage = "overview";
     const pageLoaded = { overview: false, issues: false, users: false, feedback: false, invites: false, tasks: false };
-    let tasksUserOptionsLoaded = false;
     const usageCharts = {};
 
     let usersOffset = 0;
@@ -1085,19 +1080,6 @@
       });
     }
 
-    function populateTasksUserFilter(users) {
-      const select = $("tasks-user");
-      const current = select.value;
-      select.innerHTML = `<option value="">All users</option>` +
-        (users || []).map(u => {
-          const label = u.email || u.user_id;
-          return `<option value="${escapeAttr(u.user_id)}">${escapeHtml(label)}</option>`;
-        }).join("");
-      if (current && [...select.options].some(o => o.value === current)) {
-        select.value = current;
-      }
-    }
-
     async function setPremiumModelAccess(userId, email, enable) {
       if (!enable && !confirm(`Revoke premium model access for ${email}?`)) return;
       $("users-error").classList.add("hidden");
@@ -1116,12 +1098,10 @@
 
     function tasksFilterPayload() {
       const search = $("tasks-search").value.trim();
-      const userId = $("tasks-user").value.trim();
       const status = $("tasks-status").value.trim();
       const connection = $("tasks-connection").value.trim();
       const payload = { limit: PAGE_SIZE, offset: tasksOffset };
       if (search) payload.search = search;
-      if (userId) payload.user_id = userId;
       if (status) payload.status = status;
       if (connection) payload.connection_slug = connection;
       return payload;
@@ -1130,7 +1110,7 @@
     function renderTasksUnavailable() {
       $("tasks-loading").classList.add("hidden");
       const tbody = $("tasks-table").querySelector("tbody");
-      tbody.innerHTML = `<tr><td colspan="6" class="muted">Deploy the updated admin function to load tasks.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">Deploy the updated admin function to load tasks.</td></tr>`;
       updatePaginationUI({
         offset: 0, total: 0, rowCount: 0,
         prevId: "tasks-prev-btn", nextId: "tasks-next-btn", labelId: "tasks-page-label",
@@ -1143,22 +1123,17 @@
       tasksTotalCount = tasks.length > 0 ? Number(tasks[0].total_count ?? 0) : 0;
 
       tbody.innerHTML = (tasks || []).map(task => {
-        const request = task.original_title || task.title || "";
-        const preview = request.length > 120 ? `${request.slice(0, 120)}…` : request;
-        const tooltipParts = [request];
-        if (task.preparation_summary) {
-          tooltipParts.push("", `Summary: ${task.preparation_summary}`);
-        }
-        const tooltip = tooltipParts.join("\n");
+        const taskRef = task.id ? `todo:${shortUserID(task.id)}` : "—";
         return `<tr>
           <td>${fmtDate(task.created_at)}</td>
-          <td>${escapeHtml(task.user_email || shortUserID(task.user_id))}</td>
-          <td title="${escapeAttr(tooltip)}">${escapeHtml(preview) || "—"}</td>
+          <td>${escapeHtml(task.user_label || "User")}</td>
+          <td><code>${escapeHtml(taskRef)}</code></td>
           <td>${task.status ? badge(task.status) : "—"}</td>
           <td>${task.connection_slug ? `<code>${escapeHtml(task.connection_slug)}</code>` : "—"}</td>
           <td class="token-num">${fmtTokens(task.total_tokens)}</td>
+          <td>${task.error_category ? badge(task.error_category) : "—"}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="6" class="muted">No tasks match these filters</td></tr>`;
+      }).join("") || `<tr><td colspan="7" class="muted">No tasks match these filters</td></tr>`;
 
       updatePaginationUI({
         offset: tasksOffset,
@@ -1216,7 +1191,7 @@
           <td>${fmtDate(issue.occurred_at)}</td>
           <td>${issue.severity ? badge(issue.severity) : "—"}</td>
           <td>${issueKindLabel(issue.kind)}</td>
-          <td>${issue.user_email ? copyableCode(issue.user_email) : shortUserID(issue.user_id)}</td>
+          <td>${escapeHtml(issue.user_label || "User")}</td>
           <td>${escapeHtml(issue.summary || "—")}</td>
           <td title="${escapeAttr(detail)}">${escapeHtml(preview)}</td>
           <td><code>${escapeHtml(ref)}</code></td>
@@ -1459,27 +1434,12 @@
       }
     }
 
-    async function loadTasksUserOptions() {
-      if (tasksUserOptionsLoaded) return;
-      try {
-        const resp = await api("user_options");
-        populateTasksUserFilter(resp.users || []);
-        tasksUserOptionsLoaded = true;
-      } catch (e) {
-        if (!isUnknownAction(e)) {
-          $("tasks-error").textContent = String(e.message || e);
-          $("tasks-error").classList.remove("hidden");
-        }
-      }
-    }
-
     async function loadTasks() {
       $("tasks-error").classList.add("hidden");
       $("tasks-loading").classList.remove("hidden");
       $("tasks-prev-btn").disabled = true;
       $("tasks-next-btn").disabled = true;
       try {
-        await loadTasksUserOptions();
         const resp = await api("tasks", tasksFilterPayload());
         renderTasks(resp.tasks || []);
       } catch (err) {
@@ -1498,7 +1458,6 @@
 
     function resetTasksFilters() {
       $("tasks-search").value = "";
-      $("tasks-user").value = "";
       $("tasks-status").value = "";
       $("tasks-connection").value = "";
       tasksOffset = 0;
@@ -1565,7 +1524,6 @@
       $("login-panel").classList.add("hidden");
       $("app").classList.remove("hidden");
       for (const p of PAGES) pageLoaded[p] = false;
-      tasksUserOptionsLoaded = false;
       const page = pageFromHash();
       setActivePageUI(page);
       if (location.hash !== "#" + page) {

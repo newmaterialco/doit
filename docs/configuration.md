@@ -41,8 +41,8 @@ Then fill in:
 - `DOIT_UITESTS_BUNDLE_ID`
 - `DOIT_WIDGET_BUNDLE_ID`
 
-The official hosted app uses a private `Local.xcconfig` or CI-injected
-equivalent. Do not commit that file.
+The batteries-included hosted build uses a private `Local.xcconfig` or
+CI-injected equivalent. Do not commit that file.
 
 ## Runner Configuration
 

@@ -1,7 +1,8 @@
 # Hosted Doit
 
-Hosted Doit is the managed path for normal users. Users install the official
-app and use the managed control plane and hosted Hermes execution environment.
+Hosted Doit is the batteries-included path for users who want to use the app out
+of the box. The app uses the managed control plane and hosted Hermes execution
+environment.
 
 ## What Hosted Mode Includes
 
@@ -35,20 +36,26 @@ See [`../hermes/setup.md`](../hermes/setup.md) and
 
 ## Trust Model
 
-Hosted mode is user-isolated, but not end-to-end encrypted from the operator.
+Hosted mode is user-isolated and privacy-minimized, but not end-to-end
+encrypted.
 
 Normal users should only be able to access their own rows through Supabase RLS.
-The hosted runner and admin backend use service-role access so they can execute
-tasks, write task progress, repair provisioning, and operate the service. That
-means the hosted operator can technically inspect task data.
+The hosted runner uses service-role access so backend infrastructure can execute
+tasks, write task progress, repair provisioning, and operate the service.
+
+Routine operator tooling does not expose task prompts tied to user identity by
+default. Admin task and issue views use aggregate and pseudonymous operational
+data, such as status, timestamps, integration slug, token count, safe error
+category, and anonymized user labels. Raw production credentials remain
+sensitive and must stay restricted to backend infrastructure.
 
 For the strongest data control, run a full self-hosted deployment instead.
 
-## Public Repo vs Official App
+## Public Repo vs Hosted Build
 
-The public repo uses placeholder config. The official distributed app is built
-with private configuration that points to the managed hosted backend.
+The public repo uses placeholder config. The batteries-included hosted build is
+created with private configuration that points to the managed hosted backend.
 
-Users who want hosted Doit should install the official app. Developers who clone
-the repo should configure their own Supabase and Apple values unless they have
-explicit access to the hosted deployment.
+Users who want the out-of-the-box experience can use the hosted build. Developers
+who clone the repo should configure their own Supabase and Apple values unless
+they have explicit access to the hosted deployment.

@@ -1,6 +1,7 @@
 # Admin dashboard
 
-Static operator UI for user stats and invite codes.
+Static operator UI for user stats, invite codes, and privacy-minimized
+operational task metadata.
 
 **Open:** [`index.html`](index.html) in a browser.
 

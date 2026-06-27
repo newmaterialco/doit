@@ -1,7 +1,7 @@
 # Self-Hosting
 
 Self-hosting is for developers and operators who want to run their own Doit
-deployment instead of using the managed hosted app.
+deployment instead of using the batteries-included hosted path.
 
 Self-hosting gives you control over both:
 

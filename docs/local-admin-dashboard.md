@@ -18,6 +18,7 @@ HTML file talks to a Supabase Edge Function.
 | [`supabase/migrations/20240601000035_admin_issues_list.sql`](../supabase/migrations/20240601000035_admin_issues_list.sql) | Operational issues feed for the Issues page |
 | [`supabase/migrations/20240601000036_admin_invites_search.sql`](../supabase/migrations/20240601000036_admin_invites_search.sql) | Invite list search and created-date sort |
 | [`supabase/migrations/20240601000039_admin_analytics_exclusions.sql`](../supabase/migrations/20240601000039_admin_analytics_exclusions.sql) | Exclude operator emails from Overview analytics |
+| [`supabase/migrations/20240601000041_privacy_minimized_admin_views.sql`](../supabase/migrations/20240601000041_privacy_minimized_admin_views.sql) | Privacy-minimized task and issue RPCs |
 
 ## Quick start
 
@@ -46,7 +47,7 @@ browser back/forward keep your place.
 | **Users** | Paginated user list (50 per page) |
 | **Feedback** | Paginated beta feedback submissions (50 per page) |
 | **Invites** | Search, filter, sort, paginated invite table; **New invite** opens a dialog |
-| **Tasks** | Filters + paginated task list (50 per page) |
+| **Tasks** | Privacy-minimized operational task list (50 per page) |
 
 Each page loads its data on first visit. Switch pages via the sidebar to
 load other sections. Hard-refresh the browser to reload the active page.
@@ -114,9 +115,9 @@ watchdog queries in [`supabase/README.md`](../supabase/README.md)).
 | **When** | Most recent relevant timestamp |
 | **Severity** | `error` or `warn` |
 | **Kind** | Issue category (see table above) |
-| **User** | Sign-in email (click to copy) |
-| **Summary** | Task title, cron name, or “Provisioning” / “Memory sync” |
-| **Detail** | Error message or stuck description (hover for full text) |
+| **User label** | Stable pseudonymous label such as `User 8F3A1C2D` |
+| **Summary** | Operational category, not task content |
+| **Detail** | Safe error category or stuck description |
 | **Reference** | `todo:`, `user:`, `memory:`, or `cron_job:` id prefix for debugging |
 
 ### Users
@@ -151,24 +152,26 @@ Loads 50 submissions per page (newest first).
 
 ### Tasks
 
-Browse every todo users have created — what they asked Doit to do, when, and
-by whom (50 per page).
+Browse operational task metadata without exposing what users asked Doit to do
+or joining tasks to user emails (50 per page).
 
 | Column | Meaning |
 | --- | --- |
 | **Created** | `todos.created_at` |
-| **User** | Sign-in email from `auth.users` |
-| **Request** | Raw prompt (`original_title`, falling back to `title`); hover for full text and preparation summary |
+| **User label** | Stable pseudonymous label such as `User 8F3A1C2D` |
+| **Task** | Short task reference, not the task prompt |
 | **Status** | Current todo status |
 | **Integration** | Composio toolkit slug if the prep phase picked one (e.g. `gmail`) |
 | **Tokens** | `todos.total_tokens` for that task |
+| **Error** | Safe error category for failed tasks |
 
-**Filters:** text search (prompt or preparation summary), user, status,
-integration slug. **Clear** resets all filters. **Previous** / **Next**
+**Filters:** text search (task id, anonymized user label, or integration slug),
+status, integration slug. **Clear** resets all filters. **Previous** / **Next**
 paginate through the full result set.
 
-Operator-only: same privacy model as Feedback — you see verbatim user
-prompts to understand product usage during beta.
+Privacy model: routine admin views do not show verbatim prompts, preparation
+summaries, user emails tied to task rows, memory titles, or raw task failure
+messages.
 
 ### Invite codes
 

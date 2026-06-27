@@ -13,7 +13,7 @@
 //                          -> { invites: [...], total_count }
 //   { action: "feedback", limit?, offset? }
 //                          -> { feedback: [...], total_count }
-//   { action: "tasks", limit?, offset?, search?, status?, user_id?, connection_slug? }
+//   { action: "tasks", limit?, offset?, search?, status?, connection_slug? }
 //                          -> { tasks: [...] }
 //   { action: "create_invite", note?, max_uses?, expires_at? }
 //                          -> inserts invite_codes (auto-generates code if omitted)
@@ -234,14 +234,12 @@ serve(async (req) => {
                 const offset = clampInt(body.offset, 0, 1_000_000, 0);
                 const search = (body.search ?? "").trim() || null;
                 const status = (body.status ?? "").trim() || null;
-                const userId = (body.user_id ?? "").trim() || null;
                 const connectionSlug = (body.connection_slug ?? "").trim() || null;
                 const { data, error } = await serviceClient.rpc("admin_todos_list", {
                     p_limit: limit,
                     p_offset: offset,
                     p_search: search,
                     p_status: status,
-                    p_user_id: userId,
                     p_connection_slug: connectionSlug,
                 });
                 if (error) throw error;

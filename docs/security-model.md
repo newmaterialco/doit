@@ -9,25 +9,30 @@ Doit has two major trust boundaries:
 
 ## Hosted Mode
 
-Hosted Doit is convenient and managed. It is user-isolated, but it is not
-end-to-end encrypted from the service operator.
+Hosted Doit is convenient, managed, and privacy-minimized. It is user-isolated,
+but it is not end-to-end encrypted from the service operator.
 
 Normal app users access data through Supabase Auth and RLS policies such as
 `auth.uid() = user_id`, so one user should not be able to read another user's
 rows through the app.
 
-The hosted runner and admin backend use service-role access. Service-role
-credentials bypass RLS so the backend can execute tasks, write status updates,
-send pushes, repair provisioning, and operate the service. Anyone with those
-credentials, or with valid admin access, can technically inspect hosted user
-task data.
+The hosted runner uses service-role access. Service-role credentials bypass RLS
+so backend infrastructure can execute tasks, write status updates, send pushes,
+repair provisioning, and operate the service.
+
+Routine admin tooling is privacy-minimized: task and issue views use aggregate
+and pseudonymous operational data by default and do not expose task prompts,
+preparation summaries, memory titles, or user emails tied to task rows. Raw
+production database credentials remain highly sensitive and must be restricted
+to backend infrastructure.
 
 Do not claim hosted mode is end-to-end encrypted unless task content is changed
-to be encrypted in a way the hosted service cannot read.
+to be encrypted in a way the hosted runner cannot read while still executing
+the task.
 
-Hosted users should install the official app. Public source builds use
-placeholders by default and are intended for contributors, forks, and
-self-hosters.
+Hosted users can use the batteries-included app experience out of the box.
+Public source builds use placeholders by default and are intended for
+contributors, forks, and self-hosters.
 
 ## BYO Hermes Connector Mode
 

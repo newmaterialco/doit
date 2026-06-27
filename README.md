@@ -10,7 +10,7 @@ Doit is being shaped around several operating models:
 
 | Path | Status | Who it is for |
 | --- | --- | --- |
-| Hosted Doit / managed Hermes | Works today | Users who want the official app and managed backend |
+| Hosted Doit / managed Hermes | Works today | Users who want a batteries-included app experience with the managed backend |
 | Bring your own Hermes connector | Planned | Users who want the app as a GUI over Hermes on their own VPS, home server, or Tailscale node |
 | Fork and self-host | Works for technical operators | Developers who want their own Supabase/control plane, runner, Hermes setup, and app build |
 | Direct Hermes endpoint | Future/advanced | Users with a secure remote Hermes endpoint |
@@ -21,10 +21,10 @@ See [`docs/hosted-doit.md`](docs/hosted-doit.md),
 
 ## Trust Model
 
-Hosted Doit is **user-isolated, not end-to-end encrypted from the operator**.
-Normal users are scoped to their own rows through Supabase RLS policies, but the
-hosted runner and admin backend use service-role access to operate the service.
-That means the hosted operator can technically access hosted task data.
+Hosted Doit is **user-isolated and privacy-minimized, but not end-to-end
+encrypted**. The hosted runner must process task content to execute work, but
+routine operator tooling uses aggregate and pseudonymous operational data by
+default instead of exposing task prompts tied to user identity.
 
 BYO connector mode moves Hermes execution and profile files to user-owned
 infrastructure. Full self-hosting gives the strongest data control because you
@@ -78,8 +78,8 @@ doit/
 
 ## Quickstart Decision Tree
 
-- **I want to use the official hosted app**: use the distributed app and managed
-  backend. See [`docs/hosted-doit.md`](docs/hosted-doit.md).
+- **I want the batteries-included path**: use the app out of the box with the
+  managed backend. See [`docs/hosted-doit.md`](docs/hosted-doit.md).
 - **I want to run the whole stack myself**: configure iOS, Supabase, runner, and
   Hermes. See [`docs/self-host.md`](docs/self-host.md).
 - **I want the app to control my existing Hermes**: read
@@ -109,9 +109,9 @@ The iOS app reads Supabase, waitlist, signing team, and bundle identifiers from
 cp ios/doit/Config/Local.example.xcconfig ios/doit/Config/Local.xcconfig
 ```
 
-Then fill in your own Supabase and Apple values. The official hosted app uses a
-private local/CI config with the managed Doit values; those values are not meant
-to be committed to the public repo.
+Then fill in your own Supabase and Apple values. The batteries-included hosted
+build uses a private local/CI config with the managed Doit values; those values
+are not meant to be committed to the public repo.
 
 See [`docs/configuration.md`](docs/configuration.md) for `.xcconfig`, `.env`,
 Supabase, APNs, and secret-handling details.
