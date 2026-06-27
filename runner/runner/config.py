@@ -46,6 +46,7 @@ class Config:
     poll_interval_secs: float
     run_timeout_secs: float
     stall_timeout_secs: float
+    browser_silence_timeout_secs: float
     max_concurrent_runs: int
     max_runs_per_user: int
     # --- Automated provisioning (see runner/provision.py) ---
@@ -96,6 +97,12 @@ def load() -> Config:
         # thoughts, text) before the live activity flips to "stalled" so the
         # user isn't staring at a frozen card.
         stall_timeout_secs=float(os.environ.get("STALL_TIMEOUT_SECS", "120")),
+        # Browser tools can legitimately go quiet while a page loads, but a
+        # much longer silence usually means Browserbase or site automation is
+        # stuck. Fail clearly before the generic whole-run timeout.
+        browser_silence_timeout_secs=float(
+            os.environ.get("BROWSER_SILENCE_TIMEOUT_SECS", "300")
+        ),
         # Worker pool size: how many work items (todos, cron runs, prep
         # passes) may be in flight at once across all users. 1 reproduces
         # the historical strictly-sequential behavior.

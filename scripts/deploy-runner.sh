@@ -5,12 +5,11 @@
 # The runner deployment is intentionally low-tech: a single rsync of the
 # `runner/runner/` package plus the small Hermes helper scripts/skills the
 # runner calls, then `systemctl restart` of the `doit-runner` service.
-# No CI, no container registry, no Docker image to build — fits the
-# single-droplet hobby setup.
+# No CI, no container registry, no Docker image to build — fits a small
+# VM/VPS deployment.
 #
-# VM coords are read from env so a future move to a different host doesn't
-# require editing this script. Defaults match the current droplet so a
-# bare `./scripts/deploy-runner.sh` Just Works from a fresh clone.
+# VM coords are read from env so a hosted deployment never bakes production
+# infrastructure into the public repo.
 #
 # Excludes:
 #   .venv         — platform-specific (linux on VM, macOS on dev laptop)
@@ -18,12 +17,16 @@
 #   __pycache__ / *.pyc — build artifacts
 #
 # Usage:
-#   ./scripts/deploy-runner.sh
 #   DOIT_VM_HOST=root@1.2.3.4 ./scripts/deploy-runner.sh
 #   DOIT_VM_PATH=/srv/doit/runner ./scripts/deploy-runner.sh
 set -euo pipefail
 
-VM_HOST="${DOIT_VM_HOST:-root@162.243.30.100}"
+if [[ -z "${DOIT_VM_HOST:-}" ]]; then
+  echo "error: set DOIT_VM_HOST (example: root@1.2.3.4)" >&2
+  exit 1
+fi
+
+VM_HOST="$DOIT_VM_HOST"
 VM_PATH="${DOIT_VM_PATH:-/opt/doit/runner}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

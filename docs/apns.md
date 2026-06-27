@@ -85,11 +85,11 @@ Wrong-environment tokens still get `BadDeviceToken` from Apple. The runner logs
 the environment and token prefix, then prunes tokens it can safely identify as
 invalid.
 
-## Apple Developer setup (New Material)
+## Apple Developer setup
 
 ### App ID
 
-Under **Identifiers**, `com.newmaterial.doit` must have **Push Notifications**
+Under **Identifiers**, your main app bundle ID must have **Push Notifications**
 enabled.
 
 ### APNs auth key (`.p8`)
@@ -109,12 +109,12 @@ Sign in with Apple on the same key for OAuth secret generation.
 
 ### Team and bundle ID
 
-| Setting | doit value |
+| Setting | Example value |
 | ------- | ---------- |
-| Team ID | `433N42F295` (New Material, Inc.) |
-| `APNS_TOPIC` | `com.newmaterial.doit` (main app bundle ID, not the widget) |
+| Team ID | `YOUR_APPLE_TEAM_ID` |
+| `APNS_TOPIC` | `com.yourorg.doit` (main app bundle ID, not the widget) |
 
-The Live Activity widget extension (`com.newmaterial.doit.doitActivityWidget`)
+The Live Activity widget extension (`com.yourorg.doit.doitActivityWidget`)
 does not receive pushes; the **host app** topic is used.
 
 ## Runner environment variables
@@ -126,14 +126,14 @@ See [`runner/.env.example`](../runner/.env.example):
 | `APNS_KEY_PATH` | Path to `.p8` on the VM |
 | `APNS_KEY_ID` | 10-character Key ID from Apple |
 | `APNS_TEAM_ID` | Apple Developer Team ID |
-| `APNS_TOPIC` | Main app bundle ID (`com.newmaterial.doit`) |
+| `APNS_TOPIC` | Main app bundle ID, for example `com.yourorg.doit` |
 | `APNS_USE_SANDBOX` | `true` = sandbox, `false` = production |
 
 If any of `APNS_KEY_PATH`, `APNS_KEY_ID`, `APNS_TEAM_ID`, or `APNS_TOPIC` is
 missing, the runner logs a warning and **skips all pushes** (no-op).
 
 Deploy script [`scripts/deploy-runner.sh`](../scripts/deploy-runner.sh) does
-**not** overwrite VM `.env` — APNS changes are manual on the droplet.
+**not** overwrite VM `.env` — APNS changes are manual on the VM/VPS.
 
 ## iOS app: token registration
 
@@ -174,7 +174,7 @@ animating after iOS suspends the app:
 3. The runner converts each `ActivitySnapshot` to
    `HermesActivityAttributes.ContentState` and sends APNs with:
    - `apns-push-type: liveactivity`
-   - `apns-topic: com.newmaterial.doit.push-type.liveactivity`
+   - `apns-topic: com.yourorg.doit.push-type.liveactivity`
 4. Terminal snapshots send ActivityKit `end` events with a short
    `dismissal-date`.
 5. Silent `activity_sync` pushes remain as a compatibility fallback so the app
@@ -186,8 +186,8 @@ animating after iOS suspends the app:
 
 ```bash
 APNS_USE_SANDBOX=false
-APNS_TOPIC=com.newmaterial.doit
-APNS_TEAM_ID=433N42F295
+APNS_TOPIC=com.yourorg.doit
+APNS_TEAM_ID=YOUR_APPLE_TEAM_ID
 # ... key path / id ...
 systemctl restart doit-runner
 ```

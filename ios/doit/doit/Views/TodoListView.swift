@@ -810,18 +810,54 @@ struct TodoListView: View {
 
     private func dockButton(_ section: TodoListSection) -> some View {
         let isSelected = selectedSectionID == section.index
+        let waitingCount = waitingBadgeCount(for: section)
         return Button {
             selectedSectionID = section.index
         } label: {
-            Image(systemName: section.symbolName)
-                .font(.title2.weight(.semibold))
-                .frame(width: DockStyle.buttonWidth, height: DockStyle.buttonHeight)
-                .foregroundStyle(isSelected ? .primary : .secondary)
-                .opacity(isSelected ? 1 : 0.55)
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: section.symbolName)
+                    .font(.title2.weight(.semibold))
+                    .frame(width: DockStyle.buttonWidth, height: DockStyle.buttonHeight)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .opacity(isSelected ? 1 : 0.55)
+
+                if waitingCount > 0 {
+                    Text(waitingCount > 9 ? "9+" : "\(waitingCount)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 18, minHeight: 18)
+                        .background(.orange, in: Capsule())
+                        .offset(x: 6, y: 1)
+                        .accessibilityHidden(true)
+                }
+            }
         }
         .buttonStyle(DockButtonStyle())
         .contentShape(Circle())
-        .accessibilityLabel(section.title)
+        .accessibilityLabel(dockAccessibilityLabel(for: section, waitingCount: waitingCount))
+    }
+
+    private func waitingBadgeCount(for section: TodoListSection) -> Int {
+        switch section {
+        case .todo:
+            return store.todos.filter {
+                $0.status == .needs_input || $0.status == .needs_auth
+            }.count
+        case .scheduled:
+            return store.cronJobs.filter { $0.state == .needs_input }.count
+        case .done:
+            return 0
+        }
+    }
+
+    private func dockAccessibilityLabel(
+        for section: TodoListSection,
+        waitingCount: Int
+    ) -> String {
+        guard waitingCount > 0 else { return section.title }
+        let noun = waitingCount == 1 ? "item" : "items"
+        return "\(section.title), \(waitingCount) waiting \(noun)"
     }
 
     private func scrubDock(at xPosition: CGFloat, dockWidth: CGFloat) {
@@ -3735,7 +3771,14 @@ private struct CronJobCard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if job.state != .completed {
+                if job.state == .needs_input {
+                    PillButton(
+                        label: "Reply",
+                        style: .primary,
+                        icon: "arrowshape.turn.up.left.fill",
+                        action: onOpen
+                    )
+                } else if job.state != .completed {
                     Button(action: onTogglePause) {
                         Image(systemName: job.state == .paused ? "play.fill" : "pause")
                             .font(.system(size: 15, weight: .heavy))
@@ -3929,6 +3972,20 @@ private struct TodoCard: View {
                             )
                         }
                     }
+                } else if interaction.allowsFreeform {
+                    PillButton(
+                        label: "Reply",
+                        style: .primary,
+                        icon: "arrowshape.turn.up.left.fill",
+                        action: onOpen
+                    )
+                } else {
+                    PillButton(
+                        label: "Open",
+                        style: .neutral,
+                        icon: "arrow.up.right",
+                        action: onOpen
+                    )
                 }
             }
         } else {
@@ -4042,6 +4099,20 @@ private struct TodoCard: View {
                 style: .primary,
                 icon: "arrow.clockwise",
                 action: onDoIt
+            )
+        case .needs_auth:
+            PillButton(
+                label: "Connect",
+                style: .primary,
+                icon: "key.fill",
+                action: onOpen
+            )
+        case .needs_input:
+            PillButton(
+                label: "Reply",
+                style: .primary,
+                icon: "arrowshape.turn.up.left.fill",
+                action: onOpen
             )
         default:
             EmptyView()

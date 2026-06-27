@@ -396,15 +396,20 @@ class AgentActivityService:
         generic shimmer. Keeps the last known tool context so the card still
         says *what* it's stuck on.
         """
+        title = "Still working — checking results…"
         detail = "This is taking longer than usual…"
-        if latest is not None and latest.title and latest.title != "Still working":
+        if _is_active_browser_snapshot(latest):
+            title = "Browser is taking longer than usual"
+            detail = _browser_stalled_detail(latest)
+        elif latest is not None and latest.title and latest.title != "Still working":
             detail = f"Still on: {latest.title}"
         return ActivitySnapshot(
             phase="stalled",
             state="running",
-            title="Still working — checking results…",
+            title=title,
             detail=detail,
             tool_name=latest.tool_name if latest else None,
+            tool_call_id=latest.tool_call_id if latest else None,
             tool_category=(latest.tool_category if latest else None) or "thinking",
             started_at=self._started_at,
             recent=list(self._recent),
@@ -422,6 +427,19 @@ class AgentActivityService:
         if latest is not None:
             if latest.phase == "starting" and not self._recent:
                 return self.initial(phase="starting", title="Connecting…", detail=None)
+            if _is_active_browser_snapshot(latest):
+                title, detail = _browser_heartbeat_copy(latest)
+                return ActivitySnapshot(
+                    phase=latest.phase,
+                    state=latest.state,
+                    title=title,
+                    detail=detail,
+                    tool_name=latest.tool_name,
+                    tool_call_id=latest.tool_call_id,
+                    tool_category=latest.tool_category,
+                    started_at=self._started_at,
+                    recent=list(self._recent),
+                )
             return ActivitySnapshot(
                 phase=latest.phase,
                 state=latest.state,
@@ -471,6 +489,30 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _elapsed_seconds_since(value: str | None) -> float | None:
+    parsed = _parse_iso(value)
+    if parsed is None:
+        return None
+    return max(0.0, (datetime.now(UTC) - parsed).total_seconds())
+
+
 def _clip(value: str | None, limit: int) -> str | None:
     if value is None:
         return None
@@ -509,6 +551,63 @@ def prep_queue_snapshot(*, summary: str | None = None) -> ActivitySnapshot:
     del summary  # prep summary stays on the list card during preparing status.
     service = AgentActivityService()
     return service.initial(phase="starting", title="Queued to run…", detail=None)
+
+
+def _is_active_browser_snapshot(latest: ActivitySnapshot | None) -> bool:
+    if latest is None:
+        return False
+    return latest.tool_category == "browser" and latest.phase in {"tool", "stalled"}
+
+
+def _active_browser_step(latest: ActivitySnapshot) -> ActivityStep | None:
+    for step in reversed(latest.recent):
+        if (
+            step.tool_category == "browser"
+            and step.completed_at is None
+            and (
+                latest.tool_name is None
+                or step.tool_name is None
+                or step.tool_name == latest.tool_name
+            )
+        ):
+            return step
+    return None
+
+
+def _browser_elapsed_seconds(latest: ActivitySnapshot) -> float | None:
+    step = _active_browser_step(latest)
+    if step is not None:
+        return _elapsed_seconds_since(step.started_at)
+    return _elapsed_seconds_since(latest.started_at)
+
+
+def _browser_context_label(latest: ActivitySnapshot) -> str:
+    title = (latest.title or "").strip()
+    if title and title not in {"Still working", "Browser is still working"}:
+        return title
+    return "the browser step"
+
+
+def _browser_heartbeat_copy(latest: ActivitySnapshot) -> tuple[str, str | None]:
+    elapsed = _browser_elapsed_seconds(latest)
+    context = _browser_context_label(latest)
+    if elapsed is None:
+        return "Browser is still working", f"Still on: {context}"
+    if elapsed >= 180:
+        return "Browser is still running this step", f"Still waiting on: {context}"
+    if elapsed >= 60:
+        return "Still waiting on the page", f"Browser has been on: {context}"
+    return "Browsing the site…", latest.detail or f"Working on: {context}"
+
+
+def _browser_stalled_detail(latest: ActivitySnapshot | None) -> str:
+    if latest is None:
+        return "The browser session has been quiet for a while."
+    context = _browser_context_label(latest)
+    elapsed = _browser_elapsed_seconds(latest)
+    if elapsed is None:
+        return f"Still waiting on: {context}"
+    return f"Still waiting on: {context} ({int(elapsed)}s without an update)"
 
 
 _TOOL_VERB_OVERRIDES: dict[str, str] = {

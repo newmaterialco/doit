@@ -8,7 +8,7 @@ session_id (the runner uses doit-todo-<uuid> per todo).
 Run ON THE VM with the runner venv's python (httpx installed):
 
     /opt/doit/runner/.venv/bin/python /opt/doit/scripts/smoke-concurrent-runs.py \
-        --profile gabriel [--runs 2] [--timeout 180]
+        --profile <profile> [--runs 2] [--timeout 180]
 
 Reads API_SERVER_PORT / API_SERVER_KEY from the profile's .env. Sends
 trivial no-tool prompts, so it costs a few hundred tokens total. Exits 0

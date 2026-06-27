@@ -1,0 +1,12 @@
+// Copy this file to Local.xcconfig and fill in deployment-specific values.
+// Local.xcconfig is ignored by git.
+
+DOIT_SUPABASE_URL = https:/$()/YOUR_PROJECT_REF.supabase.co
+DOIT_SUPABASE_ANON_KEY = YOUR_SUPABASE_ANON_KEY
+DOIT_WAITLIST_URL = https:/$()/example.com/waitlist
+
+DOIT_DEVELOPMENT_TEAM = YOUR_APPLE_TEAM_ID
+DOIT_BUNDLE_ID = com.yourorg.doit
+DOIT_TESTS_BUNDLE_ID = com.yourorg.doitTests
+DOIT_UITESTS_BUNDLE_ID = com.yourorg.doitUITests
+DOIT_WIDGET_BUNDLE_ID = com.yourorg.doit.doitActivityWidget

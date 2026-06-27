@@ -15,7 +15,7 @@ Auth, database, Realtime, and Edge Functions for doit.
      "generate from key" helper with your Apple `.p8` Sign in with Apple key).
      For native iOS sign-in, include both the Services ID and app bundle ID in
      the Supabase Client IDs field, comma-separated, for example:
-     `com.newmaterial.doit.auth,com.newmaterial.doit` (Services ID + native app
+     `com.yourorg.doit.auth,com.yourorg.doit` (Services ID + native app
      bundle ID). Example with legacy IDs:
      `co.supabase.<project-ref>.auth,do.it.doit.app`.
 3. Apply the schema:
@@ -132,7 +132,7 @@ Composio API key never reaches the iOS app.
    supabase functions deploy cron-suggestions
    supabase functions deploy onboarding
    supabase functions deploy admin
-   supabase secrets set COMPOSIO_API_KEY=ck_...
+   supabase secrets set COMPOSIO_API_KEY=YOUR_COMPOSIO_API_KEY
    supabase secrets set SUPABASE_SERVICE_ROLE_KEY=<service_role>
    supabase secrets set OPENAI_API_KEY=<openai_key>
    supabase secrets set ADMIN_SECRET=<long random string>
@@ -182,7 +182,7 @@ On the runner VM, set provisioning defaults and ensure OpenRouter is configured:
 ```bash
 HERMES_MODEL_PROVIDER=openrouter
 HERMES_MODEL_DEFAULT=google/gemini-2.5-flash
-OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY
 ```
 
 Push runner code and restart from the repo root:

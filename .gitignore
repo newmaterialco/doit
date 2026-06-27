@@ -3,14 +3,19 @@
 *.swp
 .idea/
 .vscode/
+.cursor/
+.pycache-cursor/
 
 # Xcode
 ios/**/xcuserdata/
 ios/**/*.xcuserstate
 ios/**/build/
 ios/**/DerivedData/
+/.derived-data-*/
 ios/**/.build/
 ios/**/Pods/
+ios/doit/Config/Local.xcconfig
+ios/doit/Config/*.local.xcconfig
 
 # Python (runner)
 runner/__pycache__/
@@ -26,6 +31,8 @@ runner/.env
 **/.env.local
 *.p8
 *.p12
+*.csv
+!*.example.csv
 
 # Hermes deploy artifacts
 hermes/profiles/*/.env

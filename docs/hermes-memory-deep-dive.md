@@ -10,7 +10,7 @@ Doit is wired to use Hermes' built-in persistent memory path today:
 - Doit uses a fresh execution session per todo so the next todo sees the latest memory file contents.
 - The runner mirrors Hermes memory files into Supabase so Settings > Memory can show what Hermes knows.
 
-The live DigitalOcean profile audit does not show healthy memory accumulation. The deployed `gabriel` profile has built-in memory enabled, but only one `USER.md` entry exists, `MEMORY.md` is missing, no external provider is enabled, and recent task history shows very few `memory` tool calls. Treat the existing personal-email entry as suspicious, not as proof that built-in memory is working.
+An audit of a hosted VM profile did not show healthy memory accumulation. The deployed `<profile>` had built-in memory enabled, but only one placeholder `USER.md` entry existed, `MEMORY.md` was missing, no external provider was enabled, and recent task history showed very few `memory` tool calls. Treat placeholder entries as suspicious, not as proof that built-in memory is working.
 
 ## Current Architecture
 
@@ -86,7 +86,7 @@ Doit does not currently enable an external provider. `hermes/setup.md` explicitl
 
 ### What Is Wired Correctly
 
-- Built-in Hermes memory is enabled in the profile template and in the live `gabriel` profile.
+- Built-in Hermes memory is enabled in the profile template and in the audited hosted profile.
 - Normal todo execution stages pending user pins before starting Hermes.
 - Normal todo execution mirrors Hermes-authored file changes back to Supabase afterward.
 - Normal todo execution uses per-todo sessions so memory snapshots refresh across todos.
@@ -96,19 +96,19 @@ Doit does not currently enable an external provider. `hermes/setup.md` explicitl
 
 ### Live Profile Evidence
 
-Read-only inspection of the current DigitalOcean VM found:
+Read-only inspection of a hosted VM profile found:
 
-- Active service: `hermes-gabriel.service`.
-- Profile path: `/root/.hermes/profiles/gabriel`.
+- Active service: `hermes-<profile>.service`.
+- Profile path: `/root/.hermes/profiles/<profile>`.
 - Runner service user: `root`, so the runner uses the same default profile path.
-- `hermes -p gabriel memory status`: built-in memory active, external provider `(none)`.
-- `USER.md`: one entry, 58 chars: `User's personal email address is gabemitchell93@gmail.com.`
+- `hermes -p <profile> memory status`: built-in memory active, external provider `(none)`.
+- `USER.md`: one placeholder personal-email entry.
 - `MEMORY.md`: missing.
-- Supabase `memories`: exactly one mirrored row, matching that email entry.
+- Supabase `memories`: exactly one mirrored row, matching that placeholder email entry.
 - Recent `todo_steps`: only two `memory` tool events in the last 1000 steps, corresponding to one call/result pair.
 - That recent memory tool call occurred during an unrelated calendar task and did not update the `USER.md` mtime, suggesting it was likely a duplicate/no-op rather than evidence of healthy memory writing.
 
-The email also appears in repo demo/test material, so it should not be treated as organic proof that memory works.
+The placeholder email also appears in repo demo/test material, so it should not be treated as organic proof that memory works.
 
 ### Gaps That Can Make Hermes Look Forgetful
 
@@ -157,9 +157,9 @@ The available shell only has Apple Python 3.9.6 and no runner virtualenv.
 
 Passed:
 
-- `PYTHONPATH=/Users/gabrielmitchell/Desktop/Work/doit/dev/runner python3 /Users/gabrielmitchell/Desktop/Work/doit/dev/runner/tests/test_hermes_memory.py`
+- `PYTHONPATH=runner python3 runner/tests/test_hermes_memory.py`
   - 12 tests passed.
-- `PYTHONPATH=/Users/gabrielmitchell/Desktop/Work/doit/dev/runner python3 /Users/gabrielmitchell/Desktop/Work/doit/dev/runner/tests/test_events.py`
+- `PYTHONPATH=runner python3 runner/tests/test_events.py`
   - 35 tests passed.
 
 Could not fully run here:

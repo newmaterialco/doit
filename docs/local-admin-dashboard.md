@@ -17,7 +17,7 @@ HTML file talks to a Supabase Edge Function.
 | [`supabase/migrations/20240601000033_admin_usage_metrics.sql`](../supabase/migrations/20240601000033_admin_usage_metrics.sql) | DAU/WAU/MAU and daily usage series for charts |
 | [`supabase/migrations/20240601000035_admin_issues_list.sql`](../supabase/migrations/20240601000035_admin_issues_list.sql) | Operational issues feed for the Issues page |
 | [`supabase/migrations/20240601000036_admin_invites_search.sql`](../supabase/migrations/20240601000036_admin_invites_search.sql) | Invite list search and created-date sort |
-| [`supabase/migrations/20240601000037_admin_invites_email_sent_filter.sql`](../supabase/migrations/20240601000037_admin_invites_email_sent_filter.sql) | Invite list filter by email sent |
+| [`supabase/migrations/20240601000039_admin_analytics_exclusions.sql`](../supabase/migrations/20240601000039_admin_analytics_exclusions.sql) | Exclude operator emails from Overview analytics |
 
 ## Quick start
 
@@ -27,9 +27,9 @@ HTML file talks to a Supabase Edge Function.
 3. On the login screen, enter:
    - **Admin secret** — the `ADMIN_SECRET` Edge Function secret (not the
      Supabase service_role key).
-   - **Function URL** — defaults to
-     `https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin` for the
-     live project; change if you use another Supabase project.
+   - **Function URL** —
+     `https://YOUR_PROJECT_REF.supabase.co/functions/v1/admin` for your
+     Supabase project.
 4. Click **Open dashboard**. The secret is stored in `sessionStorage` for
    this browser tab session only.
 
@@ -76,6 +76,19 @@ Summary cards:
 - **Daily active users** — users who created or updated a task that day
 - **Tasks completed per day** — todos marked `done`
 - **Tasks created per day** — new todos
+
+**Analytics exclusions:** Operator/test accounts listed in
+`admin_analytics_exclusions` are omitted from Overview summary cards and
+usage charts (DAU/WAU/MAU, task counts, tokens, feedback). They still
+appear on **Users**, **Tasks**, and **Issues**. Add or remove emails in
+the Supabase SQL editor:
+
+```sql
+insert into admin_analytics_exclusions (email, note)
+values ('you@example.com', 'operator');
+
+delete from admin_analytics_exclusions where email = 'you@example.com';
+```
 
 ### Issues
 
@@ -258,7 +271,7 @@ All actions are `POST` to the function URL with JSON body `{ "action": "…" }`.
 Example (replace secret and use your project anon key):
 
 ```bash
-curl -s -X POST "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin" \
+curl -s -X POST "https://YOUR_PROJECT_REF.supabase.co/functions/v1/admin" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <anon>" \
   -H "apikey: <anon>" \
@@ -269,7 +282,7 @@ curl -s -X POST "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin" \
 List tasks (paginated, optional filters):
 
 ```bash
-curl -s -X POST "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin" \
+curl -s -X POST "https://YOUR_PROJECT_REF.supabase.co/functions/v1/admin" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <anon>" \
   -H "apikey: <anon>" \

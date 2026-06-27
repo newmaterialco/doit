@@ -1,13 +1,43 @@
 import Foundation
 
-/// Supabase project credentials. Fill these in before running the app.
-///
-/// Both values are safe to ship in the binary:
-/// - `url` is just your project URL.
-/// - `anonKey` is the public RLS-scoped key — it does not bypass RLS.
-///
-/// Find them in: Supabase Dashboard -> Project Settings -> API.
+/// App runtime configuration injected from Xcode build settings.
+enum AppConfig {
+    static let supabaseURL = url(
+        forInfoKey: "DoitSupabaseURL",
+        fallbackKey: "DOIT_SUPABASE_URL"
+    )
+    static let supabaseAnonKey = string(
+        forInfoKey: "DoitSupabaseAnonKey",
+        fallbackKey: "DOIT_SUPABASE_ANON_KEY"
+    )
+    static let waitlistURL = url(
+        forInfoKey: "DoitWaitlistURL",
+        fallbackKey: "DOIT_WAITLIST_URL"
+    )
+
+    private static func string(forInfoKey key: String, fallbackKey: String) -> String {
+        for candidate in [key, fallbackKey] {
+            if
+                let value = Bundle.main.object(forInfoDictionaryKey: candidate) as? String,
+                !value.isEmpty
+            {
+                return value
+            }
+        }
+        fatalError("Missing required Info.plist value: \(key)")
+    }
+
+    private static func url(forInfoKey key: String, fallbackKey: String) -> URL {
+        let value = string(forInfoKey: key, fallbackKey: fallbackKey)
+        guard let url = URL(string: value) else {
+            fatalError("Invalid URL for Info.plist value \(key): \(value)")
+        }
+        return url
+    }
+}
+
+/// Supabase project credentials. Values come from `ios/doit/Config/*.xcconfig`.
 enum SupabaseConfig {
-    static let url = URL(string: "https://qjeutitqgdsasccxfxdy.supabase.co")!
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZXV0aXRxZ2RzYXNjY3hmeGR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwMTMzNjksImV4cCI6MjA5NTU4OTM2OX0.j2yU_6HTLh6WJaPUFsG3vdgd0cK6VHFXm6XYW_cb26U"
+    static let url = AppConfig.supabaseURL
+    static let anonKey = AppConfig.supabaseAnonKey
 }

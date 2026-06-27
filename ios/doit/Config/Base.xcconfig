@@ -1,0 +1,16 @@
+// Public, non-secret defaults for open-source builds.
+//
+// Copy Local.example.xcconfig to Local.xcconfig and fill in your own values.
+// Local.xcconfig is ignored by git and overrides these placeholders.
+
+DOIT_SUPABASE_URL = https:/$()/YOUR_PROJECT_REF.supabase.co
+DOIT_SUPABASE_ANON_KEY = YOUR_SUPABASE_ANON_KEY
+DOIT_WAITLIST_URL = https:/$()/example.com/waitlist
+
+DOIT_DEVELOPMENT_TEAM =
+DOIT_BUNDLE_ID = com.example.doit
+DOIT_TESTS_BUNDLE_ID = com.example.doitTests
+DOIT_UITESTS_BUNDLE_ID = com.example.doitUITests
+DOIT_WIDGET_BUNDLE_ID = com.example.doit.doitActivityWidget
+
+#include? "Local.xcconfig"

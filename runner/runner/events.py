@@ -107,6 +107,17 @@ _INTERACTION_RE = re.compile(
     re.escape(INTERACTION_OPEN) + r"\s*(\{.*?\})\s*" + re.escape(INTERACTION_CLOSE),
     re.DOTALL,
 )
+_INTERACTION_BODY_RE = re.compile(
+    re.escape(INTERACTION_OPEN) + r"(.*?)" + re.escape(INTERACTION_CLOSE),
+    re.DOTALL,
+)
+_INTERACTION_PROMPT_RE = re.compile(r'"prompt"\s*:\s*"([^"]+)"', re.DOTALL)
+_UNSTRUCTURED_USER_ASK_RE = re.compile(
+    r"(\?$|"
+    r"\b(?:can you|could you|please|need(?:ed)?|i need|provide|tell me|"
+    r"which|choose|pick|select|confirm|approve|tap|send|reply with)\b)",
+    re.IGNORECASE,
+)
 
 # Captures *everything* between the markers so a malformed first block can't
 # greedily swallow a well-formed second one (the JSON braces alone aren't a
@@ -397,9 +408,17 @@ def translate(event_name: str, data: dict) -> Translated | None:
     if actual_event == "hermes.tool.progress":
         tool_name = data.get("tool") or data.get("name")
         message = data.get("message") or data.get("title") or "Working..."
+        details: list[str] = []
+        for key in ("url", "action", "selector", "status"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                details.append(f"{key}={value.strip()}")
+        text = str(message)
+        if details:
+            text = f"{text} {' '.join(details)}"
         return Translated(
             step_kind="tool_started",
-            text=str(message),
+            text=text,
             tool_name=str(tool_name) if tool_name else None,
         )
 
@@ -533,6 +552,34 @@ def _final_or_interaction(text: str) -> Translated:
     # Real final: parse artifacts and spawn-task blocks out of the reply.
     artifacts = parse_artifacts(text)
     spawned_tasks = parse_spawned_tasks(text)
+    if not artifacts and not spawned_tasks:
+        if _has_malformed_interaction_block(text):
+            interaction = _fallback_malformed_interaction(text)
+            prompt = interaction.prompt or "The agent needs your input."
+            return Translated(
+                step_kind="input_needed",
+                text=_truncate(prompt, 600),
+                new_status="needs_input",
+                final_text=text,
+                interaction=interaction,
+            )
+        unstructured_prompt = _unstructured_user_question(text)
+        if unstructured_prompt:
+            interaction = InteractionRequest(
+                kind="question",
+                prompt=unstructured_prompt,
+                payload={
+                    "allow_freeform": True,
+                    "summary": "Needs your input",
+                },
+            )
+            return Translated(
+                step_kind="input_needed",
+                text=_truncate(unstructured_prompt, 600),
+                new_status="needs_input",
+                final_text=text,
+                interaction=interaction,
+            )
     visible = normalize_visible_reply(
         strip_activity(strip_interaction(strip_tasks(strip_artifacts(text))))
     )
@@ -591,6 +638,54 @@ def parse_interaction(text: str) -> InteractionRequest | None:
     raw_kind, payload = _synthesize_default_options(raw_kind, payload)
 
     return InteractionRequest(kind=raw_kind, prompt=prompt[:500], payload=payload)
+
+
+def _has_malformed_interaction_block(text: str) -> bool:
+    """True when markers exist but no valid interaction block parsed."""
+    if not text:
+        return False
+    return INTERACTION_OPEN in text or INTERACTION_CLOSE in text
+
+
+def _fallback_malformed_interaction(text: str) -> InteractionRequest:
+    """Pause instead of silently completing when the interaction JSON broke."""
+    prompt = ""
+    body_match = _INTERACTION_BODY_RE.search(text or "")
+    if body_match:
+        prompt_match = _INTERACTION_PROMPT_RE.search(body_match.group(1))
+        if prompt_match:
+            prompt = " ".join(prompt_match.group(1).split())
+    if not prompt:
+        prompt = "I need your input, but couldn't format the request correctly. What should I do next?"
+    return InteractionRequest(
+        kind="question",
+        prompt=prompt[:500],
+        payload={
+            "allow_freeform": True,
+            "summary": "Needs your input",
+            "parser_recovered": True,
+        },
+    )
+
+
+def _unstructured_user_question(text: str) -> str | None:
+    """Conservatively promote plain-language asks into app interactions."""
+    visible = normalize_visible_reply(
+        strip_activity(strip_interaction(strip_tasks(strip_artifacts(text or ""))))
+    )
+    if not visible:
+        return None
+    compact = " ".join(visible.split())
+    if not compact.endswith("?"):
+        return None
+    if len(compact) > 700:
+        return None
+    lower = compact.lower()
+    if lower.startswith(("done", "all done", "completed", "finished")):
+        return None
+    if not _UNSTRUCTURED_USER_ASK_RE.search(compact):
+        return None
+    return compact[:500]
 
 
 def _synthesize_default_options(

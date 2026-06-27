@@ -146,12 +146,12 @@ class PromptBuilderTests(unittest.TestCase):
         prompt = _build_prompt(
             "Send a test email",
             "",
-            original_title="Send a test email to gabemitchell93@gmail.com",
+            original_title="Send a test email to user@example.com",
             preparation_summary="Send a simple test email.",
             connection_slug="gmail",
         )
         self.assertIn("source of truth", prompt)
-        self.assertIn("Send a test email to gabemitchell93@gmail.com", prompt)
+        self.assertIn("Send a test email to user@example.com", prompt)
         self.assertIn("Prepared title:\nSend a test email", prompt)
         self.assertIn("Preparation summary:\nSend a simple test email.", prompt)
         self.assertIn("Expected connection/toolkit:\ngmail", prompt)

@@ -136,6 +136,7 @@ final class TodoStore {
     private var snapshotSaveTask: Task<Void, Never>?
     private weak var connectivity: ConnectivityMonitor?
     private let foregroundRefreshMinimumInterval: TimeInterval = 20
+    private var waitingAuditLogKeys: Set<String> = []
 
     // MARK: - Lifecycle
 
@@ -190,6 +191,7 @@ final class TodoStore {
         pendingSurfaceWatchTask?.cancel()
         pendingSurfaceWatchTask = nil
         cronHandoffRevision = 0
+        waitingAuditLogKeys = []
         loadError = nil
         isInitialLoading = false
         isRefreshing = false
@@ -395,6 +397,7 @@ final class TodoStore {
             await refreshAllOpenInteractions()
             await refreshAllArtifacts()
             await refreshAllAgentActivities()
+            auditWaitingStateConsistency(context: "loadAll")
             for id in trackedTodoIDs {
                 await refreshInteractions(for: id)
             }
@@ -445,6 +448,7 @@ final class TodoStore {
             } else {
                 openInteractions.removeValue(forKey: todoID)
             }
+            auditWaitingStateConsistency(context: "refreshOpenInteraction")
             scheduleSnapshotSave()
         } catch {
             print("[store] refreshOpenInteraction(\(todoID)) failed: \(error)")
@@ -545,6 +549,7 @@ final class TodoStore {
         }
         do {
             openInteractions = try await TodosAPI.openInteractions(for: ids)
+            auditWaitingStateConsistency(context: "refreshAllOpenInteractions")
             scheduleSnapshotSave()
         } catch {
             print("[store] refreshAllOpenInteractions failed: \(error)")
@@ -1011,7 +1016,22 @@ final class TodoStore {
             cronJobs.sort { $0.created_at > $1.created_at }
         }
         notifyCronHandoffIfNeeded()
+        auditWaitingStateConsistency(context: "upsertCronJob")
         scheduleSnapshotSave()
+    }
+
+    private func auditWaitingStateConsistency(context: String) {
+        for todo in todos where todo.status == .needs_input {
+            guard openInteractions[todo.id] == nil else { continue }
+            let key = "todo:\(todo.id):needs_input:no_open_interaction:\(todo.updated_at.timeIntervalSince1970)"
+            guard waitingAuditLogKeys.insert(key).inserted else { continue }
+            print("[store][waiting_audit] \(context) todo=\(todo.id) status=needs_input missing open interaction")
+        }
+        for job in cronJobs where job.state == .needs_input {
+            let key = "cron:\(job.id):needs_input:\(job.updated_at.timeIntervalSince1970)"
+            guard waitingAuditLogKeys.insert(key).inserted else { continue }
+            print("[store][waiting_audit] \(context) cron=\(job.id) state=needs_input; list card should route to detail reply")
+        }
     }
 
     private func patchCronJobLocal(id: UUID, _ mutate: (inout CronJob) -> Void) {

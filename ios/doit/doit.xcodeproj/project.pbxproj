@@ -50,6 +50,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D5CFG000000000000000001 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		D5CFG000000000000000002 /* Local.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.example.xcconfig; sourceTree = "<group>"; };
 		D5D7BA982FC9038E00DEF739 /* doit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = doit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5D7BAA52FC9038F00DEF739 /* doitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = doitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5D7BAAF2FC9038F00DEF739 /* doitUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = doitUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -107,9 +109,19 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		D5CFG000000000000000003 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				D5CFG000000000000000001 /* Base.xcconfig */,
+				D5CFG000000000000000002 /* Local.example.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		D5D7BA8F2FC9038E00DEF739 = {
 			isa = PBXGroup;
 			children = (
+				D5CFG000000000000000003 /* Config */,
 				D5D7BA9A2FC9038E00DEF739 /* doit */,
 				D5D7BB0000000000DEF73901 /* Shared */,
 				D5D7BB0000000000DEF73902 /* doitActivityWidget */,
@@ -354,6 +366,7 @@
 /* Begin XCBuildConfiguration section */
 		D5D7BAB72FC9038F00DEF739 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -387,7 +400,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -418,6 +431,7 @@
 		};
 		D5D7BAB82FC9038F00DEF739 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -451,7 +465,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -475,6 +489,7 @@
 		};
 		D5D7BABA2FC9038F00DEF739 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -482,27 +497,16 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 7;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSCameraUsageDescription = "doit uses the camera to attach photos to your tasks.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "doit uses your location to suggest nearby tasks and automations.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "doit uses the microphone to capture voice notes that we transcribe into your task.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "doit attaches selected photos to your tasks.";
-				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
-				INFOPLIST_KEY_NSSupportsLiveActivitiesFrequentUpdates = YES;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AppInfo.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doit;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -517,6 +521,7 @@
 		};
 		D5D7BABB2FC9038F00DEF739 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -524,27 +529,16 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 7;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSCameraUsageDescription = "doit uses the camera to attach photos to your tasks.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "doit uses your location to suggest nearby tasks and automations.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "doit uses the microphone to capture voice notes that we transcribe into your task.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "doit attaches selected photos to your tasks.";
-				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
-				INFOPLIST_KEY_NSSupportsLiveActivitiesFrequentUpdates = YES;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AppInfo.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doit;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -559,15 +553,16 @@
 		};
 		D5D7BABD2FC9038F00DEF739 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doitTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_TESTS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -581,15 +576,16 @@
 		};
 		D5D7BABE2FC9038F00DEF739 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doitTests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_TESTS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -603,13 +599,14 @@
 		};
 		D5D7BAC02FC9038F00DEF739 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doitUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_UITESTS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -623,13 +620,14 @@
 		};
 		D5D7BAC12FC9038F00DEF739 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doitUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_UITESTS_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -643,6 +641,7 @@
 		};
 		D5D7BB0000000000DEF73950 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -653,7 +652,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = doitActivityWidgetInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -663,7 +662,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.01;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doit.doitActivityWidget;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_WIDGET_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -675,6 +674,7 @@
 		};
 		D5D7BB0000000000DEF73951 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = D5CFG000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -685,7 +685,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 433N42F295;
+				DEVELOPMENT_TEAM = "$(DOIT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = doitActivityWidgetInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
@@ -695,7 +695,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.01;
-				PRODUCT_BUNDLE_IDENTIFIER = com.newmaterial.doit.doitActivityWidget;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(DOIT_WIDGET_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

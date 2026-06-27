@@ -13,10 +13,10 @@ Run this after applying the Supabase migration and deploying the runner/iOS app.
 
 ## VM Checks
 
-On the DigitalOcean VM, verify the projected Hermes file:
+On the VM/VPS that runs Hermes, verify the projected Hermes file:
 
 ```bash
-sudo sed -n '1,160p' /root/.hermes/profiles/gabriel/memories/USER.md
+sudo sed -n '1,160p' /root/.hermes/profiles/<profile>/memories/USER.md
 ```
 
 Expected: the active signoff memory appears in `USER.md`.

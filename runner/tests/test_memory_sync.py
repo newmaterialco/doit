@@ -31,7 +31,7 @@ class MemorySourceOfTruthSyncTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = HermesMemoryStore(
             Path(self.tmp.name),
-            "gabriel",
+            "test-profile",
             user_char_limit=1375,
             memory_char_limit=2200,
         )

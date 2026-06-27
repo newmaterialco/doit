@@ -602,7 +602,7 @@ class HermesLifecycleAudioCacheTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             profiles = Path(tmp) / "profiles"
-            cache = profiles / "gabriel" / "audio_cache"
+            cache = profiles / "test-profile" / "audio_cache"
             cache.mkdir(parents=True)
             old = cache / "tts_old.mp3"
             new = cache / "tts_new.mp3"
@@ -615,7 +615,7 @@ class HermesLifecycleAudioCacheTests(unittest.TestCase):
 
             found = _find_latest_hermes_tts_audio(
                 cfg,  # type: ignore[arg-type]
-                profile_name="gabriel",
+                profile_name="test-profile",
                 since=now - 10,
             )
 
@@ -628,7 +628,7 @@ class HermesLifecycleAudioCacheTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             profiles = Path(tmp) / "profiles"
-            cache = profiles / "gabriel" / "audio_cache"
+            cache = profiles / "test-profile" / "audio_cache"
             cache.mkdir(parents=True)
             old = cache / "tts_old.mp3"
             old.write_bytes(b"old")
@@ -638,7 +638,7 @@ class HermesLifecycleAudioCacheTests(unittest.TestCase):
 
             found = _find_latest_hermes_tts_audio(
                 cfg,  # type: ignore[arg-type]
-                profile_name="gabriel",
+                profile_name="test-profile",
                 since=now - 10,
             )
 

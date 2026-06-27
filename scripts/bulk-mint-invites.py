@@ -25,13 +25,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_URL = "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin"
-DEFAULT_REST_URL = "https://qjeutitqgdsasccxfxdy.supabase.co/rest/v1/invite_codes"
-DEFAULT_ANON = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
-    "eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZXV0aXRxZ2RzYXNjY3hmeGR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwMTMzNjksImV4cCI6MjA5NTU4OTM2OX0."
-    "j2yU_6HTLh6WJaPUFsG3vdgd0cK6VHFXm6XYW_cb26U"
-)
+DEFAULT_URL = "https://YOUR_PROJECT_REF.supabase.co/functions/v1/admin"
+DEFAULT_REST_URL = "https://YOUR_PROJECT_REF.supabase.co/rest/v1/invite_codes"
+DEFAULT_ANON = "YOUR_SUPABASE_ANON_KEY"
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 

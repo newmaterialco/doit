@@ -150,9 +150,9 @@ class BuildFollowupPromptTests(unittest.TestCase):
                     {
                         "kind": "link",
                         "key": "website",
-                        "title": "Hello Gabe website",
+                        "title": "Hello Example website",
                         "provider": "github",
-                        "url": "https://gabrielmitchell.github.io/hello-gabe-website/",
+                        "url": "https://example-user.github.io/hello-example-website/",
                     }
                 ],
                 "artifacts": [],
@@ -163,7 +163,7 @@ class BuildFollowupPromptTests(unittest.TestCase):
         self.assertIn("Current deliverables to continue from:", prompt)
         self.assertIn("key=website", prompt)
         self.assertIn("provider=github", prompt)
-        self.assertIn("https://gabrielmitchell.github.io/hello-gabe-website/", prompt)
+        self.assertIn("https://example-user.github.io/hello-example-website/", prompt)
         self.assertIn("instead of starting over", prompt)
 
     def test_context_without_messages_still_includes_deliverables(self) -> None:
@@ -176,9 +176,9 @@ class BuildFollowupPromptTests(unittest.TestCase):
                     {
                         "kind": "link",
                         "key": "github-repo",
-                        "title": "hello-gabe-website repo",
+                        "title": "hello-example-website repo",
                         "provider": "github",
-                        "url": "https://github.com/gabrielmitchell/hello-gabe-website",
+                        "url": "https://github.com/example-user/hello-example-website",
                     }
                 ],
                 "artifacts": [],
@@ -188,7 +188,7 @@ class BuildFollowupPromptTests(unittest.TestCase):
         )
         self.assertIn("Previous context for this task:", prompt)
         self.assertIn("Current deliverables to continue from:", prompt)
-        self.assertIn("https://github.com/gabrielmitchell/hello-gabe-website", prompt)
+        self.assertIn("https://github.com/example-user/hello-example-website", prompt)
         self.assertNotIn("The user sent a follow-up message", prompt)
 
     def test_empty_context_block_is_omitted(self) -> None:

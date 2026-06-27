@@ -157,7 +157,7 @@ and headers generated from that same key:
 ```bash
 python3 -m venv ~/composio-session-venv
 ~/composio-session-venv/bin/pip install composio
-COMPOSIO_API_KEY=ak_... ~/composio-session-venv/bin/python - <<'PY'
+COMPOSIO_API_KEY=YOUR_COMPOSIO_API_KEY ~/composio-session-venv/bin/python - <<'PY'
 from composio import Composio
 
 # Keep in sync with supabase/functions/integrations/index.ts CATALOG and
@@ -446,11 +446,11 @@ cp .env.example .env  # fill in SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, APNS_*
 # Also set HERMES_PROFILES_DIR to the profile directory owner, for example:
 # HERMES_PROFILES_DIR=/home/doit/.hermes/profiles
 # Add Doit's global provider keys here too:
-# OPENAI_API_KEY=sk-proj-...
-# ANTHROPIC_API_KEY=sk-ant-...
-# OPENROUTER_API_KEY=sk-or-v1-...
+# OPENAI_API_KEY=YOUR_OPENAI_API_KEY
+# ANTHROPIC_API_KEY=YOUR_ANTHROPIC_API_KEY
+# OPENROUTER_API_KEY=YOUR_OPENROUTER_API_KEY
 # Add Browserbase keys, then sync them to ~/.hermes/.env:
-# BROWSERBASE_API_KEY=bb_live_...
+# BROWSERBASE_API_KEY=YOUR_BROWSERBASE_API_KEY
 # BROWSERBASE_PROJECT_ID=...
 # Enable on-demand browse.sh preflight:
 # BROWSE_SKILL_AUTO_INSTALL=true
@@ -488,7 +488,7 @@ To add or rotate the OpenRouter key later without putting it directly in shell
 history:
 
 ```bash
-ssh root@162.243.30.100
+ssh root@YOUR_VM_IP
 cd /opt/doit/runner
 cp .env ".env.backup.$(date +%Y%m%d%H%M%S)"
 read -rsp 'OPENROUTER_API_KEY: ' OPENROUTER_API_KEY; echo

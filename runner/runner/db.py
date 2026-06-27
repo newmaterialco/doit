@@ -449,6 +449,28 @@ class DB:
         rows = resp.data or []
         return rows[0] if rows else None
 
+    def list_waiting_todos_for_reminder(
+        self,
+        *,
+        older_than: datetime,
+        limit: int = 25,
+    ) -> list[dict]:
+        """Todos paused on the user long enough to warrant a reminder."""
+        try:
+            resp = (
+                self._client.table("todos")
+                .select("id,user_id,title,status,updated_at")
+                .in_("status", ["needs_input", "needs_auth"])
+                .lt("updated_at", _iso_z(older_than))
+                .order("updated_at")
+                .limit(limit)
+                .execute()
+            )
+            return resp.data or []
+        except Exception as e:
+            log.error("list_waiting_todos_for_reminder failed: %s", e)
+            return []
+
     def get_todo_organization_examples(
         self,
         user_id: str,

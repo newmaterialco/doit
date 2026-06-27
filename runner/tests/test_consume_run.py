@@ -8,6 +8,7 @@ Pure stdlib + fakes — no Supabase / Hermes / network.
 """
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from typing import Any
@@ -141,6 +142,17 @@ class _FakeHermes:
         return {}
 
 
+class _HangingBrowserHermes(_FakeHermes):
+    async def stream_events(self, run_id: str):
+        name, data = _tool_started(
+            "browser_navigate",
+            preview="url=https://hardingpark.ezlinksgolf.com",
+        )
+        yield SimpleNamespace(event=name, data=data)
+        while run_id not in self.stopped_runs:
+            await asyncio.sleep(0.01)
+
+
 def _tool_started(name: str = "GMAIL_FETCH_EMAILS", preview: str | None = None) -> tuple[str, dict]:
     data: dict = {"event": "tool.started", "tool": name}
     if preview is not None:
@@ -180,6 +192,7 @@ async def _run(
     events: list[tuple[str, dict]],
     db: _FakeRunnerDB,
     *,
+    cfg: Any | None = None,
     hermes: _FakeHermes | None = None,
     todo: dict | None = None,
     pusher: _FakePusher | None = None,
@@ -188,7 +201,7 @@ async def _run(
     from runner.runner import _consume_run
 
     return await _consume_run(
-        _CFG,  # type: ignore[arg-type]
+        cfg or _CFG,  # type: ignore[arg-type]
         db,  # type: ignore[arg-type]
         pusher or _FakePusher(),  # type: ignore[arg-type]
         hermes or _FakeHermes(events),  # type: ignore[arg-type]
@@ -305,7 +318,7 @@ class SilentDoneFixTests(unittest.IsolatedAsyncioTestCase):
                 _tool_started("COMPOSIO_GITHUB_CREATE_REPOSITORY"),
                 _tool_completed(
                     "COMPOSIO_GITHUB_CREATE_REPOSITORY",
-                    '{"html_url":"https://github.com/gabrielmitchell/hello-gabe-website"}',
+                    '{"html_url":"https://github.com/example-user/hello-example-website"}',
                 ),
                 _final_response("Done — created the repository."),
             ],
@@ -323,7 +336,7 @@ class SilentDoneFixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(promoted), 1)
         self.assertEqual(
             promoted[0]["payload"]["url"],
-            "https://github.com/gabrielmitchell/hello-gabe-website",
+            "https://github.com/example-user/hello-example-website",
         )
 
 
@@ -344,6 +357,33 @@ class BrowserFailureMessageTests(unittest.IsolatedAsyncioTestCase):
         terminal_activity = db.activity[-1]
         self.assertEqual(terminal_activity["title"], "Browser disconnected")
         self.assertEqual(terminal_activity["detail"], raw)
+
+    async def test_prolonged_browser_silence_fails_retryably(self) -> None:
+        db = _FakeRunnerDB()
+        hermes = _HangingBrowserHermes([])
+        cfg = SimpleNamespace(
+            hermes_profiles_dir="/tmp/doit-test-profiles",
+            stall_timeout_secs=0.01,
+            browser_silence_timeout_secs=0.02,
+            activity_heartbeat_interval_secs=0.01,
+        )
+
+        terminal = await _run([], db, cfg=cfg, hermes=hermes)
+
+        self.assertEqual(terminal, "failed")
+        self.assertEqual(hermes.stopped_runs, ["run-1"])
+        failed_updates = [u for u in db.todo_updates if u.get("status") == "failed"]
+        self.assertTrue(failed_updates)
+        self.assertIn(
+            "browser session stopped making progress",
+            failed_updates[-1]["error_message"],
+        )
+        error_steps = [s for s in db.steps if s["kind"] == "error"]
+        self.assertTrue(error_steps)
+        self.assertIn("Try again", error_steps[-1]["text"])
+        terminal_activity = db.activity[-1]
+        self.assertEqual(terminal_activity["state"], "failed")
+        self.assertEqual(terminal_activity["title"], "Browser stalled")
 
 
 class TimeoutMessageTests(unittest.TestCase):
@@ -438,16 +478,49 @@ class OutboundSendGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(db.interactions), 1)
 
 
+class InteractionRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_malformed_interaction_block_pauses_for_input(self) -> None:
+        malformed = (
+            "[[DOIT_INTERACTION]]\n"
+            '{"kind":"approval","prompt":"Send this email to Sam?" '
+            '"payload":{"content":"Hi Sam"}}\n'
+            "[[/DOIT_INTERACTION]]"
+        )
+        db = _FakeRunnerDB()
+        terminal = await _run([_final_response(malformed)], db)
+
+        self.assertEqual(terminal, "needs_input")
+        self.assertEqual(len(db.interactions), 1)
+        interaction = db.interactions[0]
+        self.assertEqual(interaction["kind"], "question")
+        self.assertIn("Sam", interaction["prompt"])
+        self.assertTrue(interaction["payload"]["allow_freeform"])
+        statuses = [u.get("status") for u in db.todo_updates]
+        self.assertIn("needs_input", statuses)
+        self.assertNotIn("done", statuses)
+
+    async def test_plain_question_final_pauses_for_input(self) -> None:
+        db = _FakeRunnerDB()
+        terminal = await _run(
+            [_final_response("Which email address should I send this to?")],
+            db,
+        )
+
+        self.assertEqual(terminal, "needs_input")
+        self.assertEqual(len(db.interactions), 1)
+        self.assertEqual(db.interactions[0]["kind"], "question")
+        self.assertTrue(db.interactions[0]["payload"]["allow_freeform"])
+
+
 class PlaceholderGateTests(unittest.IsolatedAsyncioTestCase):
     """Phase 4b: placeholder content in outbound drafts blocks `done`."""
 
-    async def test_log_only_by_default_still_completes(self) -> None:
+    async def test_can_disable_gate_for_log_only(self) -> None:
         import os
         from unittest import mock
 
         db = _FakeRunnerDB()
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("DOIT_PLACEHOLDER_GATE", None)
+        with mock.patch.dict(os.environ, {"DOIT_PLACEHOLDER_GATE": "log-only"}):
             terminal = await _run(
                 [_final_response(_email_artifact_reply("john@example.com", "Hi"))],
                 db,
@@ -542,15 +615,14 @@ class StructuredRepairTests(unittest.IsolatedAsyncioTestCase):
             _final_response("Drafted the email to Sam."),
         ]
 
-    async def test_disabled_by_default_no_repair_run(self) -> None:
+    async def test_can_disable_repair(self) -> None:
         import os
         from unittest import mock
 
         events = self._email_done_events()
         hermes = _FakeHermes(events, repair_reply=_REPAIR_ARTIFACT_REPLY)
         db = _FakeRunnerDB()
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("DOIT_STRUCTURED_REPAIR", None)
+        with mock.patch.dict(os.environ, {"DOIT_STRUCTURED_REPAIR": "0"}):
             terminal = await _run(events, db, hermes=hermes, todo=_EMAIL_TODO)
 
         self.assertEqual(terminal, "done")

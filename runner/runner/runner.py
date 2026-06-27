@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1601,19 +1601,11 @@ def _symbol_name(category: str | None) -> str:
 
 
 def _placeholder_gate_enforced() -> bool:
-    """Whether placeholder detection blocks completion (vs log-only).
-
-    Off by default per the rollout plan: the gate first ships log-only
-    ("would have blocked") so we can review real-world hits before letting
-    it flip a `done` into `needs_input`.
-    """
-    return os.getenv("DOIT_PLACEHOLDER_GATE", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "enforce",
-    }
+    """Whether placeholder detection blocks completion (vs log-only)."""
+    value = os.getenv("DOIT_PLACEHOLDER_GATE", "").strip().lower()
+    if value in {"0", "false", "no", "off", "log", "log-only"}:
+        return False
+    return True
 
 
 # Artifact kinds whose payloads carry outbound user-facing content (recipient
@@ -1628,18 +1620,11 @@ _PLACEHOLDER_NEEDS_INPUT_PROMPT = (
 
 
 def _structured_repair_enabled() -> bool:
-    """Whether the one-shot format-repair retry is on (DOIT_STRUCTURED_REPAIR).
-
-    Off by default: premium models almost never drop the structured blocks,
-    so the extra Hermes turn would be pure cost. The flag exists to catch
-    smaller-model dropouts (task finished, blocks missing).
-    """
-    return os.getenv("DOIT_STRUCTURED_REPAIR", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    """Whether the one-shot format-repair retry is on."""
+    value = os.getenv("DOIT_STRUCTURED_REPAIR", "").strip().lower()
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return True
 
 
 # Tasks whose deliverable is inherently structured (an email artifact, a
@@ -1778,7 +1763,7 @@ async def _attempt_structured_repair(
     db.insert_step(
         todo_id=todo_id,
         user_id=user_id,
-        kind="status",
+        kind="thought",
         text="repair_attempted: re-requesting missing structured output",
     )
     repair_run_id: str | None = None
@@ -1895,7 +1880,7 @@ async def _halt_for_unauthorized_outbound_send(
     db.insert_step(
         todo_id=todo_id,
         user_id=user_id,
-        kind="status",
+        kind="thought",
         text=(
             "Blocked an outbound send until you approve the draft on the "
             "review card."
@@ -2053,14 +2038,84 @@ async def _consume_run(
     # only — Hermes has no verified mid-run nudge channel yet) and drops
     # one step row so the transcript shows the gap too.
     stall_timeout = float(getattr(cfg, "stall_timeout_secs", 120.0) or 120.0)
+    browser_silence_timeout = float(
+        getattr(cfg, "browser_silence_timeout_secs", 300.0) or 300.0
+    )
+    heartbeat_interval = float(
+        getattr(cfg, "activity_heartbeat_interval_secs", 25.0) or 25.0
+    )
     last_progress_at = time.time()
     stall_step_written = False
+    browser_silence_failed = False
+
+    def browser_tool_active() -> bool:
+        return (
+            latest_activity is not None
+            and latest_activity.tool_category == "browser"
+            and latest_activity.phase in {"tool", "stalled"}
+        )
+
+    def browser_silence_message() -> str:
+        return (
+            "The browser session stopped making progress. Try again or narrow "
+            "the request."
+        )
 
     async def activity_heartbeat() -> None:
-        nonlocal stall_step_written
+        nonlocal browser_silence_failed, stall_step_written
         while True:
-            await asyncio.sleep(25)
-            stalled = (time.time() - last_progress_at) > stall_timeout
+            await asyncio.sleep(heartbeat_interval)
+            silence_for = time.time() - last_progress_at
+            if (
+                browser_silence_timeout > 0
+                and browser_tool_active()
+                and silence_for > browser_silence_timeout
+                and not browser_silence_failed
+            ):
+                browser_silence_failed = True
+                failure_text = browser_silence_message()
+                log.warning(
+                    "browser silence timeout after %.0fs todo=%s run=%s tool=%s",
+                    silence_for,
+                    todo_id,
+                    run_id,
+                    latest_activity.tool_name if latest_activity else None,
+                )
+                db.insert_step(
+                    todo_id=todo_id,
+                    user_id=user_id,
+                    kind="error",
+                    text=failure_text,
+                    tool_name=latest_activity.tool_name if latest_activity else None,
+                )
+                db.update_todo(
+                    todo_id,
+                    {"status": "failed", "error_message": failure_text},
+                )
+                terminal_snapshot = activity.mark_terminal(
+                    state="failed",
+                    phase="failed",
+                    title="Browser stalled",
+                    detail=failure_text,
+                )
+                if write_terminal_activity(terminal_snapshot):
+                    await _notify_live_activity_push(
+                        pusher,
+                        db,
+                        todo_id=todo_id,
+                        snapshot=terminal_snapshot,
+                    )
+                    await _notify_live_activity_sync(
+                        pusher,
+                        db,
+                        user_id=user_id,
+                        todo_id=todo_id,
+                        snapshot=terminal_snapshot,
+                    )
+                with suppress(Exception):
+                    await hermes.stop_run(run_id)
+                return
+            stalled = silence_for > stall_timeout
             if stalled:
                 if not stall_step_written:
                     stall_step_written = True
@@ -2071,7 +2126,7 @@ async def _consume_run(
                     db.insert_step(
                         todo_id=todo_id,
                         user_id=user_id,
-                        kind="status",
+                        kind="thought",
                         text="Still working — checking results…",
                     )
                 snapshot = activity.stalled(latest_activity)
@@ -2115,6 +2170,8 @@ async def _consume_run(
 
     try:
         async for ev in hermes.stream_events(run_id):
+            if browser_silence_failed:
+                break
             effect = translate(ev.event, ev.data)
             if effect is None:
                 continue
@@ -2350,7 +2407,7 @@ async def _consume_run(
                         kind="question",
                         prompt=_PLACEHOLDER_NEEDS_INPUT_PROMPT,
                         payload={
-                            "freeform": True,
+                            "allow_freeform": True,
                             "placeholder_matches": placeholder_hits[:10],
                         },
                         hermes_run_id=run_id,
@@ -2530,6 +2587,9 @@ async def _consume_run(
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
+
+    if browser_silence_failed and terminal is None:
+        terminal = "failed"
 
     if (
         terminal == "done"
@@ -3557,6 +3617,9 @@ _STALE_SCAN_INTERVAL_SECS = 30.0
 # provisioning is rare, and the onboarding screen sets expectations of
 # "about a minute".
 _PROVISION_POLL_INTERVAL_SECS = 10.0
+_WAITING_REMINDER_SCAN_INTERVAL_SECS = 15 * 60.0
+_WAITING_REMINDER_AFTER = timedelta(minutes=30)
+_WAITING_REMINDER_SENT: set[str] = set()
 
 
 async def _run_lease_heartbeat(db: DB, todo_id: str) -> None:
@@ -3657,6 +3720,41 @@ async def _provision_claimed_user(cfg: Config, db: DB, row: dict) -> None:
     await asyncio.to_thread(run_provisioning, cfg, db, row)
 
 
+async def _send_waiting_reminders(db: DB, pusher: Pusher) -> None:
+    cutoff = datetime.now(timezone.utc) - _WAITING_REMINDER_AFTER
+    for todo in db.list_waiting_todos_for_reminder(older_than=cutoff):
+        todo_id = str(todo.get("id") or "")
+        user_id = str(todo.get("user_id") or "")
+        status = str(todo.get("status") or "")
+        updated_at = str(todo.get("updated_at") or "")
+        if not todo_id or not user_id:
+            continue
+        key = f"{todo_id}:{status}:{updated_at}"
+        if key in _WAITING_REMINDER_SENT:
+            continue
+        _WAITING_REMINDER_SENT.add(key)
+        title = "Still waiting on you"
+        if status == "needs_auth":
+            body = "Connect the account in Doit so the agent can continue."
+            kind = "oauth_needed"
+        else:
+            body = "Open the task to answer the agent and keep it moving."
+            kind = "needs_input"
+        log.info(
+            "waiting_reminder todo=%s user=%s status=%s updated_at=%s",
+            todo_id,
+            user_id,
+            status,
+            updated_at,
+        )
+        invalid = await pusher.send(
+            db.list_apns_tokens(user_id),
+            PushPayload(title=title, body=body, todo_id=todo_id, kind=kind),
+        )
+        for token in invalid:
+            db.delete_apns_token(token)
+
+
 async def main_loop() -> None:
     setup_logging()
     cfg = load()
@@ -3673,6 +3771,7 @@ async def main_loop() -> None:
     )
     last_stale_scan = 0.0
     last_provision_scan = 0.0
+    last_waiting_reminder_scan = 0.0
 
     while True:
         if not pool.has_capacity:
@@ -3682,6 +3781,14 @@ async def main_loop() -> None:
             continue
 
         capped_users = gates.users_at_exec_cap(cfg.max_runs_per_user)
+        now = time.time()
+
+        if now - last_waiting_reminder_scan >= _WAITING_REMINDER_SCAN_INTERVAL_SECS:
+            last_waiting_reminder_scan = now
+            try:
+                await _send_waiting_reminders(db, pusher)
+            except Exception:
+                log.exception("waiting reminder scan failed")
 
         # Preparation is short and user-facing (the card spinner sits there
         # until we finish), so it gets first dibs each tick.
@@ -3747,7 +3854,6 @@ async def main_loop() -> None:
         # Periodically recover work stranded in `running` by a crashed
         # runner (stale execution lease).
         if todo is None:
-            now = time.time()
             if now - last_stale_scan >= _STALE_SCAN_INTERVAL_SECS:
                 last_stale_scan = now
                 todo = db.claim_stale_running_todo(exclude_user_ids=capped_users)

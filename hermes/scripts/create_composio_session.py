@@ -6,8 +6,8 @@ connects an API-key integration (e.g. Hunter). Pass --patch to update the
 existing session in config.yaml without changing the MCP URL.
 
 Usage:
-    COMPOSIO_API_KEY=ak_... python create_composio_session.py <supabase-user-uuid>
-    COMPOSIO_API_KEY=ak_... python create_composio_session.py <uuid> --patch ~/.hermes/profiles/gabriel/config.yaml
+    COMPOSIO_API_KEY=YOUR_COMPOSIO_API_KEY python create_composio_session.py <supabase-user-uuid>
+    COMPOSIO_API_KEY=YOUR_COMPOSIO_API_KEY python create_composio_session.py <uuid> --patch ~/.hermes/profiles/<profile>/config.yaml
 """
 from __future__ import annotations
 

@@ -194,6 +194,22 @@ class AgentActivityServiceTests(unittest.TestCase):
         self.assertEqual(snap.tool_category, "browser")
         self.assertEqual(snap.detail, "url=https://example.com")
 
+    def test_browser_heartbeat_updates_copy_but_keeps_context(self) -> None:
+        svc = AgentActivityService()
+        latest = svc.observe(
+            _started("browser_snapshot", text="Using browser_snapshot. url=https://example.com")
+        )
+        assert latest is not None
+
+        snap = svc.heartbeat(latest)
+
+        self.assertEqual(snap.phase, "tool")
+        self.assertEqual(snap.state, "running")
+        self.assertEqual(snap.title, "Browsing the site…")
+        self.assertEqual(snap.tool_name, "browser_snapshot")
+        self.assertEqual(snap.tool_category, "browser")
+        self.assertEqual(snap.detail, "url=https://example.com")
+
     def test_terminal_browse_command_has_browser_label(self) -> None:
         svc = AgentActivityService()
         snap = svc.observe(
@@ -363,6 +379,23 @@ class StalledSnapshotTests(unittest.TestCase):
         self.assertEqual(snap.tool_name, "GMAIL_SEARCH_EMAILS")
         assert snap.detail is not None
         self.assertIn("Still on:", snap.detail)
+
+    def test_stalled_browser_context_uses_browser_copy(self) -> None:
+        svc = AgentActivityService()
+        latest = svc.observe(
+            _started("browser_navigate", text="Using browser_navigate. url=https://example.com")
+        )
+        assert latest is not None
+
+        snap = svc.stalled(latest)
+
+        self.assertEqual(snap.phase, "stalled")
+        self.assertEqual(snap.state, "running")
+        self.assertEqual(snap.title, "Browser is taking longer than usual")
+        self.assertEqual(snap.tool_name, "browser_navigate")
+        self.assertEqual(snap.tool_category, "browser")
+        assert snap.detail is not None
+        self.assertIn("Still waiting on:", snap.detail)
 
     def test_stalled_differs_from_heartbeat_phase(self) -> None:
         svc = AgentActivityService()

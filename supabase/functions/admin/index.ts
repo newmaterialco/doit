@@ -21,6 +21,12 @@
 //                          -> updates invite_codes.email_sent
 //   { action: "delete_invite", code }
 //                          -> deletes unused invite_codes row
+//   { action: "premium_model_users" }
+//                          -> { users: [{ user_id, email, note, created_at }] }
+//   { action: "grant_premium_models", user_id, note? }
+//                          -> grants premium model access
+//   { action: "revoke_premium_models", user_id }
+//                          -> revokes premium model access
 //   { action: "issues", limit?, offset?, kind? }
 //                          -> { issues: [...], total_count, summary }
 
@@ -154,7 +160,25 @@ serve(async (req) => {
                     const { total_count: _tc, ...user } = row;
                     return user;
                 });
-                return json({ users, total_count: totalCount });
+                const userIds = users
+                    .map((user) => String(user.user_id ?? ""))
+                    .filter(Boolean);
+                const premiumUserIds = new Set<string>();
+                if (userIds.length > 0) {
+                    const { data: premiumRows, error: premiumErr } = await serviceClient
+                        .from("premium_model_users")
+                        .select("user_id")
+                        .in("user_id", userIds);
+                    if (premiumErr) throw premiumErr;
+                    for (const row of premiumRows ?? []) {
+                        premiumUserIds.add(String(row.user_id));
+                    }
+                }
+                const usersWithPremiumAccess = users.map((user) => ({
+                    ...user,
+                    premium_model_access: premiumUserIds.has(String(user.user_id ?? "")),
+                }));
+                return json({ users: usersWithPremiumAccess, total_count: totalCount });
             }
             case "user_options": {
                 const { data, error } = await serviceClient.rpc("admin_user_options");
@@ -283,6 +307,55 @@ serve(async (req) => {
                     .single();
                 if (error) throw error;
                 return json({ invite: data });
+            }
+            case "premium_model_users": {
+                const [premiumResp, usersResp] = await Promise.all([
+                    serviceClient
+                        .from("premium_model_users")
+                        .select("user_id,note,created_at")
+                        .order("created_at", { ascending: false }),
+                    serviceClient.rpc("admin_user_options"),
+                ]);
+                if (premiumResp.error) throw premiumResp.error;
+                if (usersResp.error) throw usersResp.error;
+
+                const emailsByUserId = new Map(
+                    (usersResp.data ?? []).map((user: Record<string, unknown>) => [
+                        String(user.user_id),
+                        user.email ?? null,
+                    ]),
+                );
+                const users = (premiumResp.data ?? []).map((row) => ({
+                    ...row,
+                    email: emailsByUserId.get(String(row.user_id)) ?? null,
+                }));
+                return json({ users });
+            }
+            case "grant_premium_models": {
+                const userId = (body.user_id ?? "").trim();
+                if (!userId) {
+                    return json({ error: "user_id_required" }, 400);
+                }
+                const note = (body.note ?? "").trim() || null;
+                const { data, error } = await serviceClient
+                    .from("premium_model_users")
+                    .upsert({ user_id: userId, note }, { onConflict: "user_id" })
+                    .select("user_id,note,created_at")
+                    .single();
+                if (error) throw error;
+                return json({ user: data });
+            }
+            case "revoke_premium_models": {
+                const userId = (body.user_id ?? "").trim();
+                if (!userId) {
+                    return json({ error: "user_id_required" }, 400);
+                }
+                const { error } = await serviceClient
+                    .from("premium_model_users")
+                    .delete()
+                    .eq("user_id", userId);
+                if (error) throw error;
+                return json({ ok: true, user_id: userId });
             }
             case "delete_invite": {
                 const code = (body.code ?? "").trim().toUpperCase();

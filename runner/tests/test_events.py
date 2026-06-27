@@ -134,6 +134,28 @@ class OutboundSendGateTests(unittest.TestCase):
         self.assertFalse(outbound_send_approved_from_resume(None))
 
 
+class HermesToolProgressTests(unittest.TestCase):
+    def test_browser_progress_preserves_action_details(self) -> None:
+        effect = translate(
+            "hermes.tool.progress",
+            {
+                "event": "hermes.tool.progress",
+                "tool": "browser_navigate",
+                "message": "Loading tee times",
+                "url": "https://example.com/tee-times",
+                "status": "loading",
+            },
+        )
+
+        self.assertIsNotNone(effect)
+        assert effect is not None
+        self.assertEqual(effect.step_kind, "tool_started")
+        self.assertEqual(effect.tool_name, "browser_navigate")
+        self.assertIn("Loading tee times", effect.text or "")
+        self.assertIn("url=https://example.com/tee-times", effect.text or "")
+        self.assertIn("status=loading", effect.text or "")
+
+
 class PlaceholderDetectorTests(unittest.TestCase):
     """Phase 4a: catch fake content in drafts before it ships."""
 

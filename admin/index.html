@@ -218,14 +218,21 @@
       color: var(--ok);
       text-decoration: none;
     }
-    button.invite-delete-btn {
+    button.invite-delete-btn,
+    button.premium-model-btn {
       padding: 0.3rem 0.5rem;
       font-size: 0.75rem;
+    }
+    button.invite-delete-btn {
       background: transparent;
       color: var(--bad);
       border-color: var(--bad);
     }
-    button.invite-delete-btn:disabled {
+    button.premium-model-btn {
+      white-space: nowrap;
+    }
+    button.invite-delete-btn:disabled,
+    button.premium-model-btn:disabled {
       opacity: 0.35;
     }
     tr.failed td { background: rgba(185, 28, 28, 0.08); }
@@ -537,6 +544,7 @@
                     <th>Todos</th>
                     <th>Tokens</th>
                     <th>Last active</th>
+                    <th>Premium models</th>
                   </tr>
                 </thead>
                 <tbody></tbody>
@@ -720,8 +728,8 @@
   </div>
 
   <script>
-    const DEFAULT_URL = "https://qjeutitqgdsasccxfxdy.supabase.co/functions/v1/admin";
-    const DEFAULT_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZXV0aXRxZ2RzYXNjY3hmeGR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAwMTMzNjksImV4cCI6MjA5NTU4OTM2OX0.j2yU_6HTLh6WJaPUFsG3vdgd0cK6VHFXm6XYW_cb26U";
+    const DEFAULT_URL = "https://YOUR_PROJECT_REF.supabase.co/functions/v1/admin";
+    const DEFAULT_ANON = "YOUR_SUPABASE_ANON_KEY";
     const SECRET_KEY = "doit_admin_secret";
     const URL_KEY = "doit_admin_url";
     const PAGES = ["overview", "issues", "users", "feedback", "invites", "tasks"];
@@ -1018,14 +1026,28 @@
           <td>${u.todos_done}/${u.todos_total}${u.todos_failed ? ` <span class="muted">(${u.todos_failed} failed)</span>` : ""}</td>
           <td class="token-num">${fmtTokens(u.total_tokens)}</td>
           <td>${fmtDate(u.last_active_at)}</td>
+          <td>${premiumModelButton(u)}</td>
         </tr>`;
-      }).join("") || `<tr><td colspan="8" class="muted">No users</td></tr>`;
+      }).join("") || `<tr><td colspan="9" class="muted">No users</td></tr>`;
+    }
+
+    function premiumModelButton(user) {
+      const hasAccess = user.premium_model_access === true;
+      const action = hasAccess ? "revoke" : "grant";
+      const label = hasAccess ? "Revoke" : "Grant";
+      const title = hasAccess ? "Premium model access enabled" : "Premium model access locked";
+      const secondary = hasAccess ? " secondary" : "";
+      return `<button type="button" class="premium-model-btn${secondary}"
+        data-action="${action}"
+        data-user-id="${escapeAttr(user.user_id)}"
+        data-email="${escapeAttr(user.email || user.user_id)}"
+        title="${title}">${label}</button>`;
     }
 
     function renderUsersUnavailable() {
       $("users-loading").classList.add("hidden");
       const tbody = $("users-table").querySelector("tbody");
-      tbody.innerHTML = `<tr><td colspan="8" class="muted">Deploy the updated admin function to load users.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="muted">Deploy the updated admin function to load users.</td></tr>`;
       updatePaginationUI({
         offset: 0, total: 0, rowCount: 0,
         prevId: "users-prev-btn", nextId: "users-next-btn", labelId: "users-page-label",
@@ -1073,6 +1095,22 @@
         }).join("");
       if (current && [...select.options].some(o => o.value === current)) {
         select.value = current;
+      }
+    }
+
+    async function setPremiumModelAccess(userId, email, enable) {
+      if (!enable && !confirm(`Revoke premium model access for ${email}?`)) return;
+      $("users-error").classList.add("hidden");
+      try {
+        await api(enable ? "grant_premium_models" : "revoke_premium_models", {
+          user_id: userId,
+          note: enable ? "admin dashboard" : undefined,
+        });
+        pageLoaded.users = false;
+        await loadUsers();
+      } catch (err) {
+        $("users-error").textContent = String(err.message || err);
+        $("users-error").classList.remove("hidden");
       }
     }
 
@@ -1591,6 +1629,18 @@
       loadFn: loadUsers,
       prevId: "users-prev-btn",
       nextId: "users-next-btn",
+    });
+
+    $("users-table").addEventListener("click", (e) => {
+      const btn = e.target.closest(".premium-model-btn");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setPremiumModelAccess(
+        btn.dataset.userId,
+        btn.dataset.email,
+        btn.dataset.action === "grant",
+      );
     });
 
     bindPagination({

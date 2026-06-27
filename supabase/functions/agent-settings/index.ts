@@ -67,6 +67,12 @@ const CATALOG: ProviderOption[] = [
                 description: "Kimi option for agentic tool use and multimodal reasoning at moderate cost.",
             },
             {
+                id: "moonshotai/kimi-k2.6",
+                name: "Kimi K2.6",
+                label: "Efficient+",
+                description: "Latest Kimi for long-horizon coding, multimodal agent work, and multi-step tool use.",
+            },
+            {
                 id: "moonshotai/kimi-k2-thinking",
                 name: "Kimi K2 Thinking",
                 label: "Strong Reasoning",
@@ -163,9 +169,23 @@ function modelIsSupported(provider: ProviderOption, model: string | undefined): 
     return Boolean(modelEntry(provider, model));
 }
 
-function modelIsSelectable(provider: ProviderOption, model: string | undefined): boolean {
+function modelIsSelectable(
+    provider: ProviderOption,
+    model: string | undefined,
+    hasPremiumModelAccess: boolean,
+): boolean {
     const entry = modelEntry(provider, model);
-    return Boolean(entry && !entry.locked);
+    return Boolean(entry && (!entry.locked || hasPremiumModelAccess));
+}
+
+function catalogForAccess(hasPremiumModelAccess: boolean): ProviderOption[] {
+    if (!hasPremiumModelAccess) return CATALOG;
+    return CATALOG.map((provider) => ({
+        ...provider,
+        models: provider.models.map((model) =>
+            model.locked ? { ...model, locked: false } : model
+        ),
+    }));
 }
 
 function sanitizeSetting(row: AgentModelSetting | null): AgentModelSetting | null {
@@ -179,6 +199,19 @@ function sanitizeSetting(row: AgentModelSetting | null): AgentModelSetting | nul
         last_applied_at: row.last_applied_at,
         updated_at: row.updated_at,
     };
+}
+
+async function hasPremiumModelAccess(
+    serviceClient: ReturnType<typeof createClient>,
+    userId: string,
+): Promise<boolean> {
+    const { data, error } = await serviceClient
+        .from("premium_model_users")
+        .select("user_id")
+        .eq("user_id", userId)
+        .maybeSingle();
+    if (error) throw error;
+    return Boolean(data);
 }
 
 serve(async (req) => {
@@ -222,6 +255,7 @@ serve(async (req) => {
     try {
         switch (body.action) {
             case "get": {
+                const premiumModelAccess = await hasPremiumModelAccess(serviceClient, userId);
                 const { data, error } = await serviceClient
                     .from("agent_model_settings")
                     .select("user_id,provider,model,apply_status,apply_error,last_applied_at,updated_at")
@@ -229,12 +263,13 @@ serve(async (req) => {
                     .maybeSingle();
                 if (error) throw error;
                 return json({
-                    catalog: CATALOG,
+                    catalog: catalogForAccess(premiumModelAccess),
                     setting: sanitizeSetting(data),
                     default_selection: DEFAULT_SELECTION,
                 });
             }
             case "update": {
+                const premiumModelAccess = await hasPremiumModelAccess(serviceClient, userId);
                 const provider = providerFor(body.provider);
                 if (!provider) {
                     return json({ error: "unsupported_provider" }, 400);
@@ -242,7 +277,7 @@ serve(async (req) => {
                 if (!modelIsSupported(provider, body.model)) {
                     return json({ error: "unsupported_model" }, 400);
                 }
-                if (!modelIsSelectable(provider, body.model)) {
+                if (!modelIsSelectable(provider, body.model, premiumModelAccess)) {
                     return json({ error: "model_locked" }, 403);
                 }
 

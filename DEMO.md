@@ -22,7 +22,7 @@ Follow these in order. Each links to the file with the full instructions.
 6. **Edge Function** — deploy:
    ```bash
    supabase functions deploy integrations
-   supabase secrets set COMPOSIO_API_KEY=ck_xxx
+   supabase secrets set COMPOSIO_API_KEY=YOUR_COMPOSIO_API_KEY
    ```
 7. **Create your Hermes profile** on the VM — follow steps 5-6 in
    [`hermes/setup.md`](hermes/setup.md). End state: one `hermes-<name>` systemd
@@ -112,12 +112,12 @@ This is the demo that proves Hermes' built-in memory is actually doing the
 work — not a prompt workaround on our side.
 
 1. Create a todo "Send a test email to my personal email
-   gabemitchell93@gmail.com." Tap **Do it**. Approve the draft when prompted.
+   user@example.com." Tap **Do it**. Approve the draft when prompted.
    In the run's activity feed you should see an "Updating long-term memory:
    add: …" step — that's the agent calling its `memory` tool.
 2. Wait for the run to finish, then open **Settings > Memory**. Within a
    few seconds you should see a new "Learned by agent" entry under
-   **About you** like "Personal email: gabemitchell93@gmail.com" — that's
+   **About you** like "Personal email: user@example.com" — that's
    the agent writing to `USER.md` and the runner mirroring it back into
    Supabase.
 3. Create a second todo, "Send something short to my personal email about

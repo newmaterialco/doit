@@ -9,7 +9,7 @@ user only ever sees their own connections.
 
 ```bash
 supabase functions deploy integrations
-supabase secrets set COMPOSIO_API_KEY=ak_xxx
+supabase secrets set COMPOSIO_API_KEY=YOUR_COMPOSIO_API_KEY
 supabase secrets set COMPOSIO_MCP_SESSION_ID=trs_xxx   # from ~/.hermes/profiles/<profile>/config.yaml
 ```
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Quick capacity snapshot for the single-droplet beta setup.
+# Quick capacity snapshot for a hosted VM/VPS setup.
 # Run on the VM: /opt/doit/scripts/watch-vm-capacity.sh
 set -euo pipefail
 

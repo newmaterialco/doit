@@ -207,8 +207,7 @@ to the VM, installs bundled skills into `~/.hermes/skills`, and restarts
 deliberately excludes `.venv` (platform-specific) and `.env` (real secrets
 live only on the VM), so it's safe to re-run.
 
-Targeting a different VM is just env overrides — the defaults match the
-current droplet:
+Targeting a VM is just env overrides:
 
 ```bash
 DOIT_VM_HOST=root@<other-ip> DOIT_VM_PATH=/srv/doit/runner \
