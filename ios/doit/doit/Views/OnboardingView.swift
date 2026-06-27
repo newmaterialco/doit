@@ -182,9 +182,9 @@ struct OnboardingView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                PairingStep(number: 1, text: "Copy the command below.")
-                PairingStep(number: 2, text: "Run it on the machine that can reach Hermes.")
-                PairingStep(number: 3, text: "Keep the connector running while you use Doit.")
+                PairingStep(number: 1, text: "Copy the installer command.")
+                PairingStep(number: 2, text: "Run it on the VPS that can reach Hermes.")
+                PairingStep(number: 3, text: "Leave the service running while you use Doit.")
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -212,14 +212,18 @@ struct OnboardingView: View {
                 Text(prepared.pairing_code)
                     .font(.system(.title3, design: .monospaced).weight(.semibold))
                 Divider()
-                Text("Run this beside Hermes")
+                Text("Install connector on your VPS")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                Text("This clones Doit, creates a Python venv, and starts doit-connector.service.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(prepared.install_command)
                     .font(.system(size: 10, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Copy command") {
+                Button("Copy installer command") {
                     UIPasteboard.general.string = prepared.install_command
                 }
                 .font(.footnote.weight(.semibold))
@@ -231,7 +235,7 @@ struct OnboardingView: View {
                 Text("Need help?")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text("If you already have Hermes running, paste this prompt into Hermes and ask it to help you run the connector.")
+                Text("If Hermes has terminal access, paste this prompt into Hermes and ask it to run the installer.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -254,16 +258,17 @@ struct OnboardingView: View {
         """
         I want to connect my existing Hermes setup to the Doit iOS app using BYO connector mode.
 
-        Please help me figure out where to run this connector command. It should run on a machine that can reach my Hermes HTTP API, usually the same VPS/server where Hermes is already running.
+        Please help me run this Doit connector installer. It should run on the machine that can reach my Hermes HTTP API, usually the same VPS/server where Hermes is already running.
 
-        Connector command:
+        Installer command:
         \(prepared.install_command)
 
         Please check:
-        1. Whether Hermes is running and what host/port I should use for --hermes-url.
-        2. Whether I need a Hermes API key for --hermes-api-key.
-        3. The exact command I should paste into my terminal.
-        4. How to keep the connector running after I close SSH.
+        1. Whether Hermes is running and what host/port I should use for DOIT_HERMES_URL.
+        2. Whether I need a Hermes API key and should set DOIT_HERMES_API_KEY before running it.
+        3. Whether curl, git, python3, and systemd are available on this machine.
+        4. The final command I should paste into my terminal.
+        5. Whether doit-connector.service starts successfully after install.
         """
     }
 

@@ -152,33 +152,56 @@ curl http://127.0.0.1:8643/health
 If this fails, fix Hermes before pairing Doit. The connector can be online to
 Supabase while still unable to reach Hermes.
 
-### 2. Clone Doit
+### 2. Run The Installer Command From The App
+
+Copy the installer command shown in the iOS app and run it on the VPS. It looks
+like this:
+
+```bash
+DOIT_SUPABASE_URL="https://YOUR_PROJECT.supabase.co" \
+DOIT_SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY" \
+DOIT_CONNECTOR_TOKEN="doit_conn_..." \
+DOIT_HERMES_URL="http://127.0.0.1:8643" \
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/newmaterialco/doit/main/scripts/install-byo-connector.sh)"
+```
+
+If Hermes requires an API key, add `DOIT_HERMES_API_KEY="..."` before `bash`.
+
+### What The Installer Does
+
+The installer:
+
+- clones or updates `https://github.com/newmaterialco/doit.git`
+- creates a Python venv in `doit/runner/.venv`
+- installs `runner/requirements.txt`
+- checks `DOIT_HERMES_URL/health`
+- writes connector secrets to `/etc/doit/connector.env`
+- backs up any existing `/etc/systemd/system/doit-connector.service`
+- writes and starts `doit-connector.service`
+
+It does **not** install Hermes, expose Hermes publicly, self-host Supabase, or
+modify Hermes memory/profile files.
+
+### 3. Confirm The Connector Is Running
+
+```bash
+sudo systemctl status doit-connector.service --no-pager
+sudo journalctl -u doit-connector.service --no-pager -n 50
+```
+
+You should see `BYO connector online` in the logs. The app should change from
+`Waiting for connector...` to `Connector found`.
+
+### Manual Fallback
+
+Use this path if you do not want the installer to write a systemd service.
 
 ```bash
 git clone https://github.com/newmaterialco/doit.git
 cd doit/runner
-```
-
-The working directory matters. The Python package lives at `runner/runner`, so
-`python3 -m runner.connector` should be run from `doit/runner`.
-
-### 3. Create A Virtual Environment
-
-Ubuntu 24.04 and other PEP 668 systems block global `pip install`, so use a
-venv:
-
-```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 4. Run The Command From The App
-
-Copy the connector command shown in the iOS app and run it from `doit/runner`
-with the venv active. Use `python3` if your VPS does not provide `python`:
-
-```bash
 python3 -m runner.connector \
   --supabase-url "https://YOUR_PROJECT.supabase.co" \
   --supabase-anon-key "YOUR_SUPABASE_ANON_KEY" \
@@ -187,13 +210,13 @@ python3 -m runner.connector \
   --hermes-api-key "YOUR_LOCAL_HERMES_API_KEY"
 ```
 
-You should see `BYO connector online` in the logs. The app should change from
-`Waiting for connector...` to `Connector found`.
+The working directory matters. The Python package lives at `runner/runner`, so
+`python3 -m runner.connector` should be run from `doit/runner`.
 
-### 5. Run It With systemd
+### Manual systemd Service
 
-For a VPS, run the connector as a service so it survives SSH disconnects and
-reboots. Create `/etc/systemd/system/doit-connector.service`:
+If you use the installer, this service is created for you. If you are setting it
+up manually, create `/etc/systemd/system/doit-connector.service`:
 
 ```ini
 [Unit]

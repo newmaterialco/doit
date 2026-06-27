@@ -77,6 +77,10 @@ async function sha256Hex(value: string): Promise<string> {
         .join("");
 }
 
+function shellQuote(value: string): string {
+    return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function corsHeaders(): HeadersInit {
     return {
         "Access-Control-Allow-Origin": "*",
@@ -225,12 +229,14 @@ serve(async (req) => {
                     .select(CONNECTOR_COLUMNS)
                     .single();
                 if (error) throw error;
+                const installerURL =
+                    "https://raw.githubusercontent.com/newmaterialco/doit/main/scripts/install-byo-connector.sh";
                 const installCommand = [
-                    "python3 -m runner.connector",
-                    `--supabase-url "${SUPABASE_URL}"`,
-                    `--supabase-anon-key "${SUPABASE_ANON_KEY}"`,
-                    `--connector-token "${connectorToken}"`,
-                    "--hermes-url http://127.0.0.1:8643",
+                    `DOIT_SUPABASE_URL=${shellQuote(SUPABASE_URL)}`,
+                    `DOIT_SUPABASE_ANON_KEY=${shellQuote(SUPABASE_ANON_KEY)}`,
+                    `DOIT_CONNECTOR_TOKEN=${shellQuote(connectorToken)}`,
+                    `DOIT_HERMES_URL=${shellQuote("http://127.0.0.1:8643")}`,
+                    `bash -c "$(curl -fsSL ${shellQuote(installerURL)})"`,
                 ].join(" ");
                 return json({
                     connector: data as ConnectorRow,
