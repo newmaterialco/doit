@@ -173,7 +173,7 @@ struct OnboardingView: View {
                 Text("Pair your Hermes connector")
                     .font(.title2.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text("Doit uses your Hermes setup as-is. Your keys, connections, memory, and tools stay on your machine.")
+                Text("Doit uses your Hermes setup as-is. Your keys, connections, memory stay on your machine.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
@@ -305,11 +305,11 @@ private struct PairingStep: View {
     let text: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("\(number).")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 12, alignment: .leading)
+                .fixedSize(horizontal: true, vertical: false)
             Text(text)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
