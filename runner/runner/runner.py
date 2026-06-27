@@ -567,11 +567,15 @@ async def run_one_todo(
     #   2. We pass the staged rows into the prompt builder so the agent gets
     #      a nudge to curate them via its own ``memory`` tool (dedupe,
     #      replace older entries) rather than treating them as opaque text.
-    memory_store = _memory_store(cfg, endpoint.profile_name)
-    async with staging_lock:
-        staged_memories = sync_active_memories_to_hermes(db, memory_store, user_id)
+    memory_store: HermesMemoryStore | None = None
+    if cfg.byo_connector_mode:
+        staged_memories = []
+    else:
+        memory_store = _memory_store(cfg, endpoint.profile_name)
+        async with staging_lock:
+            staged_memories = sync_active_memories_to_hermes(db, memory_store, user_id)
     composio_preflight: ComposioPreflightResult | None = None
-    if connection_slug:
+    if connection_slug and not cfg.byo_connector_mode:
         composio_preflight = await ensure_composio_connection(
             cfg,
             profile_name=endpoint.profile_name,
@@ -670,13 +674,15 @@ async def run_one_todo(
             "with an explicit auth error."
         )
 
-    async with staging_lock:
-        browse_skill = await maybe_prefetch_browse_skill(
-            cfg,
-            todo,
-            endpoint.profile_name,
-            allow_restart=(gate.restart_safe if gate is not None else True),
-        )
+    browse_skill = None
+    if not cfg.byo_connector_mode:
+        async with staging_lock:
+            browse_skill = await maybe_prefetch_browse_skill(
+                cfg,
+                todo,
+                endpoint.profile_name,
+                allow_restart=(gate.restart_safe if gate is not None else True),
+            )
     if browse_skill:
         skill_name = browse_skill.get("name") or "the installed browse.sh skill"
         skill_slug = browse_skill.get("slug") or "unknown slug"
@@ -872,11 +878,12 @@ async def run_one_todo(
         # agent-curated state. Runs the same way whether the run succeeded,
         # failed, or hit an interaction pause — Hermes may have persisted new
         # facts before any of those transitions.
-        async with staging_lock:
-            with suppress(Exception):
-                mirror_hermes_memory_to_supabase(db, memory_store, user_id)
-                _consolidate_memory_if_near_cap(memory_store, user_id)
-        if terminal_status == "done":
+        if memory_store is not None:
+            async with staging_lock:
+                with suppress(Exception):
+                    mirror_hermes_memory_to_supabase(db, memory_store, user_id)
+                    _consolidate_memory_if_near_cap(memory_store, user_id)
+        if terminal_status == "done" and memory_store is not None:
             with suppress(Exception):
                 await _extract_memories_after_todo(
                     db,

@@ -24,6 +24,8 @@
 	<string>$(DOIT_SUPABASE_URL)</string>
 	<key>DoitWaitlistURL</key>
 	<string>$(DOIT_WAITLIST_URL)</string>
+	<key>DoitBYOConnectorEnabled</key>
+	<string>$(DOIT_BYO_CONNECTOR_ENABLED)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>

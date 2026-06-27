@@ -5,6 +5,7 @@ import UIKit
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AuthModel.self) private var auth
+    @Environment(AppSetupModeStore.self) private var setupMode
     @Environment(TodoStore.self) private var store
     @Environment(ConnectivityMonitor.self) private var connectivity
     @AppStorage("settings.modelDisplayName") private var cachedModelDisplayName = ""
@@ -157,7 +158,11 @@ struct SettingsView: View {
     private var modelSettingsButton: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            presentModelPicker()
+            if setupMode.isBYO {
+                openRoute(.modelSettings)
+            } else {
+                presentModelPicker()
+            }
         } label: {
             SettingsRow(
                 icon: "square.3.layers.3d.middle.filled",
@@ -282,6 +287,12 @@ struct SettingsView: View {
     }
 
     private func loadModelSettings() async {
+        guard !setupMode.isBYO else {
+            modelSettingsLoading = false
+            modelSettingsError = nil
+            selectedModelName = "Managed by Hermes"
+            return
+        }
         modelSettingsLoading = true
         defer { modelSettingsLoading = false }
         do {
@@ -325,6 +336,10 @@ struct SettingsView: View {
     }
 
     private func presentModelPicker() {
+        guard !setupMode.isBYO else {
+            openRoute(.modelSettings)
+            return
+        }
         if modelCatalog.isEmpty && !modelSettingsLoading {
             Task { await loadModelSettings() }
         }
@@ -343,6 +358,7 @@ struct SettingsView: View {
         provider: AgentModelProviderOption,
         model: AgentModelOption
     ) async {
+        guard !setupMode.isBYO else { return }
         guard !model.isLocked else { return }
         guard !modelSettingsSaving else { return }
         modelSettingsSaving = true
@@ -375,7 +391,8 @@ struct SettingsView: View {
     }
 
     private var displayedModelName: String? {
-        selectedModelName ?? (cachedModelDisplayName.isEmpty ? nil : cachedModelDisplayName)
+        if setupMode.isBYO { return "Managed by Hermes" }
+        return selectedModelName ?? (cachedModelDisplayName.isEmpty ? nil : cachedModelDisplayName)
     }
 
     private func displayName(
@@ -425,11 +442,17 @@ struct SettingsView: View {
     }
 
     private var joinedSubtitle: String {
+        if auth.isAnonymous && setupMode.isBYO {
+            return "Anonymous BYO setup"
+        }
         guard let joinedAt = auth.joinedAt else { return "Joined doit" }
         return "Joined \(joinedAt.formatted(.dateTime.month(.abbreviated).day().year()))"
     }
 
     private var agentLastRunSubtitle: String {
+        if setupMode.isBYO {
+            return "Using your Hermes setup"
+        }
         let todoDates = store.todos.map(\.updated_at)
         let cronDates = store.cronJobs.flatMap { [$0.last_run_at, Optional($0.updated_at)].compactMap { $0 } }
         let activityDates = store.agentActivityByTodoID.values.map(\.updated_at)
@@ -446,6 +469,7 @@ struct SettingsView: View {
 enum SettingsRoute: Hashable {
     case userProfile(displayName: String, avatarImageData: Data?, avatarURL: URL?)
     case agentProfile(lastRunText: String)
+    case modelSettings
     case connections
     case memory
     case feedback
@@ -456,6 +480,7 @@ enum SettingsRoute: Hashable {
             return "You"
         case .agentProfile:
             return "doit"
+        case .modelSettings: return "Model"
         case .connections: return "Connections"
         case .memory: return "Memory"
         case .feedback: return "Feedback"
@@ -466,6 +491,7 @@ enum SettingsRoute: Hashable {
         switch self {
         case .userProfile: return "person.crop.circle"
         case .agentProfile: return "sparkles"
+        case .modelSettings: return "square.3.layers.3d.middle.filled"
         case .connections: return "arrow.left.arrow.right"
         case .memory: return "book.pages"
         case .feedback: return "ladybug.fill"
@@ -483,6 +509,8 @@ enum SettingsRoute: Hashable {
             )
         case .agentProfile(let lastRunText):
             AgentProfileView(lastRunText: lastRunText)
+        case .modelSettings:
+            ModelSettingsView()
         case .connections:
             IntegrationsView()
         case .memory:

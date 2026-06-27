@@ -3,6 +3,7 @@ import SwiftUI
 
 struct IntegrationsView: View {
     @Environment(ConnectivityMonitor.self) private var connectivity
+    @Environment(AppSetupModeStore.self) private var setupMode
 
     @State private var toolkits: [Toolkit] = []
     @State private var loading = true
@@ -22,11 +23,16 @@ struct IntegrationsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                if loading && toolkits.isEmpty {
+                if loading && toolkits.isEmpty && !setupMode.isBYO {
                     ProgressView()
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 24)
                 }
+                if setupMode.isBYO {
+                    byoManagedIntegrations
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 24)
+                } else {
                 if let error {
                     Text(error)
                         .foregroundStyle(.red)
@@ -51,6 +57,7 @@ struct IntegrationsView: View {
                         .padding(.horizontal, 20)
                         .padding(.top, 14)
                         .padding(.bottom, 24)
+                }
                 }
             }
         }
@@ -91,6 +98,11 @@ struct IntegrationsView: View {
     }
 
     private func load(showSpinner: Bool = true) async {
+        guard !setupMode.isBYO else {
+            loading = false
+            error = nil
+            return
+        }
         if showSpinner {
             loading = true
         }
@@ -108,6 +120,17 @@ struct IntegrationsView: View {
                 self.error = "Couldn't load integrations: \(error.localizedDescription)"
             }
         }
+    }
+
+    private var byoManagedIntegrations: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Connections are managed by your Hermes setup.", systemImage: "link")
+                .font(.headline)
+            Text("Doit will not start hosted Composio OAuth, create tool-router sessions, or store integration keys in BYO mode. If your Hermes already has Gmail, Calendar, Browserbase, or other tools connected, the connector uses those local capabilities.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func connectOAuth(_ tk: Toolkit) async {

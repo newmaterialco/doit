@@ -29,7 +29,7 @@ enum TodosAPI {
             user_id: userID,
             title: initialTitle,
             detail: (detail?.isEmpty ?? true) ? nil : detail,
-            status: .preparing,
+            status: AppSetupModeStore.currentMode == .byoConnector ? .requested : .preparing,
             original_title: originalTitle,
             client_timezone: TimeZone.current.identifier
         )

@@ -9,6 +9,10 @@
 //     -> { provisioning: ProvisioningRow | null, agent_ready: boolean }
 //   { action: "redeem", code: string }
 //     -> { ok, reason, provisioning: ProvisioningRow | null }
+//   { action: "byo_prepare" }
+//     -> { connector: ConnectorRow, pairing_code, connector_token, install_command }
+//   { action: "byo_status" }
+//     -> { connector: ConnectorRow | null, agent_ready: boolean }
 //
 // `status` also backfills a `ready` provisioning row for users who were
 // provisioned manually before invite codes existed, so they never see the
@@ -35,7 +39,43 @@ interface ProvisioningRow {
     updated_at: string;
 }
 
+interface ConnectorRow {
+    user_id: string;
+    status: "pairing" | "online" | "offline" | "revoked";
+    profile_name: string | null;
+    endpoint_url: string | null;
+    capabilities: Record<string, unknown>;
+    last_heartbeat_at: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
 const PROVISIONING_COLUMNS = "user_id,status,error,created_at,updated_at";
+const CONNECTOR_COLUMNS = "user_id,status,profile_name,endpoint_url,capabilities,last_heartbeat_at,created_at,updated_at";
+
+function randomBase32(length: number): string {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(length));
+    let out = "";
+    for (const byte of bytes) out += alphabet[byte % alphabet.length];
+    return out;
+}
+
+function randomToken(): string {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    return btoa(String.fromCharCode(...bytes))
+        .replaceAll("+", "-")
+        .replaceAll("/", "_")
+        .replaceAll("=", "");
+}
+
+async function sha256Hex(value: string): Promise<string> {
+    const bytes = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+}
 
 function corsHeaders(): HeadersInit {
     return {
@@ -107,6 +147,16 @@ serve(async (req) => {
         return Boolean(data);
     }
 
+    async function fetchConnector(): Promise<ConnectorRow | null> {
+        const { data, error } = await serviceClient
+            .from("byo_connectors")
+            .select(CONNECTOR_COLUMNS)
+            .eq("user_id", userId)
+            .maybeSingle();
+        if (error) throw error;
+        return data as ConnectorRow | null;
+    }
+
     try {
         switch (body.action) {
             case "status": {
@@ -151,6 +201,50 @@ serve(async (req) => {
                 }
                 const provisioning = await fetchProvisioning();
                 return json({ ok: true, reason, provisioning });
+            }
+            case "byo_prepare": {
+                const pairingCode = `DOIT-${randomBase32(8)}`;
+                const connectorToken = `doit_conn_${randomToken()}`;
+                const [pairingHash, tokenHash] = await Promise.all([
+                    sha256Hex(pairingCode),
+                    sha256Hex(connectorToken),
+                ]);
+                const { data, error } = await serviceClient
+                    .from("byo_connectors")
+                    .upsert(
+                        {
+                            user_id: userId,
+                            pairing_code_hash: pairingHash,
+                            connector_token_hash: tokenHash,
+                            status: "pairing",
+                            capabilities: {},
+                            last_heartbeat_at: null,
+                        },
+                        { onConflict: "user_id" },
+                    )
+                    .select(CONNECTOR_COLUMNS)
+                    .single();
+                if (error) throw error;
+                const installCommand = [
+                    "python -m runner.connector",
+                    `--supabase-url "${SUPABASE_URL}"`,
+                    `--supabase-anon-key "${SUPABASE_ANON_KEY}"`,
+                    `--connector-token "${connectorToken}"`,
+                    "--hermes-url http://127.0.0.1:8643",
+                ].join(" ");
+                return json({
+                    connector: data as ConnectorRow,
+                    pairing_code: pairingCode,
+                    connector_token: connectorToken,
+                    install_command: installCommand,
+                });
+            }
+            case "byo_status": {
+                const connector = await fetchConnector();
+                return json({
+                    connector,
+                    agent_ready: connector?.status === "online",
+                });
             }
             default:
                 return json({ error: "unknown_action" }, 400);

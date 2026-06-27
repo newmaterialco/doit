@@ -32,6 +32,7 @@ struct TodoListView: View {
     let userID: UUID
 
     @Environment(AuthModel.self) private var auth
+    @Environment(AppSetupModeStore.self) private var setupMode
     @Environment(TodoStore.self) private var store
     @Environment(PushManager.self) private var push
     @Environment(ConnectivityMonitor.self) private var connectivity
@@ -630,13 +631,17 @@ struct TodoListView: View {
                         onLocationTap: handlePassbookLocationTap
                     )
 
-                    PassbookMemorySection(
-                        memories: passbookMemories,
-                        onSelect: { memory in
-                            print("[passbook][memory] selected row id=\(memory.id) title=\(memory.title)")
-                            presentMemoryDetail(memory)
-                        }
-                    )
+                    if setupMode.isBYO {
+                        PassbookBYOMemoryCard()
+                    } else {
+                        PassbookMemorySection(
+                            memories: passbookMemories,
+                            onSelect: { memory in
+                                print("[passbook][memory] selected row id=\(memory.id) title=\(memory.title)")
+                                presentMemoryDetail(memory)
+                            }
+                        )
+                    }
 
                 }
                 .padding(.horizontal, 16)
@@ -2622,6 +2627,19 @@ private struct PassbookMemoryEmptyCard: View {
             title: "No Memories Yet",
             subtitle: "Things that Doit remembers about you will appear here."
         )
+    }
+}
+
+private struct PassbookBYOMemoryCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ExploreSectionHeader(title: "Memories", detail: "Local")
+            SectionEmptyStateCard(
+                systemImage: "externaldrive.connected.to.line.below.fill",
+                title: "Memory lives in your Hermes",
+                subtitle: "Doit is a mobile vessel in BYO mode. USER.md, SOUL.md, MEMORY.md, and tool memory stay local to your setup."
+            )
+        }
     }
 }
 

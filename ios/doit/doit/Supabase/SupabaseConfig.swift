@@ -14,6 +14,11 @@ enum AppConfig {
         forInfoKey: "DoitWaitlistURL",
         fallbackKey: "DOIT_WAITLIST_URL"
     )
+    static let byoConnectorEnabled = bool(
+        forInfoKey: "DoitBYOConnectorEnabled",
+        fallbackKey: "DOIT_BYO_CONNECTOR_ENABLED",
+        defaultValue: false
+    )
 
     private static func string(forInfoKey key: String, fallbackKey: String) -> String {
         for candidate in [key, fallbackKey] {
@@ -33,6 +38,24 @@ enum AppConfig {
             fatalError("Invalid URL for Info.plist value \(key): \(value)")
         }
         return url
+    }
+
+    private static func bool(
+        forInfoKey key: String,
+        fallbackKey: String,
+        defaultValue: Bool
+    ) -> Bool {
+        for candidate in [key, fallbackKey] {
+            if let value = Bundle.main.object(forInfoDictionaryKey: candidate) as? Bool {
+                return value
+            }
+            if let raw = Bundle.main.object(forInfoDictionaryKey: candidate) as? String {
+                let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if ["1", "true", "yes", "y", "on"].contains(normalized) { return true }
+                if ["0", "false", "no", "n", "off"].contains(normalized) { return false }
+            }
+        }
+        return defaultValue
     }
 }
 

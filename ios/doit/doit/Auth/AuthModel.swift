@@ -21,6 +21,7 @@ final class AuthModel {
     private(set) var joinedAt: Date?
     private(set) var email: String?
     private(set) var phoneNumber: String?
+    private(set) var isAnonymous = false
     private var repairedOversizedAvatarMetadata = false
     private var listenerTask: Task<Void, Never>?
 
@@ -49,6 +50,7 @@ final class AuthModel {
         self.joinedAt = nil
         self.email = nil
         self.phoneNumber = nil
+        self.isAnonymous = false
         self.repairedOversizedAvatarMetadata = false
     }
 
@@ -94,6 +96,10 @@ final class AuthModel {
         }
     }
 
+    func signInAnonymously() async throws {
+        _ = try await Supa.client.auth.signInAnonymously()
+    }
+
     private func persistAppleName(_ name: PersonNameComponents) async {
         let given = name.givenName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let family = name.familyName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -120,6 +126,7 @@ final class AuthModel {
             self.state = .signedIn(userID: s.user.id)
             self.email = s.user.email
             self.phoneNumber = s.user.phone
+            self.isAnonymous = s.user.email == nil && s.user.phone == nil
             apply(userMetadata: s.user.userMetadata, createdAt: s.user.createdAt, userID: s.user.id)
             repairOversizedAvatarMetadataIfNeeded(s.user.userMetadata, userID: s.user.id, createdAt: s.user.createdAt)
         } else {
@@ -131,6 +138,7 @@ final class AuthModel {
             self.joinedAt = nil
             self.email = nil
             self.phoneNumber = nil
+            self.isAnonymous = false
             self.repairedOversizedAvatarMetadata = false
         }
     }

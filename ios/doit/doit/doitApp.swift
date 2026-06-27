@@ -5,6 +5,7 @@ struct doitApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     @State private var auth = AuthModel()
+    @State private var setupMode = AppSetupModeStore()
     @State private var push = PushManager()
     /// Single source of truth for todos / cron jobs / interactions /
     /// artifacts. Held at app scope so realtime subscriptions and view
@@ -21,6 +22,7 @@ struct doitApp: App {
         WindowGroup {
             RootView()
                 .environment(auth)
+                .environment(setupMode)
                 .environment(push)
                 .environment(todoStore)
                 .environment(onboarding)
@@ -47,7 +49,11 @@ struct doitApp: App {
                         // who already finished onboarding; flips `isReady`
                         // when the agent exists, which starts the store
                         // below.
-                        onboarding.begin(userID: userID, connectivity: connectivity)
+                        onboarding.begin(
+                            userID: userID,
+                            setupMode: setupMode.mode ?? .hosted,
+                            connectivity: connectivity
+                        )
                     case .signedOut:
                         todoStore.stop()
                         onboarding.reset()

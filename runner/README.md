@@ -80,6 +80,24 @@ cp .env.example .env  # fill in real values
 python -m runner
 ```
 
+## BYO connector preview
+
+The connector entrypoint runs beside a user's existing Hermes gateway and claims
+only tasks for the paired anonymous BYO identity:
+
+```bash
+python -m runner.connector \
+  --supabase-url "https://YOUR_PROJECT.supabase.co" \
+  --supabase-anon-key "YOUR_SUPABASE_ANON_KEY" \
+  --connector-token "doit_conn_..." \
+  --hermes-url "http://127.0.0.1:8643" \
+  --hermes-api-key "YOUR_LOCAL_HERMES_API_KEY"
+```
+
+The connector uses the public Supabase anon key plus a scoped connector token.
+Task claims and writes go through the connector Edge Function, so BYO users do
+not need service-role material.
+
 ## Environment
 
 The runner reads secrets from `runner/.env` on the VM. Keep this file out of

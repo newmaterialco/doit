@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SignInView: View {
     @Environment(AuthModel.self) private var auth
+    @Environment(AppSetupModeStore.self) private var setupMode
     @State private var errorMessage: String?
 
     var body: some View {
@@ -24,6 +25,12 @@ struct SignInView: View {
             .frame(height: 58)
             .clipShape(Capsule())
             .padding(.horizontal, 24)
+
+            Button("Choose a different setup") {
+                setupMode.reset()
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
 
             if let errorMessage {
                 Text(errorMessage)

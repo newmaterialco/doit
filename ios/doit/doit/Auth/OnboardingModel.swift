@@ -22,6 +22,8 @@ final class OnboardingModel {
         case creating
         /// Provisioning errored. Retry re-queues it without a fresh code.
         case failed(message: String)
+        /// BYO connector mode: show the pairing code/command while waiting for heartbeat.
+        case byoPairing(BYOConnectorPrepareResponse, BYOConnectorStatus?)
         case ready
     }
 
@@ -36,26 +38,34 @@ final class OnboardingModel {
     private(set) var isReady = false
 
     private var userID: UUID?
+    private var setupMode: AppSetupMode = .hosted
     private var watchTask: Task<Void, Never>?
     private weak var connectivity: ConnectivityMonitor?
 
-    private static func cacheKey(_ userID: UUID) -> String {
-        "onboarding_ready_\(userID.uuidString)"
+    private static func cacheKey(_ userID: UUID, setupMode: AppSetupMode) -> String {
+        "onboarding_ready_\(setupMode.rawValue)_\(userID.uuidString)"
     }
 
     // MARK: - Lifecycle
 
-    func begin(userID: UUID, connectivity: ConnectivityMonitor) {
+    func begin(userID: UUID, setupMode: AppSetupMode, connectivity: ConnectivityMonitor) {
         if self.userID == userID, isReady { return }
         reset()
         self.userID = userID
+        self.setupMode = setupMode
         self.connectivity = connectivity
-        if UserDefaults.standard.bool(forKey: Self.cacheKey(userID)) {
+        if UserDefaults.standard.bool(forKey: Self.cacheKey(userID, setupMode: setupMode)) {
             markReady()
             return
         }
         phase = .checking
-        Task { await refreshStatus() }
+        Task {
+            if setupMode == .byoConnector {
+                await prepareBYOConnector()
+            } else {
+                await refreshStatus()
+            }
+        }
     }
 
     func reset() {
@@ -67,12 +77,17 @@ final class OnboardingModel {
         isBusy = false
         inviteError = nil
         phase = .checking
+        setupMode = .hosted
     }
 
     // MARK: - Actions
 
     func refreshStatus() async {
         guard userID != nil else { return }
+        if setupMode == .byoConnector {
+            await refreshBYOStatus()
+            return
+        }
         do {
             apply(try await OnboardingAPI.status())
         } catch {
@@ -85,6 +100,23 @@ final class OnboardingModel {
                 if connectivity?.reportFailure(error) != true {
                     inviteError = "Couldn't reach the server. Check your connection and try again."
                 }
+            }
+        }
+    }
+
+    func prepareBYOConnector() async {
+        guard userID != nil else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let prepared = try await OnboardingAPI.prepareBYOConnector()
+            phase = .byoPairing(prepared, prepared.connector)
+            connectivity?.reportSuccess()
+            startWatching()
+        } catch {
+            print("[onboarding] byo prepare failed: \(error)")
+            if connectivity?.reportFailure(error) != true {
+                phase = .failed(message: "Couldn't create a connector pairing. Check your connection and try again.")
             }
         }
     }
@@ -167,10 +199,29 @@ final class OnboardingModel {
         watchTask?.cancel()
         watchTask = nil
         if let userID {
-            UserDefaults.standard.set(true, forKey: Self.cacheKey(userID))
+            UserDefaults.standard.set(true, forKey: Self.cacheKey(userID, setupMode: setupMode))
         }
         phase = .ready
         isReady = true
+    }
+
+    private func refreshBYOStatus() async {
+        do {
+            let resp = try await OnboardingAPI.byoConnectorStatus()
+            connectivity?.reportSuccess()
+            if resp.agent_ready {
+                markReady()
+                return
+            }
+            if case .byoPairing(let prepared, _) = phase {
+                phase = .byoPairing(prepared, resp.connector)
+            } else {
+                await prepareBYOConnector()
+            }
+        } catch {
+            print("[onboarding] byo status failed: \(error)")
+            _ = connectivity?.reportFailure(error)
+        }
     }
 
     // MARK: - Live status (Realtime + polling fallback)
@@ -184,6 +235,10 @@ final class OnboardingModel {
     /// every change. A coarse poll runs alongside as a fallback so a missed
     /// Realtime event can only delay — never strand — the transition.
     private func watchLoop(userID: UUID) async {
+        if setupMode == .byoConnector {
+            await watchBYOConnectorLoop()
+            return
+        }
         let filter = "user_id=eq.\(userID.uuidString)"
         while !Task.isCancelled {
             let channel = Supa.client.channel(
@@ -233,6 +288,14 @@ final class OnboardingModel {
             await Supa.client.removeChannel(channel)
             if Task.isCancelled { break }
             try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    private func watchBYOConnectorLoop() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3))
+            if Task.isCancelled { break }
+            await refreshBYOStatus()
         }
     }
 }

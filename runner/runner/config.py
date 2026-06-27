@@ -63,6 +63,12 @@ class Config:
     hermes_user_char_limit: int
     hermes_memory_char_limit: int
     memory_consolidate_with_model: bool
+    byo_connector_mode: bool
+    connector_token: str
+    connector_user_id: str
+    connector_hermes_url: str
+    connector_hermes_api_key: str
+    connector_profile_name: str
 
 
 def load() -> Config:
@@ -141,4 +147,10 @@ def load() -> Config:
             os.environ.get("HERMES_MEMORY_CHAR_LIMIT", str(8000))
         ),
         memory_consolidate_with_model=_bool("MEMORY_CONSOLIDATE_WITH_MODEL", default=False),
+        byo_connector_mode=_bool("BYO_CONNECTOR_MODE", default=False),
+        connector_token=os.environ.get("DOIT_CONNECTOR_TOKEN", ""),
+        connector_user_id=os.environ.get("DOIT_CONNECTOR_USER_ID", ""),
+        connector_hermes_url=os.environ.get("DOIT_CONNECTOR_HERMES_URL", "http://127.0.0.1:8643"),
+        connector_hermes_api_key=os.environ.get("DOIT_CONNECTOR_HERMES_API_KEY", ""),
+        connector_profile_name=os.environ.get("DOIT_CONNECTOR_PROFILE_NAME", "byo-hermes"),
     )

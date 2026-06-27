@@ -36,7 +36,7 @@ progress back to Postgres, and sends APNs.
 The iOS app does not call Hermes directly. It reads and writes Supabase rows and
 listens to Supabase Realtime.
 
-## Planned BYO Connector Architecture
+## BYO Connector Architecture
 
 The intended BYO path moves the execution unit to user-owned infrastructure:
 
@@ -49,10 +49,15 @@ flowchart TD
     userHermes --> userKeys[User Tool and Model Keys]
 ```
 
-This is the right first BYO shape because the runner currently needs local
-access to Hermes profile files for memory, settings, and skills. Running the
-connector beside Hermes avoids exposing Hermes directly to the public internet
-or requiring the hosted runner to reach into a user's private network.
+This is the right first BYO shape because the app can keep its existing
+Supabase realtime/task contract while execution happens beside the user's
+Hermes setup. In BYO mode, Doit does not manage the user's model keys, OAuth
+connections, memory files, tools, Browserbase, Composio, or TTS config by
+default; those stay local to Hermes.
+
+The connector uses a public Supabase anon key plus a scoped connector token.
+Task claims and writes go through connector-token APIs, so user-owned connectors
+do not need service-role material.
 
 ## Full Self-Host
 

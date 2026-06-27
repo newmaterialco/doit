@@ -3,6 +3,7 @@ import SwiftUI
 struct MemoryView: View {
     @Environment(AuthModel.self) private var auth
     @Environment(ConnectivityMonitor.self) private var connectivity
+    @Environment(AppSetupModeStore.self) private var setupMode
 
     @State private var memories: [AgentMemory] = []
     @State private var loading = true
@@ -14,6 +15,9 @@ struct MemoryView: View {
 
     var body: some View {
         List {
+            if setupMode.isBYO {
+                byoMemoryInfo
+            } else {
             Section {
                 Text("This controls what Doit will remember for future tasks. Doit learns durable preferences and facts after conversations, you can pin your own, and remembered items are synced into Hermes before the next run.")
                     .font(.footnote)
@@ -90,6 +94,7 @@ struct MemoryView: View {
                     }
                 }
             }
+            }
         }
         .scrollContentBackground(.hidden)
         .background(AppSemanticColors.surface)
@@ -97,12 +102,14 @@ struct MemoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                if !setupMode.isBYO {
                 Button {
                     showAddSheet = true
                 } label: {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("Add memory")
+                }
             }
         }
         .task { await load() }
@@ -122,6 +129,19 @@ struct MemoryView: View {
             return userID
         }
         return nil
+    }
+
+    private var byoMemoryInfo: some View {
+        Section {
+            Label("Memory stays in your Hermes profile.", systemImage: "brain.head.profile")
+            Text("In BYO mode, Doit does not edit, mirror, or sync USER.md, SOUL.md, MEMORY.md, or other local memory files. Manage memory in your existing Hermes setup.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("BYO Hermes")
+        } footer: {
+            Text("Passbook and memory editing are hosted-mode features for Doit-managed agents.")
+        }
     }
 
     private var memorySections: [MemorySection] {
@@ -148,6 +168,12 @@ struct MemoryView: View {
     }
 
     private func load() async {
+        guard !setupMode.isBYO else {
+            loading = false
+            memories = []
+            error = nil
+            return
+        }
         loading = true
         defer { loading = false }
         do {

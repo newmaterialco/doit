@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -128,6 +129,7 @@ class DB:
         self,
         *,
         exclude_user_ids: list[str] | None = None,
+        only_user_id: str | None = None,
     ) -> dict | None:
         """Atomically transition one 'requested' todo to 'running' and return it.
 
@@ -145,6 +147,8 @@ class DB:
             .select("*")
             .eq("status", "requested")
         )
+        if only_user_id:
+            query = query.eq("user_id", only_user_id)
         if exclude_user_ids:
             query = query.not_.in_("user_id", exclude_user_ids)
         resp = query.order("created_at").limit(1).execute()
@@ -154,7 +158,7 @@ class DB:
         candidate = rows[0]
 
         # Try to claim it.
-        upd = (
+        update_query = (
             self._client.table("todos")
             .update(
                 {
@@ -165,8 +169,10 @@ class DB:
             )
             .eq("id", candidate["id"])
             .eq("status", "requested")
-            .execute()
         )
+        if only_user_id:
+            update_query = update_query.eq("user_id", only_user_id)
+        upd = update_query.execute()
         claimed = upd.data or []
         if not claimed:
             # Lost the race; caller can retry.
@@ -177,6 +183,7 @@ class DB:
         self,
         *,
         exclude_user_ids: list[str] | None = None,
+        only_user_id: str | None = None,
     ) -> dict | None:
         """Recover one ``running`` todo whose execution lease went stale.
 
@@ -196,6 +203,8 @@ class DB:
                 .eq("status", "running")
                 .or_(f"run_claimed_at.is.null,run_claimed_at.lt.{stale_before}")
             )
+            if only_user_id:
+                query = query.eq("user_id", only_user_id)
             if exclude_user_ids:
                 query = query.not_.in_("user_id", exclude_user_ids)
             resp = query.order("created_at").limit(1).execute()
@@ -203,14 +212,16 @@ class DB:
             if not rows:
                 return None
             candidate = rows[0]
-            upd = (
+            update_query = (
                 self._client.table("todos")
                 .update({"run_claimed_at": _iso_z(now)})
                 .eq("id", candidate["id"])
                 .eq("status", "running")
                 .or_(f"run_claimed_at.is.null,run_claimed_at.lt.{stale_before}")
-                .execute()
             )
+            if only_user_id:
+                update_query = update_query.eq("user_id", only_user_id)
+            upd = update_query.execute()
             claimed = upd.data or []
             if claimed:
                 log.warning(
@@ -329,6 +340,44 @@ class DB:
             },
             on_conflict="user_id",
         ).execute()
+
+    def connector_user_id_for_token(self, token: str) -> str | None:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        try:
+            resp = (
+                self._client.table("byo_connectors")
+                .select("user_id,status")
+                .eq("connector_token_hash", token_hash)
+                .neq("status", "revoked")
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            return str(rows[0]["user_id"]) if rows else None
+        except Exception as e:
+            log.error("connector_user_id_for_token failed: %s", e)
+            return None
+
+    def heartbeat_byo_connector(
+        self,
+        *,
+        user_id: str,
+        profile_name: str,
+        endpoint_url: str,
+        capabilities: dict[str, str],
+    ) -> None:
+        try:
+            self._client.table("byo_connectors").update(
+                {
+                    "status": "online",
+                    "profile_name": profile_name,
+                    "endpoint_url": endpoint_url,
+                    "capabilities": capabilities,
+                    "last_heartbeat_at": _iso_z(datetime.now(UTC)),
+                }
+            ).eq("user_id", user_id).execute()
+        except Exception as e:
+            log.error("heartbeat_byo_connector(%s) failed: %s", user_id, e)
 
     # ------------------------------------------------------------------
     # Lookups

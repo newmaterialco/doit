@@ -11,7 +11,7 @@ Doit is being shaped around several operating models:
 | Path | Status | Who it is for |
 | --- | --- | --- |
 | Hosted Doit / managed Hermes | Works today | Users who want a batteries-included app experience with the managed backend |
-| Bring your own Hermes connector | Planned | Users who want the app as a GUI over Hermes on their own VPS, home server, or Tailscale node |
+| Bring your own Hermes connector | Developer preview | Users who want the app as a GUI over Hermes on their own VPS, home server, or Tailscale node |
 | Fork and self-host | Works for technical operators | Developers who want their own Supabase/control plane, runner, Hermes setup, and app build |
 | Direct Hermes endpoint | Future/advanced | Users with a secure remote Hermes endpoint |
 
@@ -57,9 +57,9 @@ Composio Connect (MCP) ........... managed OAuth for Gmail, Calendar, Slack, ...
   It runs a bounded worker pool (multiple todos at once, across and within
   users) and an automated provisioner: new users redeem an **invite code**
   in the app and their agent is built end-to-end with no manual steps.
-- In BYO mode, the goal is to move the runner/connector plus Hermes execution
-  unit onto user-owned infrastructure while keeping the iOS realtime contract
-  the same.
+- In BYO mode, the runner/connector plus Hermes execution unit move onto
+  user-owned infrastructure while the first MVP keeps the iOS realtime contract
+  through hosted Supabase sync.
 - Real-world actions (sending email, etc.) go through **Composio Connect** so we
   never build OAuth or store tokens ourselves.
 
@@ -83,8 +83,8 @@ doit/
 - **I want to run the whole stack myself**: configure iOS, Supabase, runner, and
   Hermes. See [`docs/self-host.md`](docs/self-host.md).
 - **I want the app to control my existing Hermes**: read
-  [`docs/byo-connector.md`](docs/byo-connector.md). This path is planned and not
-  the current default runtime.
+  [`docs/byo-connector.md`](docs/byo-connector.md). This path is a developer
+  preview for hosted-sync BYO.
 - **I want to contribute code**: start with [`CONTRIBUTING.md`](CONTRIBUTING.md)
   and [`docs/task-realtime.md`](docs/task-realtime.md).
 
@@ -124,7 +124,7 @@ Supabase, APNs, and secret-handling details.
 | [`docs/configuration.md`](docs/configuration.md) | App config, env files, and secrets |
 | [`docs/security-model.md`](docs/security-model.md) | Hosted/BYO/self-host privacy model |
 | [`docs/hosted-doit.md`](docs/hosted-doit.md) | Managed app and hosted backend path |
-| [`docs/byo-connector.md`](docs/byo-connector.md) | Planned BYO Hermes connector path |
+| [`docs/byo-connector.md`](docs/byo-connector.md) | BYO Hermes connector path and limits |
 | [`docs/self-host.md`](docs/self-host.md) | Full fork/self-host setup outline |
 | [`docs/task-realtime.md`](docs/task-realtime.md) | iOS realtime contract |
 | [`docs/apns.md`](docs/apns.md) | Push notification setup |

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Post-signup gate: invite code entry -> "creating your agent" progress ->
 /// done (RootView swaps to the task list when `OnboardingModel.isReady`
@@ -31,6 +32,8 @@ struct OnboardingView: View {
                 creating
             case .failed(let message):
                 failed(message)
+            case .byoPairing(let prepared, let status):
+                byoPairing(prepared, status: status)
             case .ready:
                 // RootView swaps to TodoListView; brief frame at most.
                 ProgressView()
@@ -154,6 +157,73 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(onboarding.isBusy)
+        }
+    }
+
+    // MARK: - BYO Connector
+
+    private func byoPairing(
+        _ prepared: BYOConnectorPrepareResponse,
+        status: BYOConnectorStatus?
+    ) -> some View {
+        VStack(spacing: 16) {
+            Text("Pair your Hermes connector")
+                .font(.title2.weight(.semibold))
+            Text("Doit will use your Hermes setup as-is. Your model keys, OAuth connections, memory files, tools, Browserbase, Composio, and TTS config stay on your machine.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pairing code")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(prepared.pairing_code)
+                    .font(.system(.title3, design: .monospaced).weight(.semibold))
+                Divider()
+                Text("Run this beside Hermes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(prepared.install_command)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Copy command") {
+                    UIPasteboard.general.string = prepared.install_command
+                }
+                .font(.footnote.weight(.semibold))
+            }
+            .padding(16)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+
+            HStack(spacing: 8) {
+                ProgressView()
+                Text(status?.status == "online" ? "Connector found. Finishing setup..." : "Waiting for connector...")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            capabilitySummary(status?.capabilities)
+        }
+    }
+
+    @ViewBuilder
+    private func capabilitySummary(_ capabilities: [String: String]?) -> some View {
+        if let capabilities, !capabilities.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Reported by your Hermes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(capabilities.keys.sorted(), id: \.self) { key in
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("\(key): \(capabilities[key] ?? "")")
+                            .font(.footnote)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

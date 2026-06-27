@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ModelSettingsView: View {
     @Environment(ConnectivityMonitor.self) private var connectivity
+    @Environment(AppSetupModeStore.self) private var setupMode
 
     @State private var catalog: [AgentModelProviderOption] = []
     @State private var setting: AgentModelSetting?
@@ -13,6 +14,9 @@ struct ModelSettingsView: View {
 
     var body: some View {
         List {
+            if setupMode.isBYO {
+                byoManagedByHermes
+            } else {
             if loading && catalog.isEmpty {
                 Section { ProgressView() }
             }
@@ -116,6 +120,7 @@ struct ModelSettingsView: View {
                     .disabled(!canSave || saving)
                 }
             }
+            }
         }
         .scrollContentBackground(.hidden)
         .background(AppSemanticColors.surface)
@@ -129,6 +134,17 @@ struct ModelSettingsView: View {
             if !selectable.contains(where: { $0.id == selectedModelID }) {
                 selectedModelID = selectable.first?.id ?? ""
             }
+        }
+    }
+
+    private var byoManagedByHermes: some View {
+        Section {
+            Label("Model selection is managed by your Hermes setup.", systemImage: "cpu")
+            Text("Doit will not use hosted OpenRouter keys or rewrite your profile config in BYO mode. Change providers, model names, base URLs, and API keys in your Hermes environment.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("BYO Hermes")
         }
     }
 
@@ -154,6 +170,11 @@ struct ModelSettingsView: View {
     }
 
     private func load() async {
+        guard !setupMode.isBYO else {
+            loading = false
+            error = nil
+            return
+        }
         loading = true
         defer { loading = false }
         do {
@@ -181,6 +202,7 @@ struct ModelSettingsView: View {
     }
 
     private func save() async {
+        guard !setupMode.isBYO else { return }
         guard let model = selectedModel, !model.isLocked else { return }
         saving = true
         defer { saving = false }

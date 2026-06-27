@@ -25,6 +25,29 @@ struct OnboardingRedeemResponse: Codable {
     let provisioning: OnboardingProvisioning?
 }
 
+struct BYOConnectorStatus: Codable, Equatable {
+    let user_id: UUID
+    let status: String
+    let profile_name: String?
+    let endpoint_url: String?
+    let capabilities: [String: String]?
+    let last_heartbeat_at: String?
+    let created_at: String
+    let updated_at: String
+}
+
+struct BYOConnectorPrepareResponse: Codable, Equatable {
+    let connector: BYOConnectorStatus
+    let pairing_code: String
+    let connector_token: String
+    let install_command: String
+}
+
+struct BYOConnectorStatusResponse: Codable, Equatable {
+    let connector: BYOConnectorStatus?
+    let agent_ready: Bool
+}
+
 /// Typed client for the `onboarding` Edge Function.
 @MainActor
 enum OnboardingAPI {
@@ -41,5 +64,17 @@ enum OnboardingAPI {
         }
         return try await Supa.client.functions
             .invoke("onboarding", options: .init(body: Body(action: "redeem", code: code)))
+    }
+
+    static func prepareBYOConnector() async throws -> BYOConnectorPrepareResponse {
+        struct Body: Codable { let action: String }
+        return try await Supa.client.functions
+            .invoke("onboarding", options: .init(body: Body(action: "byo_prepare")))
+    }
+
+    static func byoConnectorStatus() async throws -> BYOConnectorStatusResponse {
+        struct Body: Codable { let action: String }
+        return try await Supa.client.functions
+            .invoke("onboarding", options: .init(body: Body(action: "byo_status")))
     }
 }
