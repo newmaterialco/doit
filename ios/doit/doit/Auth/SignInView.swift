@@ -9,18 +9,14 @@ struct SignInView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            Image("doit_Logo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 140)
-                .accessibilityLabel("doit")
+            AdaptiveDoitLogo(width: 140)
             Spacer()
             SignInWithAppleButton(.signIn) { request in
                 request.requestedScopes = [.fullName, .email]
             } onCompletion: { result in
                 Task { await handle(result) }
             }
-            .signInWithAppleButtonStyle(.black)
+            .signInWithAppleButtonStyle(.white)
             .font(.system(size: 13, weight: .semibold))
             .frame(height: 58)
             .clipShape(Capsule())

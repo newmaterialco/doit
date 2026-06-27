@@ -240,7 +240,7 @@ struct OnboardingView: View {
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 12))
                         .overlay {
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color(.separator).opacity(0.35), lineWidth: 1)
@@ -272,7 +272,7 @@ struct OnboardingView: View {
                         .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 12))
+                        .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 12))
                         .overlay {
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color(.separator).opacity(0.35), lineWidth: 1)
@@ -347,7 +347,7 @@ struct OnboardingView: View {
 private extension View {
     func pairingCardStyle() -> some View {
         self
-            .background(.white, in: RoundedRectangle(cornerRadius: 16))
+            .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 16))
             .overlay {
                 RoundedRectangle(cornerRadius: 16)
                     .stroke(Color(.separator).opacity(0.35), lineWidth: 1)

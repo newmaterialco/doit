@@ -6,6 +6,7 @@ struct SetupModeView: View {
     @Environment(AuthModel.self) private var auth
     @Environment(AppSetupModeStore.self) private var setupMode
     @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isStartingBYO = false
     @State private var byoErrorMessage: String?
 
@@ -14,11 +15,7 @@ struct SetupModeView: View {
             VStack(spacing: 24) {
                 Spacer(minLength: 0)
 
-                Image("doit_Logo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 120)
-                    .accessibilityLabel("doit")
+                AdaptiveDoitLogo(width: 120)
 
                 VStack(spacing: 8) {
                     Text("How do you want to use Doit?")
@@ -73,7 +70,7 @@ struct SetupModeView: View {
                         openURL(Self.githubRepoURL)
                     } label: {
                         HStack(spacing: 10) {
-                            Image("github")
+                            Image(colorScheme == .dark ? "github_white" : "github")
                                 .resizable()
                                 .scaledToFit()
                                 .frame(width: 18, height: 18)
@@ -83,7 +80,11 @@ struct SetupModeView: View {
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .background(Color(.secondarySystemBackground), in: Capsule())
+                        .background(AppSemanticColors.elevatedSurface, in: Capsule())
+                        .overlay {
+                            Capsule()
+                                .stroke(Color(.separator).opacity(0.35), lineWidth: 1)
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -144,12 +145,12 @@ private struct SetupModeCard: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity)
-            .background(.white, in: RoundedRectangle(cornerRadius: 18))
+            .background(AppSemanticColors.elevatedSurface, in: RoundedRectangle(cornerRadius: 18))
             .overlay {
                 RoundedRectangle(cornerRadius: 18)
                     .stroke(Color(.separator).opacity(0.35), lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
+            .shadow(color: .black.opacity(0.08), radius: 10, x: 0, y: 4)
         }
         .buttonStyle(.plain)
     }
@@ -164,11 +165,7 @@ struct BYOAnonymousStartView: View {
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
-            Image("doit_Logo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 110)
-                .accessibilityLabel("doit")
+            AdaptiveDoitLogo(width: 110)
 
             VStack(spacing: 10) {
                 Text("Connect your Hermes")
